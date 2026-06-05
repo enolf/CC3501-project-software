@@ -1,0 +1,5 @@
+This repository hosts the software written for the embedded system being designeed for CC3501 (Embedded Systems Design and Interfacing). Authors of this software are Alister Maltby, Damien Turner and Nils Eisen.
+
+This software is capable of delivering a closed-loop sales system based on visual recognition of product selection. It is purposed for the sales of softdrinks from the Cairns Engineering Society's fridge, with the employment of the system providing the following: guarantee around payment, asset-tracking, a real-time dashboard and more.
+
+The hardware used for the project includes a PCB hosting an RP2040 designed by our group, interfacing with a variety of devices to sense temperature and load. Additionally the capabilites of the Raspberry Pi 4 are used for Wi-Fi connectivity and most importantly image recognition.
