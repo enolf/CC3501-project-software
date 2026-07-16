@@ -1,0 +1,11 @@
+{
+    "recommendations": [
+        "raspberry-pi.raspberry-pi-pico",
+        "ms-vscode.vscode-serial-monitor",
+        "ms-vscode.cmake-tools",
+        "chris-hock.pioasm",
+        "ms-vscode.cpptools-extension-pack",
+        "marus25.cortex-debug",
+        "ms-vscode.cpptools"
+    ]
+}
