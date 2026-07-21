@@ -46,15 +46,25 @@ if(CrossCompiling)
     # Initialise the Raspberry Pi Pico SDK
     pico_sdk_init()
 
+    # add lvgl directory, used for TFT display
+    add_subdirectory(lib/lvgl)
+
     add_executable(labs)
-    target_sources(labs 
+    target_sources(labs
+     
         PUBLIC
         src/main.cpp
         src/drivers/logging/logging.cpp
+        src/drivers/ili9341/ili9341.c
     )
+    
+    target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+
     target_include_directories(labs
         PUBLIC 
         src/
+        src/drivers
+        lib
     )
 
     pico_set_program_name(labs "cc3501-labs")
@@ -79,6 +89,9 @@ if(CrossCompiling)
         hardware_watchdog
         hardware_clocks
         hardware_pwm
+        
+        # user added
+        lvgl
     )
 
     pico_add_extra_outputs(labs)
