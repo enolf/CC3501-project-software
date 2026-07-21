@@ -56,6 +56,7 @@ if(CrossCompiling)
         src/main.cpp
         src/drivers/logging/logging.cpp
         src/drivers/ili9341/ili9341.c
+        src/peripherals/tft_display.cpp
     )
     
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
