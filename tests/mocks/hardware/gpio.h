@@ -6,3 +6,5 @@
 void gpio_init(unsigned int gpio);
 void gpio_set_dir(unsigned int gpio, bool out);
 void gpio_put(unsigned int gpio, bool val);
+bool gpio_get(unsigned int gpio);
+void gpio_pull_up(unsigned int gpio);

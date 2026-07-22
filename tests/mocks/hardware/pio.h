@@ -1,5 +1,6 @@
-#pragma once 
+#pragma once
 
+#include <stdint.h>
 #include <vector>
 
 // Types defined just so that we can replicate the real API

@@ -57,6 +57,8 @@ if(CrossCompiling)
         src/drivers/logging/logging.cpp
         src/drivers/ili9341/ili9341.c
         src/peripherals/tft_display.cpp
+        src/drivers/DS18B20/DS18B20.cpp
+        src/tasks/sensor_health.cpp
     )
     
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
@@ -110,10 +112,14 @@ else()
         PUBLIC
         src/main.cpp
         src/drivers/logging/logging.cpp
+        src/drivers/DS18B20/DS18B20.cpp
+        src/tasks/sensor_health.cpp
         tests/mocks/pico/stdlib.cpp
         tests/mocks/pico/time.cpp
         tests/mocks/hardware/gpio.cpp
         tests/mocks/hardware/pio.cpp
+        tests/mocks/hardware/sync.cpp
+        tests/mocks/hardware/timer.cpp
         tests/mocks/ws2812.cpp
     )
     target_include_directories(labs
