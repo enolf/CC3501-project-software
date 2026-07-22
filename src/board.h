@@ -8,9 +8,6 @@
 // driver or application file should ever contain a raw pin number, bus
 // address, or wiring assumption.
 
-// WS2812 addressable LED chain (data input pin)
-#define LED_PIN 14
-
 // DS18B20 1-Wire temperature sensor bus.
 // Every DS18B20 shares this single data pin. The data line MUST have an
 // external 4.7 kOhm pull-up resistor to 3V3 — the RP2040's internal pull-up
