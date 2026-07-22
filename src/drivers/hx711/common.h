@@ -23,7 +23,7 @@
 #ifndef COMMON_H_D032FD58_DAFE_4AE1_8E48_54A388BFECE4
 #define COMMON_H_D032FD58_DAFE_4AE1_8E48_54A388BFECE4
 
-#include "hx711.h"
+#include "drivers/hx711/hx711.h"
 // #include "hx711_multi.h"
 
 #ifdef __cplusplus

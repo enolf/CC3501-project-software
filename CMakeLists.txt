@@ -57,9 +57,13 @@ if(CrossCompiling)
         src/drivers/logging/logging.cpp
         src/drivers/ili9341/ili9341.c
         src/peripherals/tft_display.cpp
-        src/drivers/hx711/hx711.c
-        src/drivers/hx711/common.c
-        src/drivers/hx711/util.c
+        src/peripherals/load_cell.cpp
+    )
+        
+    target_sources(labs INTERFACE
+        ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/common.c
+        ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/hx711.c
+        ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/util.c
     )
     
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
@@ -67,8 +71,8 @@ if(CrossCompiling)
     target_include_directories(labs
         PUBLIC 
         src/
-        src/drivers
-        lib
+        lib/
+        src/peripherals/
     )
 
     pico_set_program_name(labs "cc3501-labs")
@@ -96,6 +100,11 @@ if(CrossCompiling)
         
         # user added
         lvgl
+        pico_platform
+        pico_sync
+        pico_time
+        hardware_gpio
+        hardware_irq
     )
 
     pico_add_extra_outputs(labs)
