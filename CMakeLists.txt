@@ -58,7 +58,9 @@ if(CrossCompiling)
         src/drivers/ili9341/ili9341.c
         src/peripherals/tft_display.cpp
         src/drivers/DS18B20/DS18B20.cpp
-        src/tasks/sensor_health.cpp
+        src/tasks/sensor_health/sensor_health.cpp
+        src/drivers/mfrc522/mfrc522.cpp
+        src/tasks/access_control/access_control.cpp
     )
     
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
