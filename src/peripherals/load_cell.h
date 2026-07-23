@@ -1,6 +1,6 @@
 #pragma once
 
-#include "drivers/hx711/common.h"
+#include "pico-scale/extern/hx711-pico-c/include/common.h"
 
 #define HX711_CLK_GPIO_PIN 10
 #define HX711_DATA_GPIO_PIN 11
@@ -14,4 +14,5 @@ class Load_cell
         void start();
         void read_and_print();
         void stop();
+        int calibrate();
 };
