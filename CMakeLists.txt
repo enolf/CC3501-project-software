@@ -46,10 +46,12 @@ if(CrossCompiling)
     # Initialise the Raspberry Pi Pico SDK
     pico_sdk_init()
 
+    add_executable(labs)
+
     # add lvgl directory, used for TFT display
     add_subdirectory(lib/lvgl)
+    add_subdirectory(lib/extern/pico-scale)
 
-    add_executable(labs)
     target_sources(labs
      
         PUBLIC
@@ -60,18 +62,25 @@ if(CrossCompiling)
         src/peripherals/load_cell.cpp
     )
         
-    target_sources(labs INTERFACE
-        ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/common.c
-        ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/hx711.c
-        ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/util.c
-    )
+    # target_sources(labs INTERFACE
+    #     ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/common.c
+    #     ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/hx711.c
+    #     ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/util.c
+    # )
     
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
+
+    # target_include_directories(pico-scale INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/extern)
+
+    target_include_directories(labs PRIVATE
+        lib/extern/pico-scale/include  # Or whatever folder contains their .h files
+    )
 
     target_include_directories(labs
         PUBLIC 
         src/
         lib/
+        lib/extern/
         src/peripherals/
     )
 
@@ -105,6 +114,8 @@ if(CrossCompiling)
         pico_time
         hardware_gpio
         hardware_irq
+        # pico_scale
+        pico-scale
     )
 
     pico_add_extra_outputs(labs)
