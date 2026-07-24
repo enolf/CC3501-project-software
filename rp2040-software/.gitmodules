@@ -1,7 +1,0 @@
-[submodule "lib/lvgl"]
-	path = lib/lvgl
-	url = https://github.com/lvgl/lvgl.git
-	branch = release/v9.2
-[submodule "lib/extern/pico-scale"]
-	path = lib/extern/pico-scale
-	url = https://github.com/endail/pico-scale

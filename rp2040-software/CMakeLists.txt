@@ -50,7 +50,7 @@ if(CrossCompiling)
 
     # add lvgl directory, used for TFT display
     add_subdirectory(lib/lvgl)
-    add_subdirectory(lib/extern/pico-scale)
+    add_subdirectory(lib/pico-scale)
 
     target_sources(labs
      
@@ -63,28 +63,21 @@ if(CrossCompiling)
         src/peripherals/sensor_health/sensor_health.cpp
         src/drivers/mfrc522/mfrc522.cpp
         src/peripherals/access_control/access_control.cpp
-        src/peripherals/load_cell.cpp
+        src/peripherals/load_cell/load_cell.cpp
     )
         
-    # target_sources(labs INTERFACE
-    #     ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/common.c
-    #     ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/hx711.c
-    #     ${CMAKE_CURRENT_LIST_DIR}/src/drivers/hx711/util.c
-    # )
-    
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
     # target_include_directories(pico-scale INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/extern)
 
     target_include_directories(labs PRIVATE
-        lib/extern/pico-scale/include  # Or whatever folder contains their .h files
+        lib/pico-scale/include  # Or whatever folder contains their .h files
     )
 
     target_include_directories(labs
         PUBLIC 
         src/
         lib/
-        lib/extern/
         src/peripherals/
     )
 

@@ -1,0 +1,7 @@
+[submodule "rp2040-software/lib/lvgl"]
+	path = rp2040-software/lib/lvgl
+	url = https://github.com/lvgl/lvgl.git
+	branch = release/v9.2
+[submodule "rp2040-software/lib/extern/pico-scale"]
+	path = rp2040-software/lib/pico-scale
+	url = https://github.com/endail/pico-scale
