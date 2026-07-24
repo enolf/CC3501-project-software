@@ -1,6 +1,6 @@
 #include <stdio.h>
 #include "pico/stdlib.h"
-#include "peripherals/tft_display.h"
+#include "peripherals/tft_display/tft_display.h"
 #include "drivers/ili9341/ili9341.h"
 #include "lvgl/lvgl.h"
 #include "hardware/timer.h"
