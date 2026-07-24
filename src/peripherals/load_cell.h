@@ -1,18 +1,28 @@
 #pragma once
 
-#include "pico-scale/extern/hx711-pico-c/include/common.h"
+#define HX711_CLK_GPIO_PIN 14
+#define HX711_DATA_GPIO_PIN 15
+#define UNIT mass_g
 
-#define HX711_CLK_GPIO_PIN 10
-#define HX711_DATA_GPIO_PIN 11
+// TAL221 (max 500g model) calibrated to 50g
+#define REFUNIT 2945
+#define OFFSET -63750
 
 class Load_cell
 {
     public:
-        hx711_t hx;
-        hx711_config_t hxcfg;
+        /// @brief Initialise the load cell to be used as a scale. Default uses a TAL221 (max 500g model) calibrated to 50g
         void init();
-        void start();
-        void read_and_print();
+
+        /// @brief Return mass on load cell as double
+        /// @return mass
+        double get_mass();
+
+        /// @brief Run load cell and print print in serial 
+        void measure();
+
         void stop();
+
+        /// @brief Calibrate load cell. Follow instructions in serial
         int calibrate();
 };

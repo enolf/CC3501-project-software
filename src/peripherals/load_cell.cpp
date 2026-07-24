@@ -25,13 +25,29 @@
 #include <stdlib.h>
 #include <string.h>
 
-// #include "pico/stdio.h"
+#include "pico/stdio.h"
+#include "pico/stdlib.h"
+#include "hardware/gpio.h"
+#include "hardware/pio.h"
+
 #include "load_cell.h"
 #include "pico-scale/extern/hx711-pico-c/include/common.h"
 #include "pico-scale/include/scale.h"
 #include "pico-scale/include/hx711_scale_adaptor.h"
 #include "pico-scale/extern/hx711-pico-c/include/hx711_reader.pio.h"
 
+hx711_t hx = {0};
+hx711_config_t hxcfg = {0};
+hx711_scale_adaptor_t hxsa = {0};
+
+scale_t sc;
+scale_options_t opt;
+
+mass_t mass;
+mass_t max;
+mass_t min;
+
+char str[MASS_TO_STRING_BUFF_SIZE];
 
 size_t getchars(char* arr, const size_t len)
 {
@@ -53,10 +69,8 @@ size_t getchars(char* arr, const size_t len)
     return i + 1;
 }
 
-void Load_cell::init()
+void init_hx711()
 {
-    hx711_t hx = {0};
-    hx711_config_t hxcfg = {0};
     hx711_get_default_config(&hxcfg);
 
     // Set GPIO pins DATA and CLOCK 
@@ -65,39 +79,103 @@ void Load_cell::init()
 
     // Initialize the hardware using the config struct
     hx711_init(&hx, &hxcfg);
-}
 
-void Load_cell::start()
-{
     //Power up the hx711 and set gain on chip
     hx711_power_up(&hx, hx711_gain_128);
-    
-    hx711_wait_settle(hx711_rate_10);
+    hx711_wait_settle(hx711_rate_10); // alternatively use hx711_rate_80
+
+    // provide a pointer to the hx711 to the adaptor
+    hx711_scale_adaptor_init(&hxsa, &hx);
 }
 
-void Load_cell::read_and_print()
+void Load_cell::init()
+{    
+    // scale_t sc; // {0};
+    // scale_options_t opt = {0};
+    scale_options_get_default(&opt);
+    
+    // provide a read buffer for the scale
+    const size_t valbufflen = 1000;
+    int32_t valbuff[valbufflen];
+    opt.buffer = valbuff;
+    opt.bufflen = valbufflen;
+    
+    // initialise hx711
+    init_hx711();
+
+    // initialise the scale
+    scale_init(
+        &sc,
+        hx711_scale_adaptor_get_base(&hxsa),
+        UNIT,
+        REFUNIT,
+        OFFSET
+    );
+
+    //spend 10 seconds obtaining as many samples as
+    //possible to zero (aka. tare) the scale. The max
+    //number of samples will be limited to the size of
+    //the buffer allocated above
+    opt.strat = strategy_type_time;
+    opt.timeout = 10000000;
+
+     if(scale_zero(&sc, &opt)) {
+        printf("Scale zeroed successfully\n");
+    }
+    else {
+        printf("Scale failed to zero\n");
+    }
+
+    //change to spending 250 milliseconds obtaining
+    opt.timeout = 2500000;
+
+    mass_init(&max, mass_g, 0);
+    mass_init(&min, mass_g, 0);
+}
+
+double Load_cell::get_mass()
 {
-    // wait (block) until a value is obtained
-    printf("blocking value: %li\n", hx711_get_value(&hx));
+    double n; //value
+    mass_get_value(&mass, &n);
 
-    // or use a timeout
-    // int32_t val;
-    // const uint timeout = 250000; //microseconds
-    // if(hx711_get_value_timeout(&hx, timeout, &val)) {
-    //     // value was obtained within the timeout period
-    //     printf("timeout value: %li\n", val);
-    // }
-    // else {
-    //     printf("value was not obtained within the timeout period\n");
-    // }
+    return n;
+} 
 
-    // // or see if there's a value, but don't block if there isn't one ready
-    // if(hx711_get_value_noblock(&hx, &val)) {
-    //     printf("noblock value: %li\n", val);
-    // }
-    // else {
-    //     printf("value was not present\n");
-    // }
+void Load_cell::measure()
+{
+    memset(str, 0, MASS_TO_STRING_BUFF_SIZE);
+
+    //obtain a mass from the scale
+    if(scale_weight(&sc, &mass, &opt)) {
+
+        //check if the newly obtained mass
+        //is less than the existing minimum mass
+        if(mass_lt(&mass, &min)) {
+            min = mass;
+        }
+
+        //check if the newly obtained mass
+        //is greater than the existing maximum mass
+        if(mass_gt(&mass, &max)) {
+            max = mass;
+        }
+
+        //display the newly obtained mass...
+        mass_to_string(&mass, str);
+        printf("%s", str);
+
+        //...the current minimum mass...
+        mass_to_string(&min, str);
+        printf(" min: %s", str);
+
+        //...and the current maximum mass
+        mass_to_string(&max, str);
+        printf(" max: %s\n", str);
+
+    }
+    else {
+        printf("Failed to read weight\n");
+    }
 }
 
 void Load_cell::stop()
@@ -108,8 +186,7 @@ void Load_cell::stop()
 
 int Load_cell::calibrate()
 {
-    init();
-    hx711_scale_adaptor_t hxsa = {0};
+    init_hx711();
 
     char buff[32];
     char unit[10];
@@ -119,7 +196,6 @@ int Load_cell::calibrate()
     double refUnitFloat;
     int32_t refUnit;
 
-    scale_t sc;
     scale_options_t opt = SCALE_DEFAULT_OPTIONS;
     scale_options_get_default(&opt);
 
@@ -127,10 +203,6 @@ int Load_cell::calibrate()
     int32_t valbuff[valbufflen];
     opt.buffer = valbuff;
     opt.bufflen = valbufflen;
-
-    start();
-
-    hx711_scale_adaptor_init(&hxsa, &hx);
 
     scale_init(&sc, hx711_scale_adaptor_get_base(&hxsa), mass_ug, 1, 0);
 
