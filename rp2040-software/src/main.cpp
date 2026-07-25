@@ -247,9 +247,20 @@ int main()
 
 
 
-//Code example for testing the HX711 load cell amplifier
-// --------------------------------------------------------------
+/** Code example for testing the HX711 load cell amplifier
+--------------------------------------------------------------
+
+int main()
+{
+    Load_cell coin_scale;
+    coin_scale.init();
+
+    for(;;)
+    {
+        coin_scale.measure();
+    }
+    return 0;
+}
 
 
-
-// --------------------------------------------------------------
+-------------------------------------------------------------- **/
