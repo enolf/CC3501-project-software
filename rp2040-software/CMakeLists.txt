@@ -48,7 +48,6 @@ if(CrossCompiling)
 
     add_executable(labs)
 
-    # add lvgl directory, used for TFT display
     add_subdirectory(lib/lvgl)
     add_subdirectory(lib/pico-scale)
 
@@ -69,17 +68,15 @@ if(CrossCompiling)
         
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
-    # target_include_directories(pico-scale INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/lib/extern)
-
-    target_include_directories(labs PRIVATE
-        lib/pico-scale/include  # Or whatever folder contains their .h files
+    target_include_directories(pico-scale INTERFACE
+        ${CMAKE_CURRENT_LIST_DIR}/lib/pico-scale/include  # Or whatever folder contains their .h files
     )
 
     target_include_directories(labs
         PUBLIC 
-        src/
-        lib/
-        src/peripherals/
+        ${CMAKE_CURRENT_LIST_DIR}/src/
+        # ${CMAKE_CURRENT_LIST_DIR}/lib/
+        ${CMAKE_CURRENT_LIST_DIR}/src/peripherals/
     )
 
     pico_set_program_name(labs "cc3501-labs")
@@ -89,8 +86,8 @@ if(CrossCompiling)
     pico_enable_stdio_uart(labs 1)
     pico_enable_stdio_usb(labs 0)
 
-    # compile the PIO file
-    pico_generate_pio_header(labs ${CMAKE_CURRENT_LIST_DIR}/src/drivers/WS2812/WS2812.pio)
+    # NOT NEEDED UNLESS LEDS ARE ADDED but keep for now
+    # pico_generate_pio_header(labs ${CMAKE_CURRENT_LIST_DIR}/src/drivers/WS2812/WS2812.pio)
 
     # Add the standard library to the build
     target_link_libraries(labs
@@ -112,7 +109,6 @@ if(CrossCompiling)
         pico_time
         hardware_gpio
         hardware_irq
-        # pico_scale
         pico-scale
     )
 

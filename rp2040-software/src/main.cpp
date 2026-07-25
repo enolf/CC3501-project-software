@@ -6,7 +6,7 @@
 #include "hardware/i2c.h"
 #include <string.h>
 
-#include "WS2812.pio.h" // This header file gets produced during compilation from the WS2812.pio file
+// #include "WS2812.pio.h" // NOT NEEDED UNLESS LEDS ARE ADDED but keep for now
 #include "drivers/logging/logging.h"
 
 #include "peripherals/tft_display/tft_display.h"
@@ -247,9 +247,20 @@ int main()
 
 
 
-//Code example for testing the HX711 load cell amplifier
-// --------------------------------------------------------------
+/** Code example for testing the HX711 load cell amplifier
+--------------------------------------------------------------
+
+int main()
+{
+    Load_cell coin_scale;
+    coin_scale.init();
+
+    for(;;)
+    {
+        coin_scale.measure();
+    }
+    return 0;
+}
 
 
-
-// --------------------------------------------------------------
+-------------------------------------------------------------- **/
