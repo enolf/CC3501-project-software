@@ -61,29 +61,35 @@ void touchpad_read(lv_indev_t * indev_core, lv_indev_data_t * data) {
         int16_t calc_x = raw_x;
         int16_t calc_y = raw_y;
 
-        // 2. Handle Rotation (Swap Axes)
+        // 2 & 3. Handle Rotation and Mapping
         if (TOUCH_SWAP_XY) {
             calc_x = raw_y;
             calc_y = raw_x;
-        }
-        
-        // 3. Handle Mapping and Inversion for X
-        if (TOUCH_INVERT_X) {
-            data->point.x = map_coordinate(calc_x, TOUCH_RAW_MIN, TOUCH_RAW_MAX, DISP_HOR_RES, 0);
-        } else {
-            data->point.x = map_coordinate(calc_x, TOUCH_RAW_MIN, TOUCH_RAW_MAX, 0, DISP_HOR_RES);
-        }
+            
+            // Because axes are swapped, map X using Y's physical boundaries
+            if (TOUCH_INVERT_X) data->point.x = map_coordinate(calc_x, TOUCH_Y_MIN, TOUCH_Y_MAX, DISP_HOR_RES, 0);
+            else                data->point.x = map_coordinate(calc_x, TOUCH_Y_MIN, TOUCH_Y_MAX, 0, DISP_HOR_RES);
 
-        // 4. Handle Mapping and Inversion for Y
-        if (TOUCH_INVERT_Y) {
-            data->point.y = map_coordinate(calc_y, TOUCH_RAW_MIN, TOUCH_RAW_MAX, DISP_VER_RES, 0);
+            // And map Y using X's physical boundaries
+            if (TOUCH_INVERT_Y) data->point.y = map_coordinate(calc_y, TOUCH_X_MIN, TOUCH_X_MAX, DISP_VER_RES, 0);
+            else                data->point.y = map_coordinate(calc_y, TOUCH_X_MIN, TOUCH_X_MAX, 0, DISP_VER_RES);
+            
         } else {
-            data->point.y = map_coordinate(calc_y, TOUCH_RAW_MIN, TOUCH_RAW_MAX, 0, DISP_VER_RES);
+            // Normal axis mapping
+            if (TOUCH_INVERT_X) data->point.x = map_coordinate(calc_x, TOUCH_X_MIN, TOUCH_X_MAX, DISP_HOR_RES, 0);
+            else                data->point.x = map_coordinate(calc_x, TOUCH_X_MIN, TOUCH_X_MAX, 0, DISP_HOR_RES);
+
+            if (TOUCH_INVERT_Y) data->point.y = map_coordinate(calc_y, TOUCH_Y_MIN, TOUCH_Y_MAX, DISP_VER_RES, 0);
+            else                data->point.y = map_coordinate(calc_y, TOUCH_Y_MIN, TOUCH_Y_MAX, 0, DISP_VER_RES);
         }
         
-        // --- DIAGNOSTIC PRINT ---
-        printf("TOUCH PRESSED | Raw: X=%04u, Y=%04u | Mapped: X=%03d, Y=%03d\n", 
-               raw_x, raw_y, data->point.x, data->point.y);
+
+        // DIAGNOSTIC PRINT -- Uncomment to calibrate
+        if(CALIBRATE_TOUCH_MODE)
+        {
+            printf("TOUCH PRESSED | Raw: X=%04u, Y=%04u | Mapped: X=%03d, Y=%03d\n", 
+                   raw_x, raw_y, data->point.x, data->point.y);
+        }
 
     } else {
         data->state = LV_INDEV_STATE_RELEASED; // Updated for v9

@@ -91,8 +91,11 @@
 #endif
 
 // --- Raw Touch Calibration Boundaries ---
-// (You may need to tweak these slightly by printf-ing raw values later)
-#define TOUCH_RAW_MIN 300
-#define TOUCH_RAW_MAX 3800
+#define TOUCH_X_MIN 236
+#define TOUCH_X_MAX 1800
+#define TOUCH_Y_MIN 261
+#define TOUCH_Y_MAX 1880
+// Set CALIBRATE_TOUCH_MODE to 1 to see calibration stats in serial
+#define CALIBRATE_TOUCH_MODE 0
 
 #endif // BOARD_H
