@@ -57,7 +57,7 @@
 
 // --- Available Orientations ---
 
-// #define ORIENTATION_PORTRAIT           0 // Potrait not currently supported.
+#define ORIENTATION_PORTRAIT           0
 #define ORIENTATION_LANDSCAPE_VCC_DOWN 1
 #define ORIENTATION_LANDSCAPE_VCC_UP   2
 
@@ -82,9 +82,17 @@
     #define TOUCH_INVERT_Y  false // Flipped 180 from VCC_UP
 
 #elif ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_PORTRAIT
-    // Configuations needs to be stated if support for portrait mode is requied
-
-
+    #define DISP_H_V_CONF  0x48  // Standard portrait MADCTL
+    #define DISP_HOR_RES       240
+    #define DISP_VER_RES      320
+    #define TOUCH_SWAP_XY   false
+    #define TOUCH_INVERT_X  false
+    #define TOUCH_INVERT_Y  false
 #endif
+
+// --- Raw Touch Calibration Boundaries ---
+// (You may need to tweak these slightly by printf-ing raw values later)
+#define TOUCH_RAW_MIN 300
+#define TOUCH_RAW_MAX 3800
 
 #endif // BOARD_H
