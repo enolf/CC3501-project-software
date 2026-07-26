@@ -5,4 +5,5 @@ class Display{
         static void init();
         static void write_text(const char *string);
         static void run();
+        static void create_dual_switches(void);
 };
