@@ -34,37 +34,6 @@
             "cwd": "${workspaceFolder}",
             "environment": [],
             "console": "integratedTerminal"
-        },
-        {
-            "name": "Pico Debug (CMSIS-DAP) - macOS",
-            "cwd": "${workspaceFolder}",
-            "executable": "${workspaceFolder}/build/labs.elf",
-            "request": "launch",
-            "type": "cortex-debug",
-            "servertype": "openocd",
-            "serverpath": "${env:HOME}/.pico-sdk/openocd/0.12.0+dev/openocd",
-            "gdbPath": "${env:HOME}/.pico-sdk/toolchain/14_2_Rel1/bin/arm-none-eabi-gdb",
-            "device": "RP2040",
-            "configFiles": [
-                "interface/cmsis-dap.cfg",
-                "target/rp2040.cfg"
-            ],
-            "searchDir": [
-                "${env:HOME}/.pico-sdk/openocd/0.12.0+dev/scripts"
-            ],
-            "svdFile": "${env:HOME}/.pico-sdk/sdk/2.2.0/src/rp2040/hardware_regs/RP2040.svd",
-            "runToEntryPoint": "main",
-            "openOCDLaunchCommands": [
-                "adapter speed 1000"
-            ]
-        },
-        {
-            "name": "(macOS) Launch Local Test Harness",
-            "type": "lldb",
-            "request": "launch",
-            "program": "${workspaceFolder}/build/labs",
-            "args": [],
-            "cwd": "${workspaceFolder}"
         }
     ]
 }
