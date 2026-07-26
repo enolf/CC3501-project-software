@@ -11,12 +11,28 @@ OpenCV 4.x Homebrew or windows equivelant.
 #include <opencv2/imgproc.hpp>
 #include <sys/time.h>
 
+#include "trackbar.h"
+
+enum visualise_contours_mode {
+    NONE = 0,
+    BBOX = 1 << 0,
+    CENTROIDS = 1 << 1,
+    CONTOURS = 1 << 2,
+    ALL = BBOX | CENTROIDS | CONTOURS
+};
+
+struct Contour_Info {
+    cv::Rect bbox;
+    cv::Point2f centroid;
+    double area;
+};
+
 #ifdef TEST
 int load_test_image(cv::Mat &bgr_out) {
     // Load the image
-    bgr_out = cv::imread("../img.jpg");
+    bgr_out = cv::imread("../cans_test/cans_multi_test_1.jpg");
     if (!bgr_out.data) {
-        bgr_out = cv::imread("img.jpg");
+        bgr_out = cv::imread("cans_test/cans_multi_test_1.jpg");
         if (!bgr_out.data) {
             std::cerr << "Failed to load image\n";
             return 1;
@@ -24,11 +40,60 @@ int load_test_image(cv::Mat &bgr_out) {
     }
     return 0;
 };
-
 #endif
+
+//Claude wrote this:
+void onMouse(int event, int x, int y, int flags, void* userdata) {
+    cv::Mat* img = reinterpret_cast<cv::Mat*>(userdata);
+    if (event == cv::EVENT_LBUTTONDOWN) {
+        cv::Vec3b bgr = img->at<cv::Vec3b>(y, x); // note: row=y, col=x
+        printf("Clicked (%d, %d) -> BGR: (%d, %d, %d)\n", x, y, bgr[0], bgr[1], bgr[2]);
+
+        // If you also want HSV at that point:
+        cv::Mat hsvPixel;
+        cv::cvtColor(cv::Mat(1, 1, CV_8UC3, bgr), hsvPixel, cv::COLOR_BGR2HSV);
+        cv::Vec3b hsv = hsvPixel.at<cv::Vec3b>(0, 0);
+        printf("HSV: (%d, %d, %d)\n", hsv[0], hsv[1], hsv[2]);
+    }
+};
+std::vector<Contour_Info> visualise_contours(const cv::Mat& src_frame, cv::Mat& draw_frame, int ContourMinSize,int ContourMaxSize, visualise_contours_mode mode){
+    std::vector<Contour_Info> output;
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(src_frame, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
+
+    if (mode == NONE) return output;
+
+    for (const auto& contour : contours) {
+        double area = cv::contourArea(contour);
+        if (area < ContourMinSize) continue;
+        if (area > ContourMaxSize) continue;
+
+        cv::Moments m = cv::moments(contour);
+        if (m.m00 <= 0) continue;
+
+        Contour_Info info;
+        info.area = area;
+        info.centroid = cv::Point2f((float)(m.m10 / m.m00), (float)(m.m01 / m.m00));
+        info.bbox = cv::boundingRect(contour);
+        output.emplace_back(info);
+
+        if (mode & BBOX){
+            cv::rectangle(draw_frame, info.bbox, cv::Scalar(0, 255, 0), 2);
+        }
+        if (mode & CENTROIDS){
+            cv::circle(draw_frame, info.centroid, 5, cv::Scalar(0, 0, 255), -1);
+        }
+        if (mode & CONTOURS){
+            std::vector<std::vector<cv::Point>> single = {contour};
+            cv::drawContours(draw_frame, single, -1, cv::Scalar(255, 0, 0), 2);
+        }
+    }
+    return output;
+};
 
 int main()
 {
+    #ifndef TEST
     // Open the video camera.
     std::string pipeline = "libcamerasrc"
         " ! video/x-raw, width=800, height=600" // camera needs to capture at a higher resolution
@@ -42,39 +107,32 @@ int main()
         printf("Could not open camera.\n");
         return 1;
     }
+    #endif
     
 
     // Create a control window
     cv::namedWindow("Control", cv::WINDOW_AUTOSIZE);
-    int iLowH = 0;
-    int iHighH = 179;
+    int iLowH = Trackbar::LowH.default_val;
+    int iHighH = Trackbar::HighH.default_val;
+    int iLowS = Trackbar::LowS.default_val;
+    int iHighS = Trackbar::HighS.default_val;
+    int iLowV = Trackbar::LowV.default_val;
+    int iHighV = Trackbar::HighV.default_val;
+    int iOpen = Trackbar::Open.default_val;
+    int iClose = Trackbar::Close.default_val;
+    int ContourMinSize = Trackbar::ContourMinArea.default_val;
+    int ContourMaxSize = Trackbar::ContourMaxArea.default_val;
 
-    int iLowS = 0;
-    int iHighS = 255;
-
-    int iLowV = 0;
-    int iHighV = 255;
-
-    int iOpen = 0;
-    int iClose = 0;
- 
-    // Create trackbars in "Control" window
-    cv::createTrackbar("LowH", "Control", &iLowH, 179); //Hue (0 - 179)
-    cv::createTrackbar("HighH", "Control", &iHighH, 179);
-
-    cv::createTrackbar("LowS", "Control", &iLowS, 255); //Saturation (0 - 255)
-    cv::createTrackbar("HighS", "Control", &iHighS, 255);
-
-    cv::createTrackbar("LowV", "Control", &iLowV, 255); //Value (0 - 255)
-    cv::createTrackbar("HighV", "Control", &iHighV, 255);
-
-    cv::createTrackbar("Open", "Control", &iOpen, 10); //Value (0 - 10)
-    cv::createTrackbar("Close", "Control", &iClose, 10); //Value (0 - 10)
-
-    // Create the OpenCV window
-    cv::namedWindow("Camera", cv::WINDOW_AUTOSIZE);
-    cv::namedWindow("Camera - Thresholded", cv::WINDOW_AUTOSIZE);
-    cv::namedWindow("Camera - Morphology", cv::WINDOW_AUTOSIZE);
+    cv::createTrackbar("LowH",  "Control", &iLowH,  Trackbar::LowH.max_val);
+    cv::createTrackbar("HighH", "Control", &iHighH, Trackbar::HighH.max_val);
+    cv::createTrackbar("LowS",  "Control", &iLowS,  Trackbar::LowS.max_val);
+    cv::createTrackbar("HighS", "Control", &iHighS, Trackbar::HighS.max_val);
+    cv::createTrackbar("LowV",  "Control", &iLowV,  Trackbar::LowV.max_val);
+    cv::createTrackbar("HighV", "Control", &iHighV, Trackbar::HighV.max_val);
+    cv::createTrackbar("Open",  "Control", &iOpen,  Trackbar::Open.max_val);
+    cv::createTrackbar("Close", "Control", &iClose, Trackbar::Close.max_val);
+    cv::createTrackbar("ContourMinArea", "Control", &ContourMinSize, Trackbar::ContourMinArea.max_val);
+    cv::createTrackbar("ContourMaxArea", "Control", &ContourMaxSize, Trackbar::ContourMaxArea.max_val);
 
     // Measure the frame rate - initialise variables
     int frame_id = 0;
@@ -92,36 +150,45 @@ int main()
     load_test_image(bgr_img);
     frame = bgr_img.clone();
 #endif
-    for(;;) {
+
+    // Create the OpenCV window
+    cv::namedWindow("Camera", cv::WINDOW_NORMAL);
+    cv::setMouseCallback("Camera", onMouse, &frame);
+    cv::namedWindow("Camera - Thresholded", cv::WINDOW_NORMAL);
+    cv::namedWindow("Camera - Morphology", cv::WINDOW_NORMAL);
+
+    while(true) {
 #ifndef TEST
         if (!cap.read(frame)) {
             printf("Could not read a frame.\n");
             break;
         }
+#else
+    frame = bgr_img.clone();
 #endif
 
-	cv::cvtColor(frame, hsv_frame, cv::COLOR_BGR2HSV);
+        cv::cvtColor(frame, hsv_frame, cv::COLOR_BGR2HSV);
 
-	hsv_frame =	thresh_frame.clone();
+        // hsv_frame =	thresh_frame.clone();
 
-	// Threshold the image
-	// might need to cvtColor this frame first
-	inRange(hsv_frame, cv::Scalar(iLowH, iLowS, iLowV), cv::Scalar(iHighH, iHighS, iHighV), thresh_frame);
-	morph_frame = thresh_frame;
-	if (iOpen){
-		cv::morphologyEx(morph_frame, morph_frame, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(iOpen, iOpen)));
-	}
-	if (iClose){
-		cv::morphologyEx(morph_frame, morph_frame, cv::MORPH_CLOSE, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(iClose, iClose)));
-	}
+        // Threshold the image
+        // might need to cvtColor this frame first
+        inRange(hsv_frame, cv::Scalar(iLowH, iLowS, iLowV), cv::Scalar(iHighH, iHighS, iHighV), thresh_frame);
+        morph_frame = thresh_frame.clone();
+        if (iOpen){
+            cv::morphologyEx(morph_frame, morph_frame, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(iOpen, iOpen)));
+        }
+        if (iClose){
+            cv::morphologyEx(morph_frame, morph_frame, cv::MORPH_CLOSE, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(iClose, iClose)));
+        }
 
-	Moment = cv::moments(morph_frame, true);
-	if (Moment.m00 > 0){
-		double cx = Moment.m10 / Moment.m00;
-		double cy = Moment.m01 / Moment.m00;
-		cv::circle(frame, cv::Point((int)cx, (int)cy), 5, cv::Scalar(0, 0, 255), -1);
-		printf("Centroid: (%.1f, %.1f)  Area: %.1f\n", cx, cy, Moment.m00);
-	}
+
+        //need to add can propoties. the region is taller than it is wide.
+
+        std::vector<Contour_Info> img_info;
+        img_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+
+
 
         //show frame
         cv::imshow("Camera", frame);
@@ -132,6 +199,7 @@ int main()
         // Measure the frame rate
         frame_id++;
         if (frame_id >= 30) {
+            printf("Number of Cans: %zu\n", img_info.size());
             gettimeofday(&end, NULL);
             double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec)/1000000.0;
             printf("30 frames in %f seconds = %f FPS\n", diff, 30/diff);
@@ -140,8 +208,10 @@ int main()
         }
     }
 
+    #ifndef TEST
     // Free the camera 
     cap.release();
+    #endif
     return 0;
 }
 
