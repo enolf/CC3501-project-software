@@ -81,6 +81,10 @@ void touchpad_read(lv_indev_t * indev_core, lv_indev_data_t * data) {
             data->point.y = map_coordinate(calc_y, TOUCH_RAW_MIN, TOUCH_RAW_MAX, 0, DISP_VER_RES);
         }
         
+        // --- DIAGNOSTIC PRINT ---
+        printf("TOUCH PRESSED | Raw: X=%04u, Y=%04u | Mapped: X=%03d, Y=%03d\n", 
+               raw_x, raw_y, data->point.x, data->point.y);
+
     } else {
         data->state = LV_INDEV_STATE_RELEASED; // Updated for v9
     }
@@ -98,6 +102,23 @@ void touch_init(void) {
     gpio_init(TOUCH_CS_PIN);
     gpio_set_dir(TOUCH_CS_PIN, GPIO_OUT);
     gpio_put(TOUCH_CS_PIN, 1); // Deselect by default (HIGH)
+
+    // --- THE SPI FLUSH (Valid Command Fix) ---
+    spi_set_baudrate(SPI_PORT, TOUCH_SPI_SPEED); 
+    
+    gpio_put(TOUCH_CS_PIN, 0); 
+    
+    // Send 0xD0 (CMD_READ_X) to force a conversion and trigger power-down mode
+    uint8_t dummy_tx[3] = {CMD_READ_X, 0x00, 0x00};
+    uint8_t dummy_rx[3] = {0};
+    
+    // Read and discard to clear the Pico's internal RX FIFO
+    spi_write_read_blocking(SPI_PORT, dummy_tx, dummy_rx, 3);
+    
+    gpio_put(TOUCH_CS_PIN, 1); 
+    
+    spi_set_baudrate(SPI_PORT, DISPLAY_SPI_SPEED);
+    // ---------------------------------------
 
     // Initialize IRQ pin
     gpio_init(TOUCH_IRQ_PIN);
