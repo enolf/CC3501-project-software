@@ -3,11 +3,27 @@ Requires OpenCV 4.x - OpenCV 5.0.0 (Homebrew) doesn't work as of July 2026 missi
 OpenCV 4.x Homebrew or windows equivelant.
 */
 
+#define TEST
+
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 #include <sys/time.h>
+
+#ifdef TEST
+int load_test_image(cv::Mat &bgr_out) {
+    // Load the image
+    bgr_out = cv::imread("../img.jpg");
+    if (!bgr_out.data) {
+        bgr_out = cv::imread("img.jpg");
+        if (!bgr_out.data) {
+            std::cerr << "Failed to load image\n";
+            return 1;
+        }
+    }
+}
+#endif
 
 int main()
 {
@@ -25,6 +41,7 @@ int main()
         return 1;
     }
     
+
     // Create a control window
     cv::namedWindow("Control", cv::WINDOW_AUTOSIZE);
     int iLowH = 0;
@@ -68,11 +85,19 @@ int main()
     cv::Mat morph_frame;
     cv::Moments Moment;
 
+#ifdef TEST
+    cv::Mat bgr_img;
+    load_test_image(bgr_img);
+    frame = bgr_img.clone();
+#endif
     for(;;) {
+#ifndef TEST
         if (!cap.read(frame)) {
             printf("Could not read a frame.\n");
             break;
         }
+#endif
+
 	cv::cvtColor(frame, hsv_frame, cv::COLOR_BGR2HSV);
 
 	hsv_frame =	thresh_frame.clone();
@@ -95,7 +120,6 @@ int main()
 		cv::circle(frame, cv::Point((int)cx, (int)cy), 5, cv::Scalar(0, 0, 255), -1);
 		printf("Centroid: (%.1f, %.1f)  Area: %.1f\n", cx, cy, Moment.m00);
 	}
-
 
         //show frame
         cv::imshow("Camera", frame);
