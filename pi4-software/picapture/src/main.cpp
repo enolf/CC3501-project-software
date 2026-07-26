@@ -22,7 +22,9 @@ int load_test_image(cv::Mat &bgr_out) {
             return 1;
         }
     }
-}
+    return 0;
+};
+
 #endif
 
 int main()
