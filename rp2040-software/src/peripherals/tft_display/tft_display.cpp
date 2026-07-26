@@ -4,12 +4,9 @@
 #include "drivers/ili9341/ili9341.h"
 #include "lvgl/lvgl.h"
 #include "hardware/timer.h"
+#include "board.h"
 
 namespace {
-    // In C++, it's much safer to use constexpr for type-safe constants rather than #define
-    constexpr uint16_t DISP_HOR_RES = 240;
-    constexpr uint16_t DISP_VER_RES = 320;
-
     // LVGL render buffer
     static lv_color_t buf[DISP_HOR_RES * DISP_VER_RES / 10];
 

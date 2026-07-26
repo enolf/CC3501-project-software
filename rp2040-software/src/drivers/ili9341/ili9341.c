@@ -1,4 +1,5 @@
 #include "ili9341.h"
+#include "board.h"
 
 // Helper macros for Chip Select and Data/Command toggling
 static inline void cs_select()
@@ -71,13 +72,13 @@ void ili9341_init(void)
     // If you hardwired the LED pin to 3V3 on the breadboard, this 
     // does nothing. If you used a standard active-high NPN transistor
     // to test switching, HIGH (1) turns the screen ON.
-    gpio_put(ILI9341_PIN_BL, 1); 
+    // gpio_put(ILI9341_PIN_BL, 1); 
 
     // --- CUSTOM PCB MODE (P-CHANNEL MOSFET) ---
     // UNCOMMENT the line below and comment out the prototype line 
     // above when flashing to your custom PCB! 
     // A P-Channel MOSFET requires a LOW (0) signal to turn ON.
-    // gpio_put(ILI9341_PIN_BL, 0); 
+    gpio_put(ILI9341_PIN_BL, 0); 
     // ---------------------------------------------------------
 
     // 4. Hardware Reset
@@ -99,13 +100,15 @@ void ili9341_init(void)
     // ili9341_write_cmd(0x36); // Memory Access Control
     // ili9341_write_data(0x48); // BGR order (fixes inverted colors on red boards)
 
-    // --- THE MIRROR FIX ---
-    // 0x36 controls orientation.
-    // 0x48 = Mirrored X-axis + BGR
-    // 0x08 = Normal X-axis + BGR
-    // 0xC8 = Mirrored X AND Mirrored Y + BGR    
+    // ORIENTATION
+    // Below are the supported LANDSCAPE orientations. Configure in "board.h"
+    // so changes are global and affect touch and the graphics softare (LVGL)
+
+    // 0xA8 VCC Pin on the top
+    // 0x68 VCC Pin on the bottom
+
     ili9341_write_cmd(0x36); // Memory Access Control
-    ili9341_write_data(0xC8); // Set to 180 degrees
+    ili9341_write_data(DISP_H_V_CONF);  
 
     ili9341_write_cmd(0x29); // Display ON
     sleep_ms(150);
