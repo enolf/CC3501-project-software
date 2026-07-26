@@ -3,7 +3,13 @@ Requires OpenCV 4.x - OpenCV 5.0.0 (Homebrew) doesn't work as of July 2026 missi
 OpenCV 4.x Homebrew or windows equivelant.
 */
 
-#define TEST
+/*TODO
+update README
+Can distance thresholding
+report multiple distinct colors of cans
+*/
+
+// #define TEST
 
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgcodecs.hpp>
