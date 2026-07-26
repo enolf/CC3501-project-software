@@ -1,5 +1,8 @@
 #pragma once
 
+#ifndef BOARD_H
+#define BOARD_H
+
 // board.h — ALL hardware connectivity lives here.
 //
 // This project targets a custom PCB, and the board may go through several
@@ -45,3 +48,54 @@
 // switches; the range is 0x2C-0x2F, so up to four modules can share one bus
 // (per the PiicoDev README). Change this if the switches on your board differ.
 #define RFID_I2C_ADDR       0x2C
+
+
+// TFT DISPLAY
+
+// model: ILI9341 with Touch (XPT2046) and SD Card
+// Currently allow to configure between the two landscape orientations
+
+// --- Available Orientations ---
+
+#define ORIENTATION_PORTRAIT           0
+#define ORIENTATION_LANDSCAPE_VCC_DOWN 1
+#define ORIENTATION_LANDSCAPE_VCC_UP   2
+
+// === SET YOUR ACTIVE ORIENTATION HERE ===
+#define ACTIVE_DISPLAY_ORIENTATION ORIENTATION_LANDSCAPE_VCC_UP
+
+// --- Cascading Hardware Settings ---
+#if ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_LANDSCAPE_VCC_UP
+    #define DISP_H_V_CONF   0xA8
+    #define DISP_HOR_RES    320
+    #define DISP_VER_RES    240
+    #define TOUCH_SWAP_XY   true
+    #define TOUCH_INVERT_X  false // Adjust these based on your specific touch film
+    #define TOUCH_INVERT_Y  true
+
+#elif ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_LANDSCAPE_VCC_DOWN
+    #define DISP_H_V_CONF   0x68
+    #define DISP_HOR_RES    320
+    #define DISP_VER_RES    240
+    #define TOUCH_SWAP_XY   true
+    #define TOUCH_INVERT_X  true  // Flipped 180 from VCC_UP
+    #define TOUCH_INVERT_Y  false // Flipped 180 from VCC_UP
+
+#elif ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_PORTRAIT
+    #define DISP_H_V_CONF  0x48  // Standard portrait MADCTL
+    #define DISP_HOR_RES       240
+    #define DISP_VER_RES      320
+    #define TOUCH_SWAP_XY   false
+    #define TOUCH_INVERT_X  false
+    #define TOUCH_INVERT_Y  false
+#endif
+
+// --- Raw Touch Calibration Boundaries ---
+#define TOUCH_X_MIN 236
+#define TOUCH_X_MAX 1800
+#define TOUCH_Y_MIN 261
+#define TOUCH_Y_MAX 1880
+// Set CALIBRATE_TOUCH_MODE to 1 to see calibration stats in serial
+#define CALIBRATE_TOUCH_MODE 0
+
+#endif // BOARD_H
