@@ -63,6 +63,7 @@ if(CrossCompiling)
         src/drivers/mfrc522/mfrc522.cpp
         src/peripherals/access_control/access_control.cpp
         src/peripherals/load_cell/load_cell.cpp
+        src/drivers/ili9341/xpt2046.c
     )
         
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
