@@ -65,6 +65,7 @@ if(CrossCompiling)
         src/peripherals/load_cell/load_cell.cpp
         src/peripherals/camera_side/inventory.cpp
         src/drivers/ili9341/xpt2046.c
+        src/fridge_harness.cpp
     )
         
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
