@@ -70,7 +70,7 @@
     #define DISP_HOR_RES    320
     #define DISP_VER_RES    240
     #define TOUCH_SWAP_XY   true
-    #define TOUCH_INVERT_X  false // Adjust these based on your specific touch film
+    #define TOUCH_INVERT_X  true // Adjust these based on your specific touch film
     #define TOUCH_INVERT_Y  true
 
 #elif ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_LANDSCAPE_VCC_DOWN
