@@ -169,10 +169,27 @@ void change_fridge_state(fridge_state_t new_state) {
         }
             
         case STATE_PAYING_CARD: {
+
+            // Instruction label
             lv_obj_t * lbl = lv_label_create(lv_screen_active());
-            // Note: Placeholder for actual lv_qrcode widget
-            lv_label_set_text(lbl, "[QR CODE PLACEHOLDER]\nWaiting for Square API..."); 
-            lv_obj_center(lbl);
+            lv_label_set_text(lbl, "Scan to pay with square"); 
+            lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 10);
+
+            const char * payment_url = "https://www.berlincalling.com.au/";
+
+            // QR code label
+            lv_obj_t * qr = lv_qrcode_create(lv_screen_active());
+            lv_qrcode_set_size(qr, 130);
+            lv_qrcode_set_dark_color(qr, lv_color_hex(0x000000));
+            lv_qrcode_set_light_color(qr, lv_color_hex(0xFFFFFF));
+
+            // provide payment url to generate qr code
+            lv_qrcode_update(qr, payment_url, lv_strlen(payment_url));
+
+            lv_obj_align(qr, LV_ALIGN_CENTER, 0, 15);
+
+            lv_qrcode_set_dark_color(qr, lv_color_hex(0x000000));
+            lv_qrcode_set_light_color(qr, lv_color_hex(0xFFFFFF));
             
             timeout_timer = lv_timer_create(timeout_cb, 120000, NULL);
             mock_action_timer = lv_timer_create(mock_action_cb, 5000, NULL); // 5 sec mock payment
