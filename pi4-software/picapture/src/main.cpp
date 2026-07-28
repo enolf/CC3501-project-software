@@ -15,7 +15,10 @@ report multiple distinct colors of cans
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
+
 #include <sys/time.h>
+#include <string>
+#include <sstream>
 
 #include "trackbar.h"
 
@@ -31,7 +34,12 @@ struct Contour_Info {
     cv::Rect bbox;
     cv::Point2f centroid;
     double area;
+    cv::Vec3b hsv;
+    std::string color;
 };
+
+
+
 
 #ifdef TEST
 int load_test_image(cv::Mat &bgr_out) {
@@ -47,6 +55,20 @@ int load_test_image(cv::Mat &bgr_out) {
     return 0;
 };
 #endif
+
+std::string serialize_image(const std::vector<std::vector<Contour_Info>>& image_info, const std::vector<std::string>& can_color_names){
+    std::ostringstream oss;
+    if (can_color_names.size() != image_info.size() && ""){
+        printf("length of can_color_name and image_info don't match");
+        return "error in serialize_image";
+    }
+    for (int i = 0; i < image_info.size(); i++){
+        oss << can_color_names[i] << ": " << image_info[i].size();
+        oss << "; ";
+    }
+    oss << "\n";
+    return oss.str();
+};
 
 //Claude wrote this:
 void onMouse(int event, int x, int y, int flags, void* userdata) {
@@ -191,10 +213,17 @@ int main()
 
         //need to add can propoties. the region is taller than it is wide.
 
-        std::vector<Contour_Info> img_info;
-        img_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+        std::vector<std::vector<Contour_Info>> img_info;
+        std::vector<Contour_Info> can_info;
+        std::vector<std::string> can_color_names = {"Coke", "Pepsi", "Fanta"};
 
+        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+        img_info.push_back(can_info);
 
+        // std::string packet = serialize_image(img_info, can_color_names);
+        // printf("%s", packet.c_str());
+        //print
+        //flush
 
         //show frame
         cv::imshow("Camera", frame);
