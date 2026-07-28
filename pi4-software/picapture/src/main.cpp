@@ -101,6 +101,8 @@ void onMouse(int event, int x, int y, int flags, void* userdata) {
     }
 };
 
+// some testing stuff
+
 void set_hsv_trackbars(const onMouse_UserData& data, Trackbar_State& tb){
     cv::Vec3b hsv = data.hsv;
     int tolerance = 10;
