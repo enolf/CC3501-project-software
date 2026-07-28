@@ -38,6 +38,20 @@ struct Contour_Info {
     std::string color;
 };
 
+struct onMouse_UserData{
+    bool just_clicked = false;
+    cv::Mat* p_frame;
+    cv::Vec3b hsv;
+};
+
+struct Trackbar_State{
+    int* iLowH;
+    int* iHighH;
+    int* iLowS;
+    int* iHighS;
+    int* iLowV;
+    int* iHighV;
+};
 
 
 
@@ -70,20 +84,43 @@ std::string serialize_image(const std::vector<std::vector<Contour_Info>>& image_
     return oss.str();
 };
 
-//Claude wrote this:
+//Claude wrote the base of this function:
 void onMouse(int event, int x, int y, int flags, void* userdata) {
-    cv::Mat* img = reinterpret_cast<cv::Mat*>(userdata);
+    onMouse_UserData* data = reinterpret_cast<onMouse_UserData*>(userdata);
+
+
     if (event == cv::EVENT_LBUTTONDOWN) {
-        cv::Vec3b bgr = img->at<cv::Vec3b>(y, x); // note: row=y, col=x
+        cv::Vec3b bgr = data->p_frame->at<cv::Vec3b>(y, x); // note: row=y, col=x
         printf("Clicked (%d, %d) -> BGR: (%d, %d, %d)\n", x, y, bgr[0], bgr[1], bgr[2]);
 
         // If you also want HSV at that point:
         cv::Mat hsvPixel;
         cv::cvtColor(cv::Mat(1, 1, CV_8UC3, bgr), hsvPixel, cv::COLOR_BGR2HSV);
-        cv::Vec3b hsv = hsvPixel.at<cv::Vec3b>(0, 0);
-        printf("HSV: (%d, %d, %d)\n", hsv[0], hsv[1], hsv[2]);
+        data->hsv = hsvPixel.at<cv::Vec3b>(0, 0);
+        printf("HSV: (%d, %d, %d)\n", data->hsv[0], data->hsv[1], data->hsv[2]);
     }
 };
+
+void set_hsv_trackbars(const onMouse_UserData& data, Trackbar_State& tb){
+    cv::Vec3b hsv = data.hsv;
+    int tolerance = 10;
+    int bigger_tolerance = 20;
+
+    *tb.iLowH  = std::max(0, hsv[0] - tolerance);
+    *tb.iHighH = std::min(179, hsv[0] + tolerance);
+    *tb.iLowS  = std::max(0, hsv[1] - bigger_tolerance);
+    *tb.iHighS = std::min(255, hsv[1] + bigger_tolerance);
+    *tb.iLowV  = std::max(0, hsv[2] - bigger_tolerance);
+    *tb.iHighV = std::min(255, hsv[2] + bigger_tolerance);
+
+    cv::setTrackbarPos("LowH", "Control", *tb.iLowH);
+    cv::setTrackbarPos("HighH", "Control", *tb.iHighH);
+    cv::setTrackbarPos("LowS",  "Control", *tb.iLowS);
+    cv::setTrackbarPos("HighS", "Control", *tb.iHighS);
+    cv::setTrackbarPos("LowV",  "Control", *tb.iLowV);
+    cv::setTrackbarPos("HighV", "Control", *tb.iHighV);
+}
+
 std::vector<Contour_Info> visualise_contours(const cv::Mat& src_frame, cv::Mat& draw_frame, int ContourMinSize,int ContourMaxSize, visualise_contours_mode mode){
     std::vector<Contour_Info> output;
     std::vector<std::vector<cv::Point>> contours;
@@ -119,6 +156,7 @@ std::vector<Contour_Info> visualise_contours(const cv::Mat& src_frame, cv::Mat& 
     return output;
 };
 
+
 int main()
 {
     #ifndef TEST
@@ -151,6 +189,14 @@ int main()
     int ContourMinSize = Trackbar::ContourMinArea.default_val;
     int ContourMaxSize = Trackbar::ContourMaxArea.default_val;
 
+    Trackbar_State tb;
+    tb.iLowH = &iLowH;
+    tb.iHighH = &iHighH;
+    tb.iLowS = &iLowS;
+    tb.iHighS = &iHighS;
+    tb.iLowV = &iLowV;
+    tb.iHighV = &iHighV;
+
     cv::createTrackbar("LowH",  "Control", &iLowH,  Trackbar::LowH.max_val);
     cv::createTrackbar("HighH", "Control", &iHighH, Trackbar::HighH.max_val);
     cv::createTrackbar("LowS",  "Control", &iLowS,  Trackbar::LowS.max_val);
@@ -179,9 +225,12 @@ int main()
     frame = bgr_img.clone();
 #endif
 
+    onMouse_UserData mouse_click_data;
+    mouse_click_data.p_frame = &frame;
+
     // Create the OpenCV window
     cv::namedWindow("Camera", cv::WINDOW_NORMAL);
-    cv::setMouseCallback("Camera", onMouse, &frame);
+    cv::setMouseCallback("Camera", onMouse, &mouse_click_data);
     cv::namedWindow("Camera - Thresholded", cv::WINDOW_NORMAL);
     cv::namedWindow("Camera - Morphology", cv::WINDOW_NORMAL);
 
@@ -194,6 +243,9 @@ int main()
 #else
     frame = bgr_img.clone();
 #endif
+
+        
+        set_hsv_trackbars(mouse_click_data, tb);
 
         cv::cvtColor(frame, hsv_frame, cv::COLOR_BGR2HSV);
 
@@ -215,13 +267,20 @@ int main()
 
         std::vector<std::vector<Contour_Info>> img_info;
         std::vector<Contour_Info> can_info;
-        std::vector<std::string> can_color_names = {"Coke", "Pepsi", "Fanta"};
+        // std::vector<std::string> can_color_names = {"Coke", "Pepsi", "Fanta"};
+        std::vector<std::string> can_color_names = {"COKE"};
 
         can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+        //red
+        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+        //blue
+        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+        // purple
+        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
+
         img_info.push_back(can_info);
 
-        // std::string packet = serialize_image(img_info, can_color_names);
-        // printf("%s", packet.c_str());
+        std::string packet = serialize_image(img_info, can_color_names);
         //print
         //flush
 
@@ -234,10 +293,11 @@ int main()
         // Measure the frame rate
         frame_id++;
         if (frame_id >= 30) {
-            printf("Number of Cans: %zu\n", img_info.size());
+            printf("Packet for sending \"%s\"", packet.c_str());
             gettimeofday(&end, NULL);
             double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec)/1000000.0;
-            printf("30 frames in %f seconds = %f FPS\n", diff, 30/diff);
+            printf("[FPS: %f] Number of Cans: %zu\n", 30/diff, can_info.size());
+            // printf("30 frames in %f seconds = %f FPS\n", diff, 30/diff);
             frame_id = 0;
             gettimeofday(&start, NULL);
         }
