@@ -17,6 +17,7 @@ typedef enum {
     STATE_PAYMENT_SELECT,
     STATE_PAYING_CASH,
     STATE_PAYING_CARD,
+    STATE_AWAITING_URL,
     STATE_SUCCESS
 } fridge_state_t;
 
@@ -26,6 +27,11 @@ static fridge_state_t current_state = STATE_IDLE;
 static int mock_cokes_taken = 0;
 static int mock_fantas_taken = 0;
 static float current_total = 0.0f;
+
+// --- New Global Variables ---
+static char payment_url_buffer[256];
+static lv_timer_t * serial_reader_timer = NULL;
+static lv_timer_t * square_poll_timer = NULL;
 
 
 // Timers
