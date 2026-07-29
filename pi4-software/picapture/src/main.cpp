@@ -14,6 +14,7 @@ report multiple distinct colors of cans
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <ostream>
 #include <sys/time.h>
 #include <string>
 #include <sstream>
@@ -167,9 +168,10 @@ std::string serialize_image(const std::vector<std::vector<Contour_Info>>& image_
     size_t name_idx = 0;
     std::ostringstream oss;
     for (int i = 0; i < image_info.size(); i++){
-        oss << color_config[i].name << ": " << image_info[i].size();
-        oss << "; ";
+        if (i != 0){ oss << ","; }
+        oss << (color_config[i].name)[0] << ":" << image_info[i].size();
     }
+    oss << ";";
     return oss.str();
 };
 
@@ -306,7 +308,7 @@ int initialise_camera(cv::VideoCapture* p_cap){
         cv::morphologyEx(pf->morphology, pf->morphology, cv::MORPH_OPEN, cv::getStructuringElement(ms, cv::Size(*tb->iOpen, *tb->iOpen)));
     }
     if (*tb->iClose) {
-        cv::morphologyEx(pf->morphology, pf->morphology, cv::MORPH_CLOSE, cv::getStructuringElement(ms, cv::Size(*tb->iClose, *tb->iClose)));
+        cv::morphologyEx(pf->morphology, pf->morphology, cv::MORPH_CLOSE, cv::getStructuringElement(ms, cv::Size(*tb->iClose, (*tb->iClose)*7)));
     }
 
     cv::imshow("Camera - Morphology", pf->morphology);
@@ -445,6 +447,7 @@ int main()
         }
 
         std::string packet = serialize_image(img_info, colors_vec);
+        std::cout << packet.c_str() << std::flush;
         //print
         //flush
 
@@ -462,7 +465,7 @@ int main()
         if (frame_id >= 30) {
             gettimeofday(&end, NULL);
             double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec)/1000000.0;
-            printf("[FPS:%f] Packet for sending: \"%s\"\n", 30/diff ,packet.c_str());
+            // printf("[FPS:%f] Packet for sending: \"%s\"\n", 30/diff ,packet.c_str());
             frame_id = 0;
             gettimeofday(&start, NULL);
         }
