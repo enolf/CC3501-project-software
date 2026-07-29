@@ -98,4 +98,41 @@
 // Set CALIBRATE_TOUCH_MODE to 1 to see calibration stats in serial
 #define CALIBRATE_TOUCH_MODE 0
 
+
+// --- HX711 load cell amplifier (money box coin scale) ---
+//
+// A TAL221 500 g beam load cell sits under the money box, feeding an HX711
+// 24-bit amplifier which the RP2040 reads over two GPIOs using a PIO state
+// machine (see lib/pico-scale/extern/hx711-pico-c).
+//
+// NOTE: src/peripherals/load_cell/load_cell.h also defines HX711 pins
+// (GP14/GP15). Those are from the earlier bare-Pico test rig and do NOT
+// describe this board. They are left untouched so the existing Load_cell
+// example still builds; all new code uses the definitions below.
+#define HX711_DATA_PIN 10
+#define HX711_CLK_PIN  11
+
+// The HX711's RATE pin is strapped LOW on this board, giving 10 samples per
+// second. The datasheet quotes 400 ms of output settling at 10 Hz, which is
+// what makes coin detection take roughly a second per coin: the reading has
+// to finish ramping to the new weight before it can be trusted. 10 Hz is the
+// *lower noise* of the two modes (narrower bandwidth), so this costs latency,
+// not accuracy. If a board revision straps RATE high, change this to
+// hx711_rate_80 and the settle timing follows automatically.
+#define HX711_RATE hx711_rate_10
+
+// Analog supply (VSUP) is 5 V for stronger bridge excitation; the digital
+// supply (DVDD) is 3V3 so DOUT's logic level is safe for the RP2040, which is
+// not 5 V tolerant. Recorded here because it is a board wiring fact, even
+// though no code reads it.
+
+// Load cell calibration: raw HX711 counts per gram, from the calibration
+// routine in load_cell.cpp (TAL221 500 g, calibrated against a 50 g mass).
+//
+// This is the ONLY calibration figure the coin detector needs. It works
+// entirely in differences from a baseline captured at run time, so any zero
+// offset cancels out -- the stored OFFSET in load_cell.h does not have to be
+// correct, or even current, for coin detection to work.
+#define LOADCELL_COUNTS_PER_GRAM 2945.0
+
 #endif // BOARD_H

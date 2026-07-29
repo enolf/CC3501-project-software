@@ -65,6 +65,8 @@ if(CrossCompiling)
         src/peripherals/load_cell/load_cell.cpp
         src/peripherals/camera_side/inventory.cpp
         src/drivers/ili9341/xpt2046.c
+        src/drivers/mass_sensor/mass_sensor.cpp
+        src/peripherals/coin_acceptor/coin_acceptor.cpp
     )
         
     target_include_directories(lvgl PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
@@ -83,9 +85,11 @@ if(CrossCompiling)
     pico_set_program_name(labs "cc3501-labs")
     pico_set_program_version(labs "0.2")
 
-    # select UART for standard IO
-    pico_enable_stdio_uart(labs 1)
-    pico_enable_stdio_usb(labs 0)
+    # select USB CDC for standard IO, so the serial monitor works over the same
+    # cable used to flash the board (the coin detector test in main.cpp is
+    # driven interactively over this). Swap these back to use the UART header.
+    pico_enable_stdio_uart(labs 0)
+    pico_enable_stdio_usb(labs 1)
 
     # NOT NEEDED UNLESS LEDS ARE ADDED but keep for now
     # pico_generate_pio_header(labs ${CMAKE_CURRENT_LIST_DIR}/src/drivers/WS2812/WS2812.pio)

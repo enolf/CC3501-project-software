@@ -19,6 +19,10 @@
 #include "drivers/mfrc522/mfrc522.h"
 #include "peripherals/access_control/access_control.h"
 
+// Files for the money box coin scale (HX711 + TAL221 load cell)
+#include "drivers/mass_sensor/mass_sensor.h"
+#include "peripherals/coin_acceptor/coin_acceptor.h"
+
 // Board-specific configuration
 #include "board.h"
 
@@ -167,79 +171,79 @@
 // Code example for testing piicodev RFID board
 // --------------------------------------------------------------
 
-int main()
-{
-    // Open the debug log channel (USB CDC by default; flip to UART in
-    // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
-    // instant it has power, and the serial log is purely an optional debugging
-    // window. Anything printed before a monitor connects is simply missed,
-    // which is fine for a debug aid.
-    stdio_init_all();
+// int main()
+// {
+//     // Open the debug log channel (USB CDC by default; flip to UART in
+//     // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
+//     // instant it has power, and the serial log is purely an optional debugging
+//     // window. Anything printed before a monitor connects is simply missed,
+//     // which is fine for a debug aid.
+//     stdio_init_all();
 
-    // Bring up the RFID reader. We keep retrying rather than giving up: a slow
-    // power-up or a momentary loose connector at boot then recovers on its own,
-    // and re-logging each attempt means a debugger attached at any time still
-    // sees why it is stuck (check wiring, the ASW address switch, and the pin
-    // defines in board.h).
-    while (!mfrc522_init()) {
-        log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
-        sleep_ms(2000);
-    }
-    log(LogLevel::INFORMATION, "MFRC522 initialised");
+//     // Bring up the RFID reader. We keep retrying rather than giving up: a slow
+//     // power-up or a momentary loose connector at boot then recovers on its own,
+//     // and re-logging each attempt means a debugger attached at any time still
+//     // sees why it is stuck (check wiring, the ASW address switch, and the pin
+//     // defines in board.h).
+//     while (!mfrc522_init()) {
+//         log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
+//         sleep_ms(2000);
+//     }
+//     log(LogLevel::INFORMATION, "MFRC522 initialised");
 
-    // remember_uid: cards keep answering REQA while they sit on the pad,
-    // so without this we'd print the same UID dozens of times per second.
-    // Static-local style state, same as the run_* tasks use.
-    static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
-    static uint8_t last_uid_len = 0;
-    static bool card_was_present = false;
+//     // remember_uid: cards keep answering REQA while they sit on the pad,
+//     // so without this we'd print the same UID dozens of times per second.
+//     // Static-local style state, same as the run_* tasks use.
+//     static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
+//     static uint8_t last_uid_len = 0;
+//     static bool card_was_present = false;
 
-    for (;;) {
-        uint8_t uid[MFRC522_UID_MAX_LEN];
-        uint8_t uid_len;
+//     for (;;) {
+//         uint8_t uid[MFRC522_UID_MAX_LEN];
+//         uint8_t uid_len;
 
-        if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
-            // Only report when it's a new presentation (card removed and
-            // re-presented, or a different card).
-            bool same_card = card_was_present && uid_len == last_uid_len &&
-                             memcmp(uid, last_uid, uid_len) == 0;
-            if (!same_card) {
-                // Raw UID line — handy while building the approved list in
-                // access_control.cpp (copy these bytes into a new row).
-                printf("Card detected, UID:");
-                for (uint8_t i = 0; i < uid_len; i++) {
-                    printf(" %02X", uid[i]);
-                }
-                printf("\n");
+//         if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
+//             // Only report when it's a new presentation (card removed and
+//             // re-presented, or a different card).
+//             bool same_card = card_was_present && uid_len == last_uid_len &&
+//                              memcmp(uid, last_uid, uid_len) == 0;
+//             if (!same_card) {
+//                 // Raw UID line — handy while building the approved list in
+//                 // access_control.cpp (copy these bytes into a new row).
+//                 printf("Card detected, UID:");
+//                 for (uint8_t i = 0; i < uid_len; i++) {
+//                     printf(" %02X", uid[i]);
+//                 }
+//                 printf("\n");
 
-                // Access decision. An approved card comes back with the
-                // holder's name; an unknown card comes back as nullptr.
-                const char *name = access_lookup(uid, uid_len);
-                if (name != nullptr) {
-                    printf("Access granted: %s\n", name);
-                    log(LogLevel::INFORMATION, "Access granted");
-                    // TFT (handled elsewhere): show the holder's name `name`.
-                } else {
-                    printf("Access denied\n");
-                    log(LogLevel::WARNING, "Access denied");
-                    // TFT (handled elsewhere): show "Access Denied".
-                }
+//                 // Access decision. An approved card comes back with the
+//                 // holder's name; an unknown card comes back as nullptr.
+//                 const char *name = access_lookup(uid, uid_len);
+//                 if (name != nullptr) {
+//                     printf("Access granted: %s\n", name);
+//                     log(LogLevel::INFORMATION, "Access granted");
+//                     // TFT (handled elsewhere): show the holder's name `name`.
+//                 } else {
+//                     printf("Access denied\n");
+//                     log(LogLevel::WARNING, "Access denied");
+//                     // TFT (handled elsewhere): show "Access Denied".
+//                 }
 
-                memcpy(last_uid, uid, uid_len);
-                last_uid_len = uid_len;
-            }
-            card_was_present = true;
-        } else {
-            card_was_present = false;
-        }
+//                 memcpy(last_uid, uid, uid_len);
+//                 last_uid_len = uid_len;
+//             }
+//             card_was_present = true;
+//         } else {
+//             card_was_present = false;
+//         }
 
-        // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
-        // scan is responsive without hammering the I2C bus.
-        sleep_ms(100);
-    }
+//         // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
+//         // scan is responsive without hammering the I2C bus.
+//         sleep_ms(100);
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
 
 // --------------------------------------------------------------
@@ -264,3 +268,190 @@ int main()
 
 
 -------------------------------------------------------------- **/
+
+
+
+
+// Code example for testing money box coin detection ($1 vs $2)
+// --------------------------------------------------------------
+//
+// Watches the load cell under the money box and reports each coin dropped in,
+// identifying it as a $1 or a $2 by mass. Output goes to the USB serial
+// monitor; no Pi4 or display is involved.
+//
+// Interactive commands, typed into the serial monitor while it runs:
+//     t   re-tare (zero the scale where it currently sits)
+//     r   reset the coin tally back to empty
+//     d   toggle raw sample dump, for checking the noise floor
+//
+// Suggested first run: press 'd' and watch the numbers with nothing touching
+// the box. The spread you see is the noise floor. It needs to be well under
+// CoinAcceptor::SETTLE_BAND_GRAMS (0.50 g) or the reading will never be
+// declared settled; if it is not, the usual causes are the beam load cell
+// being clamped at both ends instead of free to flex, or the box resting
+// against something.
+
+// Set to 1 to have the raw dump running from startup rather than needing 'd'.
+constexpr bool COIN_TEST_START_IN_RAW_MODE = false;
+
+// How often to print a "still here, nothing happening" line while idle. Purely
+// so a silent monitor can be told apart from a crashed one.
+constexpr uint32_t COIN_TEST_HEARTBEAT_MS = 5000;
+
+// Format a cents amount as dollars into `buf` (e.g. 250 -> "$2.50").
+static void format_cents(int cents, char *buf, size_t len)
+{
+    snprintf(buf, len, "$%d.%02d", cents / 100, cents % 100);
+}
+
+// Print the running contents of the money box.
+static void print_tally(const CoinAcceptor &acceptor)
+{
+    char total[16];
+    format_cents(acceptor.cents_total(), total, sizeof(total));
+    printf("        box now holds: %u x $1, %u x $2  =  %s\n",
+           acceptor.one_dollar_count(),
+           acceptor.two_dollar_count(),
+           total);
+}
+
+int main()
+{
+    stdio_init_all();
+
+    // Unlike the other examples, this one is driven interactively over USB, so
+    // it is worth pausing to let a monitor reattach after the reset that
+    // follows flashing. Without this the banner and the tare prompt are
+    // usually gone before the terminal is listening.
+    sleep_ms(2000);
+
+    printf("\n=== Money box coin detector ===\n");
+    printf("Commands: 't' re-tare | 'r' reset tally | 'd' toggle raw dump\n\n");
+
+    // Bring up the scale, retrying rather than giving up, matching how the
+    // RFID example handles a reader that is slow to appear. init() fails when
+    // the HX711 produces no conversion at all (wiring/power) or comes back
+    // saturated (load cell bridge open), and logs which.
+    MassSensor scale;
+    while (!scale.init()) {
+        printf("Scale not responding. Check GP%d/GP%d, 3V3 on DVDD, 5V on VSUP.\n",
+               HX711_DATA_PIN, HX711_CLK_PIN);
+        sleep_ms(2000);
+    }
+    log(LogLevel::INFORMATION, "HX711 initialised");
+
+    printf("Taring - keep the money box still...\n");
+    if (!scale.tare()) {
+        log(LogLevel::ERROR, "Tare failed; readings will be relative to an unknown zero");
+    }
+    printf("Ready. Drop a coin in.\n\n");
+
+    CoinAcceptor acceptor;
+    acceptor.begin();
+
+    bool raw_mode = COIN_TEST_START_IN_RAW_MODE;
+    absolute_time_t next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
+
+    for (;;) {
+        // --- Serial commands ---
+        // Non-blocking: a timeout of 0 means "return immediately if the user
+        // has not typed anything", so the sampling loop is never held up.
+        int key = getchar_timeout_us(0);
+        if (key != PICO_ERROR_TIMEOUT) {
+            switch (key) {
+                case 't':
+                    printf("\nRe-taring - keep the money box still...\n");
+                    if (scale.tare()) {
+                        // The zero moved, so the acceptor's idea of the
+                        // resting level is meaningless now. Start it over.
+                        acceptor.begin();
+                        printf("Tared. Tally reset.\n\n");
+                    } else {
+                        printf("Tare FAILED.\n\n");
+                    }
+                    break;
+
+                case 'r':
+                    acceptor.begin();
+                    printf("\nTally reset.\n\n");
+                    break;
+
+                case 'd':
+                    raw_mode = !raw_mode;
+                    printf("\nRaw dump %s\n\n", raw_mode ? "ON" : "OFF");
+                    break;
+
+                default:
+                    break;
+            }
+        }
+
+        // --- Sampling ---
+        // poll() returns false until the HX711 has a genuinely new conversion,
+        // which at 10 samples/second is most of the time. Nothing below runs
+        // on those empty passes.
+        double grams = 0.0;
+        if (!scale.poll(grams)) {
+            tight_loop_contents();
+            continue;
+        }
+
+        if (raw_mode) {
+            printf("raw: %8.3f g\n", grams);
+        }
+
+        CoinEvent event = acceptor.update(grams);
+
+        switch (event.kind) {
+            case CoinEventKind::CoinsAdded: {
+                char value[16];
+                format_cents(event.cents, value, sizeof(value));
+
+                printf("[COIN] ");
+                if (event.one_dollar > 0) {
+                    printf("%u x $1 ", event.one_dollar);
+                }
+                if (event.two_dollar > 0) {
+                    printf("%u x $2 ", event.two_dollar);
+                }
+                printf(" (+%.2f g, worth %s)\n", event.delta_grams, value);
+                print_tally(acceptor);
+
+                next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
+                break;
+            }
+
+            case CoinEventKind::Unrecognised:
+                // The mass settled at a new value that no plausible handful of
+                // coins explains. Most likely something other than a coin went
+                // in, or the box was knocked. Deliberately not counted.
+                printf("[????] mass changed by %+.2f g - not a recognised coin combination\n",
+                       event.delta_grams);
+                log(LogLevel::WARNING, "Coin acceptor: unrecognised mass change");
+                next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
+                break;
+
+            case CoinEventKind::MassRemoved:
+                printf("[ -- ] mass removed (%+.2f g) - box emptied or lifted\n",
+                       event.delta_grams);
+                next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
+                break;
+
+            case CoinEventKind::None:
+            default:
+                break;
+        }
+
+        // --- Idle heartbeat ---
+        if (!raw_mode && time_reached(next_heartbeat)) {
+            printf("[ .. ] waiting   level %+.2f g   %s\n",
+                   acceptor.level_grams(),
+                   acceptor.is_settled() ? "(settled)" : "(moving)");
+            next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
+        }
+    }
+
+    return 0;
+}
+
+// --------------------------------------------------------------
