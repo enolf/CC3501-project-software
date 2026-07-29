@@ -5,7 +5,7 @@ import threading
 import subprocess
 import traceback
 
-# Import our custom Square module from the 'api' subfolder
+# Import Square module from the 'api' subfolder
 from api import square 
 
 # ==========================================
@@ -14,6 +14,18 @@ from api import square
 # Set to True to use the actual Pi Camera executable, False for mock testing
 USE_REAL_CAMERA = False 
 
+# --- MOCK DATA ----
+# each line represents 5 seconds of choosing drinks
+mock_sequence_data = [
+        ("C:4,F:2,P:3,S:1;\n", 20),
+        ("C:4,F:1,P:1,S:1;\n", 20), # 1 fanta and 2 passitos taken, 
+        ("C:4,F:2,P:3,S:0;\n", 20) # 1 fanta and 2 passitos returned, 1 solo taken
+    ]
+# the final state when mock customer is finished choosing drinks
+mock_final_data = "C:3,F:2,P:2,S:1;\n" # solo is returned 1 coke and 1 passito taken
+# final state would show 1 coke and 1 passito taken
+
+# --- PI CAMERA ---
 # If USE_REAL_CAMERA is True, point this to the compiled C++ executable
 CAMERA_EXEC_PATH = "./your_cpp_camera_executable" 
 # ==========================================
@@ -56,13 +68,8 @@ def monitor_square_payment():
 def mock_camera_stream():
     """Simulates the Pi Camera output over serial at 4Hz."""
     global camera_running
-    sequences = [
-        ("C:4,F:2,P:3,S:1;\n", 20),
-        ("C:4,F:1,P:3,S:1;\n", 20),
-        ("C:4,F:2,P:3,S:0;\n", 20)
-    ]
     
-    for seq_string, count in sequences:
+    for seq_string, count in mock_sequence_data:
         for _ in range(count):
             if not camera_running: return 
             ser.write(seq_string.encode('utf-8'))
@@ -70,7 +77,7 @@ def mock_camera_stream():
             time.sleep(0.25) 
             
     while camera_running:
-        ser.write("C:4,F:2,P:3,S:1;\n".encode('utf-8'))
+        ser.write(mock_final_data.encode('utf-8'))
         ser.flush()
         time.sleep(0.25)
 
