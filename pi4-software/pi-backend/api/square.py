@@ -1,6 +1,6 @@
 import time
 import requests
-import tokens
+from api import tokens
 
 # --- Square Configuration ---
 BASE_URL = "https://connect.squareupsandbox.com/v2"
