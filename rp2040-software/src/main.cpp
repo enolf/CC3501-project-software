@@ -22,6 +22,31 @@
 // Board-specific configuration
 #include "board.h"
 
+#include "harness.h"
+
+int main()
+{
+    stdio_init_all();
+
+    Display::init();
+
+    // Initialize the physical button pulling up to 3.3v
+    gpio_init(LIMIT_SWITCH_BTN_PIN);
+    gpio_set_dir(LIMIT_SWITCH_BTN_PIN, GPIO_IN);
+    gpio_pull_down(LIMIT_SWITCH_BTN_PIN);
+
+    // Set initial screen state
+    change_fridge_state(STATE_IDLE);
+
+    for (;;) {
+        lv_timer_handler();
+        
+    // Poll our mock limit switch
+    fridge_harness_update();
+
+        sleep_ms(5);
+    }
+}
 
 // Code example for testing the TFT display.
 // --------------------------------------------------------------
@@ -164,82 +189,82 @@
 
 
 
-// Code example for testing piicodev RFID board
-// --------------------------------------------------------------
+// // Code example for testing piicodev RFID board
+// // --------------------------------------------------------------
 
-int main()
-{
-    // Open the debug log channel (USB CDC by default; flip to UART in
-    // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
-    // instant it has power, and the serial log is purely an optional debugging
-    // window. Anything printed before a monitor connects is simply missed,
-    // which is fine for a debug aid.
-    stdio_init_all();
+// int main()
+// {
+//     // Open the debug log channel (USB CDC by default; flip to UART in
+//     // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
+//     // instant it has power, and the serial log is purely an optional debugging
+//     // window. Anything printed before a monitor connects is simply missed,
+//     // which is fine for a debug aid.
+//     stdio_init_all();
 
-    // Bring up the RFID reader. We keep retrying rather than giving up: a slow
-    // power-up or a momentary loose connector at boot then recovers on its own,
-    // and re-logging each attempt means a debugger attached at any time still
-    // sees why it is stuck (check wiring, the ASW address switch, and the pin
-    // defines in board.h).
-    while (!mfrc522_init()) {
-        log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
-        sleep_ms(2000);
-    }
-    log(LogLevel::INFORMATION, "MFRC522 initialised");
+//     // Bring up the RFID reader. We keep retrying rather than giving up: a slow
+//     // power-up or a momentary loose connector at boot then recovers on its own,
+//     // and re-logging each attempt means a debugger attached at any time still
+//     // sees why it is stuck (check wiring, the ASW address switch, and the pin
+//     // defines in board.h).
+//     while (!mfrc522_init()) {
+//         log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
+//         sleep_ms(2000);
+//     }
+//     log(LogLevel::INFORMATION, "MFRC522 initialised");
 
-    // remember_uid: cards keep answering REQA while they sit on the pad,
-    // so without this we'd print the same UID dozens of times per second.
-    // Static-local style state, same as the run_* tasks use.
-    static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
-    static uint8_t last_uid_len = 0;
-    static bool card_was_present = false;
+//     // remember_uid: cards keep answering REQA while they sit on the pad,
+//     // so without this we'd print the same UID dozens of times per second.
+//     // Static-local style state, same as the run_* tasks use.
+//     static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
+//     static uint8_t last_uid_len = 0;
+//     static bool card_was_present = false;
 
-    for (;;) {
-        uint8_t uid[MFRC522_UID_MAX_LEN];
-        uint8_t uid_len;
+//     for (;;) {
+//         uint8_t uid[MFRC522_UID_MAX_LEN];
+//         uint8_t uid_len;
 
-        if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
-            // Only report when it's a new presentation (card removed and
-            // re-presented, or a different card).
-            bool same_card = card_was_present && uid_len == last_uid_len &&
-                             memcmp(uid, last_uid, uid_len) == 0;
-            if (!same_card) {
-                // Raw UID line — handy while building the approved list in
-                // access_control.cpp (copy these bytes into a new row).
-                printf("Card detected, UID:");
-                for (uint8_t i = 0; i < uid_len; i++) {
-                    printf(" %02X", uid[i]);
-                }
-                printf("\n");
+//         if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
+//             // Only report when it's a new presentation (card removed and
+//             // re-presented, or a different card).
+//             bool same_card = card_was_present && uid_len == last_uid_len &&
+//                              memcmp(uid, last_uid, uid_len) == 0;
+//             if (!same_card) {
+//                 // Raw UID line — handy while building the approved list in
+//                 // access_control.cpp (copy these bytes into a new row).
+//                 printf("Card detected, UID:");
+//                 for (uint8_t i = 0; i < uid_len; i++) {
+//                     printf(" %02X", uid[i]);
+//                 }
+//                 printf("\n");
 
-                // Access decision. An approved card comes back with the
-                // holder's name; an unknown card comes back as nullptr.
-                const char *name = access_lookup(uid, uid_len);
-                if (name != nullptr) {
-                    printf("Access granted: %s\n", name);
-                    log(LogLevel::INFORMATION, "Access granted");
-                    // TFT (handled elsewhere): show the holder's name `name`.
-                } else {
-                    printf("Access denied\n");
-                    log(LogLevel::WARNING, "Access denied");
-                    // TFT (handled elsewhere): show "Access Denied".
-                }
+//                 // Access decision. An approved card comes back with the
+//                 // holder's name; an unknown card comes back as nullptr.
+//                 const char *name = access_lookup(uid, uid_len);
+//                 if (name != nullptr) {
+//                     printf("Access granted: %s\n", name);
+//                     log(LogLevel::INFORMATION, "Access granted");
+//                     // TFT (handled elsewhere): show the holder's name `name`.
+//                 } else {
+//                     printf("Access denied\n");
+//                     log(LogLevel::WARNING, "Access denied");
+//                     // TFT (handled elsewhere): show "Access Denied".
+//                 }
 
-                memcpy(last_uid, uid, uid_len);
-                last_uid_len = uid_len;
-            }
-            card_was_present = true;
-        } else {
-            card_was_present = false;
-        }
+//                 memcpy(last_uid, uid, uid_len);
+//                 last_uid_len = uid_len;
+//             }
+//             card_was_present = true;
+//         } else {
+//             card_was_present = false;
+//         }
 
-        // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
-        // scan is responsive without hammering the I2C bus.
-        sleep_ms(100);
-    }
+//         // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
+//         // scan is responsive without hammering the I2C bus.
+//         sleep_ms(100);
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
 
 // --------------------------------------------------------------

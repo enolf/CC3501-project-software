@@ -4,11 +4,33 @@
 #include "hardware/gpio.h"
 #include <stdio.h>
 
-#define LIMIT_SWITCH_BTN_PIN 15 // Your physical user button on the PCB
+#include <stdio.h>
+#include <string.h>
 
-// Drink Prices
-#define PRICE_COKE  2.50f
-#define PRICE_FANTA 2.50f
+#define USER_BTN_PIN 15 // GPIO Pin of User Tactile Switch
+#define LIMIT_SWITCH_BTN_PIN USER_BTN_PIN // LIM SW is GPIO Pin 6
+
+// --- Drink Definitions ---
+#define COST_COKE    2.50f
+#define COST_FANTA   2.50f
+#define COST_PASSITO 2.50f
+#define COST_SOLO    2.50f
+
+typedef struct {
+    const char* name;
+    float price;
+    int initial_count;
+    int current_count;
+    int delta;
+} DrinkItem;
+
+// Alphabetical order: Coke, Fanta, Passito, Solo
+static DrinkItem cart[4] = {
+    {"Coke",    COST_COKE,    -1, 0, 0},
+    {"Fanta",   COST_FANTA,   -1, 0, 0},
+    {"Passito", COST_PASSITO, -1, 0, 0},
+    {"Solo",    COST_SOLO,    -1, 0, 0}
+};
 
 // --- System States ---
 typedef enum {
@@ -37,7 +59,6 @@ static lv_timer_t * square_poll_timer = NULL;
 // Timers
 static lv_timer_t * timeout_timer = NULL;
 static lv_timer_t * mock_action_timer = NULL;
-static lv_timer_t * mock_camera_timer = NULL;
 
 // UI Pointers (for live updates during scanning)
 static lv_obj_t * scan_label = NULL;
