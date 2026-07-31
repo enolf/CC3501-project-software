@@ -36,10 +36,10 @@
 
 // --- PiicoDev RFID module (MFRC522 over I2C) ---
 // TODO: confirm these match the pins the PiicoDev connector is actually wired to.
-// GP4/GP5 are the RP2040 default i2c0 pins — change if your board uses different ones.
-#define RFID_I2C_INSTANCE   i2c0
-#define RFID_SDA_PIN        4
-#define RFID_SCL_PIN        5
+// GP2/GP3 are the RP2040 default i2c1 pins — change if your board uses different ones.
+#define RFID_I2C_INSTANCE   i2c1
+#define RFID_SDA_PIN        2
+#define RFID_SCL_PIN        3
 
 // PiicoDev bus runs at standard 100 kHz. The module has its own pull-ups.
 #define RFID_I2C_BAUDRATE   100000

@@ -64,7 +64,7 @@ struct CoinEvent {
 class CoinAcceptor {
 public:
     // --- Coin properties (Royal Australian Mint nominal masses) ---
-    static constexpr double ONE_DOLLAR_GRAMS = 9.00;
+    static constexpr double ONE_DOLLAR_GRAMS = 9.80;
     static constexpr double TWO_DOLLAR_GRAMS = 6.60;
     static constexpr int    ONE_DOLLAR_CENTS = 100;
     static constexpr int    TWO_DOLLAR_CENTS = 200;
