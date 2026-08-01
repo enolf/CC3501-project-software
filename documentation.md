@@ -26,8 +26,8 @@ Two computers share the work:
 ```
 IDLE
   -> Pi4 recognises cans removed from the fridge
-  -> RP2040 shows the basket and total on the TFT
-  -> Customer picks a payment method on the touchscreen
+  -> RP2040 shows the total owed and the payment choice on the TFT
+  -> Customer picks cash or card on the touchscreen
        |
        +-- CARD: Pi4 asks Square for a payment link, QR shown on the TFT,
        |         Pi4 polls until the order is paid
@@ -271,6 +271,38 @@ touch input device with rotation/inversion handled from `board.h`. What is
 missing is any actual UI — the public API is `init()`, `write_text()`, `run()`
 and `create_dual_switches()`, the last being a two-toggle demo that only prints.
 
+#### Planned UI — payment terminal only
+
+**Scope is deliberately narrow: the TFT is the payment terminal and nothing
+else.** It displays no temperatures, no stock, no diagnostics — all of that
+belongs on the dashboard (see [dashboard.md](dashboard.md)). Five screens:
+
+| Screen | Shows | Leaves when |
+|---|---|---|
+| **Idle** | Black | Items are removed and a transaction starts |
+| **Payment select** | Total owed, plus two touch targets: Cash / Card | One is tapped |
+| **Cash** | Paid vs owed, updating live as coins land (e.g. `$2.00 / $4.00`) | Paid reaches owed, or timeout |
+| **Card** | QR code linking to the Square payment page | Square reports the order paid, or timeout |
+| **Thank you** | Confirmation message | Short delay, then back to Idle |
+
+Notes for whoever builds this:
+
+- **There is no separate basket screen.** An earlier description of the flow
+  mentioned "showing purchases", but the confirmed scope is five screens, so the
+  total owed is shown on the payment-select screen instead. If an itemised list
+  ("2 × Coke, 1 × Fanta") is wanted, that screen is where it goes — worth
+  confirming before building.
+- The cash figure comes from `CoinAcceptor::cents_total()`; redraw on coin
+  events only, not every loop.
+- The QR needs LVGL's `lv_qrcode` widget — present in the vendored LVGL, not
+  currently used. The URL arrives from the Pi (dashboard.md §6).
+- Idle being **black** is deliberate: no burn-in, low power, and an unambiguous
+  "nothing in progress" state.
+- On timeout, both payment paths log a stolen drink and return to Idle.
+- Keep LVGL detail inside this module; expose semantic calls such as
+  `show_cash_progress(paid_cents, owed_cents)` and `show_qr(url)` so the
+  checkout state machine never touches a widget.
+
 **`camera_side/inventory`** holds per-can price and count with a `Can` enum
 (Coke, Sprite, Fanta, Pasito) and a `sync_dashboard()` hook for cloud price
 overrides. The hook is a stub (see §7), so it is not yet usable.
@@ -460,8 +492,8 @@ reads it, and the RP2040 has no receive path. **This is the single biggest gap**
 
 ### 6.2 No state machine
 
-Idle / basket / payment-select / QR / cash / thank-you do not exist in any form.
-The TFT can print one centred string. `main.cpp` runs one bring-up block.
+None of the five screens in §4.4 exist in any form. The TFT can print one
+centred string. `main.cpp` runs one bring-up block.
 
 ### 6.3 QR never reaches the display
 
@@ -507,9 +539,8 @@ Roughly in dependency order:
    reported.
 3. **Transaction state machine** on the RP2040, with the coin acceptor and a
    Square path slotting into a shared `AWAIT_PAYMENT` state.
-4. **TFT screens** — idle, basket, payment select, cash running total, QR,
-   thank you. Keep LVGL detail inside `tft_display`; expose semantic calls like
-   `show_cash_progress(paid, owed)`.
+4. **TFT screens** — idle, payment select, cash running total, QR, thank you.
+   Scope is fixed and narrow; see §4.4 for the full screen table.
 5. **Theft tally** — per-can counts, RAM-only for now. Surviving a power cycle
    would need flash or an EEPROM on a future board revision.
 6. **Fix issues 3, 4, 5** before `Inventory` becomes load-bearing.

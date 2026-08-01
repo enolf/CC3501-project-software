@@ -487,11 +487,11 @@
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 0
 #define LV_FONT_MONTSERRAT_18 0
-#define LV_FONT_MONTSERRAT_20 0
+#define LV_FONT_MONTSERRAT_20 1
 #define LV_FONT_MONTSERRAT_22 0
 #define LV_FONT_MONTSERRAT_24 0
 #define LV_FONT_MONTSERRAT_26 0
-#define LV_FONT_MONTSERRAT_28 0
+#define LV_FONT_MONTSERRAT_28 1
 #define LV_FONT_MONTSERRAT_30 0
 #define LV_FONT_MONTSERRAT_32 0
 #define LV_FONT_MONTSERRAT_34 0
@@ -802,7 +802,11 @@
 #define LV_USE_RLE 0
 
 /*QR code library*/
-#define LV_USE_QRCODE 0
+/*Enabled for the online-payment screen: the Pi sends the Square checkout URL as
+ *a string and the RP2040 renders the QR itself, so no bitmap ever crosses the
+ *serial link. lv_qrcode and its qrcodegen backend are already vendored in the
+ *LVGL submodule, so this costs a config flag rather than a new dependency.*/
+#define LV_USE_QRCODE 1
 
 /*Barcode code library*/
 #define LV_USE_BARCODE 0

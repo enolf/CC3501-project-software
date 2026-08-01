@@ -50,10 +50,76 @@
 #define RFID_I2C_ADDR       0x2C
 
 
+// Limit switch (door sensor) and user button.
+// Both are wired identically: one side of the switch to 3V3, the other side
+// to the GPIO, with an external 100 kOhm resistor + 100 nF capacitor from
+// the GPIO node to ground (RC debounce filter, and it also defines the idle
+// level when the switch is open -- no internal pull needed).
+//
+// Both switches are Normally Open (NO), so the GPIO reads LOW when idle
+// (open circuit, pulled to GND through the 100k) and HIGH when actuated
+// (switch closes the path to 3V3) -- hence ACTIVE_HIGH = 1 for both. A
+// Normally-Closed switch wired the same physical way would read the
+// opposite way (HIGH idle, LOW when actuated), so its ACTIVE_HIGH would be 0.
+#define LIMIT_SWITCH_PIN 6
+#define LIMIT_SWITCH_ACTIVE_HIGH 1
+#define USER_SWITCH_PIN 15
+#define USER_SWITCH_ACTIVE_HIGH 1
+
+
 // TFT DISPLAY
 
 // model: ILI9341 with Touch (XPT2046) and SD Card
-// Currently allow to configure between the two landscape orientations
+//
+// The display and the touch controller are two separate chips sharing one SPI
+// bus, each with its own chip-select. They run at very different clock rates,
+// so the driver re-baudrates the bus around every touch transaction.
+
+// --- Wiring ---
+#define DISPLAY_SPI_INSTANCE spi0
+#define DISPLAY_MISO_PIN     16
+#define DISPLAY_CS_PIN       17
+#define DISPLAY_SCK_PIN      18
+#define DISPLAY_MOSI_PIN     19
+#define DISPLAY_DC_PIN       20   // low = command, high = data
+#define DISPLAY_RST_PIN      21
+
+// Backlight switch. On this board it is a P-channel MOSFET, so a LOW gate
+// turns the backlight ON. Set to 0 for a board revision that drives the
+// backlight through an active-high stage (e.g. an NPN transistor), which is
+// what the breadboard prototype used.
+#define DISPLAY_BL_PIN         22
+#define DISPLAY_BL_ACTIVE_LOW  1
+
+// Touch controller (XPT2046) — same SPI bus, separate chip select.
+// PENIRQ goes LOW while the panel is being touched.
+#define TOUCH_CS_PIN   24
+#define TOUCH_IRQ_PIN  25
+
+// Bus rates. The ILI9341 is happy at 30 MHz, but the XPT2046 is specified far
+// slower and returns nonsense if clocked at display speed.
+#define DISPLAY_SPI_BAUDRATE 30000000
+#define TOUCH_SPI_BAUDRATE   2000000
+
+// --- microSD socket on the TFT module ---
+//
+// THIRD DEVICE ON THE SAME SPI BUS. The card's SCK/MOSI/MISO are the display's
+// (GP18/GP19/GP16); only the chip select is its own. Every device on this bus
+// therefore has to leave the other two deselected and put the bus rate back
+// where it found it — the touch driver already works this way.
+//
+// A card that fails to release MISO when deselected will corrupt XPT2046 touch
+// readings, because these display modules frequently omit the buffer that
+// guarantees it. If touch starts misbehaving after the card is fitted, suspect
+// this before anything else.
+#define SD_CS_PIN 23
+
+// The card must be clocked between 100 and 400 kHz until it has finished its
+// initialisation handshake; it is permitted to ignore anything faster. Once
+// initialised it will take many MHz, but this bus is shared with a 30 MHz
+// display over unknown trace lengths, so the working rate is kept modest.
+#define SD_SPI_INIT_BAUDRATE   400000
+#define SD_SPI_BAUDRATE      12000000
 
 // --- Available Orientations ---
 
@@ -70,7 +136,18 @@
     #define DISP_HOR_RES    320
     #define DISP_VER_RES    240
     #define TOUCH_SWAP_XY   true
-    #define TOUCH_INVERT_X  false // Adjust these based on your specific touch film
+    // VERIFIED against the on-screen buttons, not just against printed
+    // coordinates. X was previously false, which mirrored the touch layer: a
+    // press on the left-hand CASH button registered on the right-hand ONLINE
+    // one and vice versa.
+    //
+    // Worth knowing for the other orientations below: CALIBRATE_TOUCH_MODE does
+    // NOT catch this. It prints raw and mapped values, both of which look
+    // perfectly reasonable when an axis is mirrored — the numbers are in range
+    // and move smoothly. Only a target with a known left and right reveals it.
+    // Check any change here by pressing the CASH and ONLINE buttons, not by
+    // reading coordinates.
+    #define TOUCH_INVERT_X  true
     #define TOUCH_INVERT_Y  true
 
 #elif ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_LANDSCAPE_VCC_DOWN
@@ -78,8 +155,12 @@
     #define DISP_HOR_RES    320
     #define DISP_VER_RES    240
     #define TOUCH_SWAP_XY   true
-    #define TOUCH_INVERT_X  true  // Flipped 180 from VCC_UP
-    #define TOUCH_INVERT_Y  false // Flipped 180 from VCC_UP
+    // A 180 degree rotation inverts both axes relative to VCC_UP, so these
+    // follow from the corrected VCC_UP values above. DERIVED, NOT MEASURED:
+    // this orientation has not been tested on hardware. If it is ever used,
+    // confirm it with the CASH/ONLINE buttons before trusting it.
+    #define TOUCH_INVERT_X  false
+    #define TOUCH_INVERT_Y  false
 
 #elif ACTIVE_DISPLAY_ORIENTATION == ORIENTATION_PORTRAIT
     #define DISP_H_V_CONF  0x48  // Standard portrait MADCTL
@@ -107,8 +188,9 @@
 //
 // NOTE: src/peripherals/load_cell/load_cell.h also defines HX711 pins
 // (GP14/GP15). Those are from the earlier bare-Pico test rig and do NOT
-// describe this board. They are left untouched so the existing Load_cell
-// example still builds; all new code uses the definitions below.
+// describe this board. That file is no longer compiled — it is superseded by
+// src/drivers/mass_sensor/ — so the definitions below are the only ones in
+// the firmware.
 #define HX711_DATA_PIN 10
 #define HX711_CLK_PIN  11
 
@@ -133,6 +215,21 @@
 // entirely in differences from a baseline captured at run time, so any zero
 // offset cancels out -- the stored OFFSET in load_cell.h does not have to be
 // correct, or even current, for coin detection to work.
-#define LOADCELL_COUNTS_PER_GRAM 2945.0
+// Re-derived on this board from known coin masses, replacing the 2945 figure
+// inherited from an earlier bare-Pico test rig. That value read 8.5% high,
+// which is what made a 9.00 g $1 coin appear to weigh 9.80 g.
+//
+//   4 x $2: reported 28.6 g for a true 26.40 g  ->  28.6 * 2945 / 26.40 = 3190.4
+//   4 x $1: reported 39.1 g for a true 36.00 g  ->  39.1 * 2945 / 36.00 = 3198.6
+//
+// The two agree to 0.13% despite coming from different coins, which is what
+// identifies this as a pure scale-factor error rather than coin-to-coin
+// variation. Four coins at a time rather than one, so wear on any single coin
+// averages out.
+//
+// TO REDO THIS: press 't' to tare, then 'g' for the raw dump, place four coins
+// of one denomination, and divide reported grams by true grams to get the
+// correction factor.
+#define LOADCELL_COUNTS_PER_GRAM 3194.5
 
 #endif // BOARD_H

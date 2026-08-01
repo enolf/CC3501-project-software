@@ -1,3 +1,5 @@
 build/
+build-baseline.txt
 .vscode/settings.json
 datasheets/
+build-host/

@@ -64,7 +64,18 @@ struct CoinEvent {
 class CoinAcceptor {
 public:
     // --- Coin properties (Royal Australian Mint nominal masses) ---
-    static constexpr double ONE_DOLLAR_GRAMS = 9.80;
+    //
+    // These were briefly set to 9.80 g for the $1, from a bench measurement.
+    // That measurement was real but the scale was not: LOADCELL_COUNTS_PER_GRAM
+    // was 8.5% high, which turns a 9.00 g coin into a 9.76 g reading. Weighing
+    // a $2 settled it — 7.2 g instead of 6.60 g, the same 8.5% error on a coin
+    // whose mass was never in doubt. The scale is now calibrated and the mint
+    // figures are correct.
+    //
+    // The lesson, if either number is ever questioned again: weigh a coin you
+    // are NOT in doubt about first. A wrong scale is indistinguishable from a
+    // wrong coin until you have two.
+    static constexpr double ONE_DOLLAR_GRAMS = 9.00;
     static constexpr double TWO_DOLLAR_GRAMS = 6.60;
     static constexpr int    ONE_DOLLAR_CENTS = 100;
     static constexpr int    TWO_DOLLAR_CENTS = 200;
@@ -73,18 +84,33 @@ public:
     /// dropped in quick succession can land inside the same settling window
     /// and be seen as a single step, so this must be more than one; but the
     /// possible masses crowd together as the count rises, so it must not be
-    /// large either. Three is a workable compromise.
+    /// large either.
+    ///
+    /// THREE. This was briefly reduced to two, correctly, while the $1 was
+    /// believed to weigh 9.80 g — that made two $1 (19.60 g) and three $2
+    /// (19.80 g) just 0.20 g apart, so one reading matched two answers. With
+    /// the scale calibrated and the $1 back at its true 9.00 g, the masses
+    /// reachable with up to three coins are:
+    ///
+    ///     1 coin :  6.60  9.00
+    ///     2 coins: 13.20 15.60 18.00
+    ///     3 coins: 19.80 22.20 24.60 27.00
+    ///
+    /// The closest pair is now 18.00 g and 19.80 g, 1.80 g apart, comfortably
+    /// more than twice MATCH_TOLERANCE_GRAMS. Three is safe again, and it is
+    /// worth having: coins dropped in quick succession land inside one settle
+    /// window, and a handful that cannot be explained is not counted at all.
     static constexpr uint8_t MAX_COINS_PER_EVENT = 3;
 
     /// How far a measured step may sit from a candidate combination and still
     /// be accepted as that combination.
     ///
-    /// Across every 1-to-3 coin combination the closest two possible masses
-    /// are 18.0 g (two $1) and 19.8 g (three $2), just 1.8 g apart. Keeping
-    /// the tolerance below half that gap guarantees a step can never be within
-    /// range of two different answers at once, so a match is always
-    /// unambiguous. For the common single-coin case the nearest rival is a
-    /// full 2.4 g away, so there is considerably more margin in practice.
+    /// Across every combination reachable within MAX_COINS_PER_EVENT the
+    /// closest two possible masses are 18.00 g (two $1) and 19.80 g (three $2),
+    /// 1.80 g apart. Keeping the tolerance below half that gap guarantees a
+    /// step can never be within range of two different answers at once, so a
+    /// match is always unambiguous. For the common single-coin case the two
+    /// candidates are 6.60 g and 9.00 g, a full 2.40 g apart.
     static constexpr double MATCH_TOLERANCE_GRAMS = 0.80;
 
     /// Consecutive readings that must agree before the mass is called settled.

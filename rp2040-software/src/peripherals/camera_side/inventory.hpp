@@ -1,4 +1,22 @@
-// Using JSMN embedded json parser 
+// ============================================================================
+// NOT BUILT. SUPERSEDED. DO NOT INCLUDE THIS FILE IN NEW CODE.
+//
+// Replaced by two modules that split what this one file was doing:
+//
+//   peripherals/catalogue/  drink types, names and THE price table
+//   peripherals/basket/     shelf counts, the door-cycle diff, and the
+//                           cash payment gate
+//
+// Removed from CMakeLists.txt so that there is exactly one definition of what
+// a drink costs. Two price tables that can disagree is worse than either.
+//
+// Kept on disk for one idea worth preserving: simulate_dashboard_get() sketches
+// the JSON shape for per-drink price overrides arriving from the dashboard.
+// When the Pi link grows that message, this is the starting point — but the
+// destination is catalogue, not a revived Inventory class.
+// ============================================================================
+
+// Using JSMN embedded json parser
 // https://github.com/zserge/jsmn/tree/master
 
 #pragma once
@@ -10,18 +28,16 @@
 // ---- Simulated dashboard response ----
 // Stands in for a real HTTP GET until the network/cloud layer exists.
 // Real version would return this same JSON shape over Wi-Fi/HTTP.
-std::string simulate_dashboard_get() {
-    return R"({
-        "prices": {
-            "coke": 200,
-            "sprite": 250,
-            "fanta": 200,
-            "pasito": 0
-        }
-    })";
-}
+//
+// DECLARED here, DEFINED in inventory.cpp. A non-inline function *defined* in a
+// header gets a copy compiled into every translation unit that includes it, and
+// the linker then rejects the duplicate symbols — so the previous version of
+// this file could only ever be included by one source file.
+std::string simulate_dashboard_get();
 
-constexpr int DEFAULT_PRICE_CENTS = 2000;
+// Price used for a can the dashboard has no override for. Money is always
+// integer cents; 200 is $2.00.
+constexpr int DEFAULT_PRICE_CENTS = 200;
 constexpr int DEFAULT_UNIQUE_CAN_TYPE_COUNT = 4;
 
 enum class Can : uint8_t {

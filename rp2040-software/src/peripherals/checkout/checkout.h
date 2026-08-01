@@ -1,0 +1,202 @@
+#pragma once
+
+#include <stdint.h>
+
+// The transaction state machine.
+//
+// Stage 2 defines only the vocabulary: the states and the timing constants.
+// run_checkout(), which owns every transition between them, arrives in stage 5.
+// See plan.md section 1 for the state diagram and section 4 for what each state
+// puts on the screen.
+//
+// The flow in one line:
+//   door opens -> customer takes drinks -> door closes -> the Pi recounts ->
+//   the difference is the basket -> pay by cash or QR -> thank you -> idle.
+//
+// The door is what gates progress. Nothing advances toward payment until the
+// door is shut, because that is the only moment the camera can see a stable,
+// unobstructed shelf (dashboard.md section 4.2).
+
+namespace checkout {
+
+/// Every state the terminal can be in. Exactly one is current at any time.
+enum class State : uint8_t {
+    /// Waiting. Screen is black. Woken by the door opening or an approved card.
+    Idle,
+
+    /// The customer is at the open fridge. The Pi has been asked to scan.
+    /// Waiting for the door to close.
+    Selecting,
+
+    /// Door shut. Waiting for the Pi to settle and report what is left on the
+    /// shelf. The basket is worked out here, once, by difference.
+    Recount,
+
+    /// Showing the basket and the total, with Cash and Online touch targets.
+    PaymentSelect,
+
+    /// Showing amount paid against amount owed, updating as coins land.
+    PayCash,
+
+    /// Asked the Pi for a Square payment link; waiting for the URL.
+    PayOnlineLink,
+
+    /// Showing the QR code; waiting for Square to confirm payment.
+    PayOnlineQr,
+
+    /// Paid. Brief confirmation, then back to Idle.
+    ThankYou,
+
+    /// Timed out with drinks taken and not paid for. The theft is recorded and
+    /// the system returns to Idle — theft is logged, not prevented.
+    Abandoned,
+
+    /// Not fit to trade (the Pi is unreachable, the scale has failed). Shows a
+    /// generic out-of-service screen with a code; details go to the log.
+    Fault,
+};
+
+/// How a transaction was paid for. Reported to the Pi so the dashboard can
+/// split revenue by method.
+enum class PaymentMethod : uint8_t {
+    None,   ///< Not chosen yet, or the transaction was abandoned
+    Cash,
+    Online,
+};
+
+inline const char *payment_method_name(PaymentMethod method)
+{
+    switch (method) {
+        case PaymentMethod::None:   return "none";
+        case PaymentMethod::Cash:   return "cash";
+        case PaymentMethod::Online: return "card";
+    }
+    return "unknown";
+}
+
+/// Why a transaction ended. Goes straight into the TXN_END frame.
+enum class Outcome : uint8_t {
+    Paid,       ///< Money confirmed
+    Stolen,     ///< Timed out with drinks taken and not paid for
+    Cancelled,  ///< Ended before anything was owed
+};
+
+inline const char *outcome_name(Outcome outcome)
+{
+    switch (outcome) {
+        case Outcome::Paid:      return "paid";
+        case Outcome::Stolen:    return "stolen";
+        case Outcome::Cancelled: return "cancelled";
+    }
+    return "unknown";
+}
+
+/// Name of a state, for logging. Inline so this header needs no source file
+/// until the state machine itself exists.
+inline const char *state_name(State state)
+{
+    switch (state) {
+        case State::Idle:          return "Idle";
+        case State::Selecting:     return "Selecting";
+        case State::Recount:       return "Recount";
+        case State::PaymentSelect: return "PaymentSelect";
+        case State::PayCash:       return "PayCash";
+        case State::PayOnlineLink: return "PayOnlineLink";
+        case State::PayOnlineQr:   return "PayOnlineQr";
+        case State::ThankYou:      return "ThankYou";
+        case State::Abandoned:     return "Abandoned";
+        case State::Fault:         return "Fault";
+    }
+    return "Unknown";
+}
+
+// --- Timeouts ---
+// Starting points to be tuned on the bench, not measurements. Every state that
+// can be entered must be able to leave on its own, or a customer walking away
+// would strand the terminal until someone opened the door.
+
+/// Selecting -> Idle. Covers a card tapped with the door never opened.
+constexpr uint32_t SELECT_TIMEOUT_MS = 30000;
+
+/// Recount -> Fault. How long the Pi gets to stabilise and report.
+constexpr uint32_t RECOUNT_TIMEOUT_MS = 8000;
+
+/// Any payment state -> Abandoned. Restarted by every accepted coin and every
+/// touch, so a customer slowly finding coins is never cut off mid-payment.
+constexpr uint32_t PAYMENT_TIMEOUT_MS = 120000;
+
+/// PayOnlineLink -> PaymentSelect. A payment link that does not arrive falls
+/// back to the payment choice, so cash is still available; it is not a fault.
+constexpr uint32_t SQUARE_LINK_TIMEOUT_MS = 10000;
+
+/// How long the confirmation screen stays up before returning to Idle.
+constexpr uint32_t THANK_YOU_MS = 3000;
+
+/// How long the cancellation message stays up before returning to Idle.
+constexpr uint32_t ABANDONED_MS = 3000;
+
+/// Minimum time on the fault screen, so an intermittent fault cannot strobe
+/// the display by clearing and re-asserting.
+constexpr uint32_t FAULT_MIN_MS = 5000;
+
+// --- Fault codes ---
+// Shown on the out-of-service screen. Deliberately terse: the customer only
+// needs to know it is broken, and whoever fixes it reads the serial log.
+
+constexpr uint16_t FAULT_NONE            = 0;
+constexpr uint16_t FAULT_PI_TIMEOUT      = 1;   ///< Asked for a scan, no reply
+constexpr uint16_t FAULT_PI_UNREACHABLE  = 2;   ///< Link reports itself unhealthy
+constexpr uint16_t FAULT_SCALE           = 3;   ///< Coin scale not responding
+constexpr uint16_t FAULT_MANUAL          = 99;  ///< Raised from the debug key
+
+// --- Public interface ---
+
+/// Reset to Idle and show the idle screen. Call once at startup, after the
+/// display and the Pi link are up.
+void init();
+
+/// Run the state machine: drain the event queue, apply timeouts, drive the
+/// screen. Call every pass of the superloop. Non-blocking.
+///
+/// This is the ONLY function in the system that changes state. Peripheral tasks
+/// raise events; what those events mean is decided here and nowhere else.
+void run_checkout();
+
+/// The current state, for logging and diagnostics.
+State current();
+
+/// How many faults have been raised since boot. Reported in the HEALTH frame,
+/// where a rising count is the signal worth alerting on.
+uint32_t fault_count();
+
+// --- Appearance ---
+
+/// What the idle screen shows.
+///
+/// Set at BUILD TIME from CMake, alongside the other build switches:
+///
+///     cmake ..                    black idle screen (the default)
+///     cmake .. -DIDLE_LOGO=ON     show the society logo
+///
+/// Black is the better default and the reason is not aesthetic: the terminal
+/// spends nearly all its life on this screen, so black means no burn-in and
+/// less power, and it is unmistakably "nothing in progress" rather than a
+/// transaction that has got stuck.
+///
+/// Behind one constant so the choice never reaches the state machine — nothing
+/// in checkout.cpp knows or cares what Idle looks like.
+enum class IdleScreen : uint8_t {
+    Black,
+    Logo,
+};
+
+#ifndef IDLE_SHOW_LOGO
+#define IDLE_SHOW_LOGO 0
+#endif
+
+// constexpr rather than leaving the #define exposed: the preprocessor has no
+// concept of namespaces, so a bare macro would look scoped while being global.
+constexpr IdleScreen IDLE_SCREEN_STYLE =
+    IDLE_SHOW_LOGO ? IdleScreen::Logo : IdleScreen::Black;
+
+} // namespace checkout
