@@ -74,6 +74,34 @@ void test_frame_build()
     CHECK(strncmp(wire, "CMD 7 SCAN 0 *", 14) == 0);
     testing::case_passed("no payload means no payload field");
 
+    // --- Golden frames, pinned byte for byte INCLUDING the checksum ---
+    //
+    // These same three literals appear in pi4-software/tools/protocol.py's
+    // self-test. That is the point: the two codecs are independent
+    // implementations in different languages, and the only way to know they
+    // agree is to pin both to the same external constant. Checking each against
+    // itself is precisely what a drifted pair of codecs would also pass.
+    //
+    // If one of these fails, do NOT update the literal to match the new output
+    // — the literal is the specification. Find out which side changed.
+    struct Golden { frame::Prefix prefix; uint32_t ms; const char *type;
+                    const char *payload; const char *wire; };
+    const Golden golden[] = {
+        { frame::Prefix::Event,    12345, "DOOR", "state=open",
+          "EVT 12345 DOOR 10 state=open *06\n" },
+        { frame::Prefix::Command,      7, "SCAN", nullptr,
+          "CMD 7 SCAN 0 *05\n" },
+        { frame::Prefix::Response,  4242, "SQUARE_CANCELLED", "id=99 ok=1",
+          "RSP 4242 SQUARE_CANCELLED 10 id=99 ok=1 *8F\n" },
+    };
+    for (const Golden &g : golden) {
+        const size_t n = frame::build(wire, sizeof(wire), g.prefix, g.ms,
+                                      g.type, g.payload);
+        CHECK(n > 0);
+        CHECK(strcmp(wire, g.wire) == 0);
+    }
+    testing::case_passed("golden frames match the Python codec byte for byte");
+
     // A payload too large for the buffer must fail rather than truncate: half a
     // message that still passes its own CRC is far worse than no message.
     char huge[frame::MAX_PAYLOAD_LEN + 10];

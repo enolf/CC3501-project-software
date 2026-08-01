@@ -5,6 +5,9 @@ Speaks the frame protocol in plan.md section 2 so the RP2040's real serial
 backend can be exercised before the Pi side exists — and, just as usefully,
 before the camera works.
 
+The codec itself is in protocol.py, next to this file and shared with the real
+bridge. `python protocol.py` self-tests it against the C++ header.
+
     pip install pyserial
     python fake_pi.py COM7            (Windows)
     python fake_pi.py /dev/ttyACM0    (Linux)
@@ -37,13 +40,18 @@ import threading
 import time
 import queue
 
+# The codec lives in protocol.py, imported by this tool and by the real bridge.
+# It used to be copied inline here; see the note at the top of protocol.py for
+# why a second copy was a bug waiting to happen rather than a convenience.
+from protocol import build, parse, field, PREFIXES, ProtocolError
+
 try:
     import serial  # type: ignore
 except ImportError:
     sys.exit("pyserial is not installed.  Run:  pip install pyserial")
 
 
-# --- Protocol ---------------------------------------------------------------
+# --- Simulated world --------------------------------------------------------
 
 DRINKS = ["coke", "sprite", "fanta", "pasito"]
 FULL_SHELF = 5
@@ -61,72 +69,6 @@ SQUARE_DELAY_S = 1.0
 HEARTBEAT_S = 10.0
 
 SQUARE_URL = "https://example.com/pay/SIMULATED"
-
-
-def crc8(data: bytes) -> int:
-    """CRC-8/ATM: polynomial 0x07, init 0x00, no reflection, no final xor."""
-    crc = 0
-    for byte in data:
-        crc ^= byte
-        for _ in range(8):
-            crc = ((crc << 1) ^ 0x07) & 0xFF if crc & 0x80 else (crc << 1) & 0xFF
-    return crc
-
-
-def build(prefix: str, type_: str, payload: str = "") -> bytes:
-    """Render one frame, including the trailing newline."""
-    ms = int(time.monotonic() * 1000) & 0xFFFFFFFF
-    if payload:
-        head = f"{prefix} {ms} {type_} {len(payload)} {payload}"
-    else:
-        head = f"{prefix} {ms} {type_} 0"
-    return f"{head} *{crc8(head.encode()):02X}\n".encode()
-
-
-def parse(line: str):
-    """Decode a frame. Returns (prefix, ms, type, payload) or None.
-
-    None means "not a frame" — which is the normal fate of the board's log
-    output on this shared stream, not an error.
-    """
-    if len(line) < 4 or line[:3] not in ("EVT", "CMD", "RSP") or line[3] != " ":
-        return None
-
-    star = line.rfind(" *")
-    if star < 0 or len(line) - star != 4:
-        return None
-
-    try:
-        stated = int(line[star + 2:], 16)
-    except ValueError:
-        return None
-    if stated != crc8(line[:star].encode()):
-        return None
-
-    body = line[:star]
-    parts = body.split(" ", 4)
-    if len(parts) < 4:
-        return None
-
-    prefix, ms_text, type_, len_text = parts[0], parts[1], parts[2], parts[3]
-    try:
-        ms, payload_len = int(ms_text), int(len_text)
-    except ValueError:
-        return None
-
-    payload = parts[4] if len(parts) > 4 else ""
-    if len(payload) != payload_len:
-        return None
-
-    return prefix, ms, type_, payload
-
-
-def field(payload: str, key: str, default=None):
-    for item in payload.split(" "):
-        name, _, value = item.partition("=")
-        if name == key:
-            return value
-    return default
 
 
 # --- State ------------------------------------------------------------------
@@ -285,8 +227,16 @@ def reader(pi: FakePi):
 
             decoded = parse(line)
             if decoded:
-                pi.handle(*decoded)
-            elif line[:3] in ("EVT", "CMD", "RSP"):
+                try:
+                    pi.handle(*decoded)
+                except ProtocolError as exc:
+                    # A reply we cannot legally build — almost always because a
+                    # value taken from the board's payload is longer than
+                    # expected. Reported rather than raised: this runs on the
+                    # reader thread, and an exception here would kill the link
+                    # silently and leave the tool apparently still running.
+                    print(f"  !!! CANNOT REPLY: {exc}")
+            elif line[:3] in PREFIXES:
                 # Frame-shaped but failed validation. This is the number that
                 # matters: on a healthy link it stays at zero.
                 pi.bad += 1
@@ -341,6 +291,8 @@ def main():
                 pi.command(commands.get(timeout=0.02))
             except queue.Empty:
                 pass
+            except ProtocolError as exc:
+                print(f"  !!! CANNOT SEND: {exc}")
     except KeyboardInterrupt:
         pass
     finally:
