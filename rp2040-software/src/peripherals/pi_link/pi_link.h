@@ -65,6 +65,25 @@ void request_scan();
 /// The answer arrives later as SquareUrlReady, or SquareError.
 void request_square_link(uint32_t cents, uint32_t transaction_id);
 
+/// Ask the Pi to kill the payment link for `transaction_id`.
+///
+/// Sent when the customer walks away from an online payment — the back button,
+/// a timeout, or a fault. Without it the checkout URL stays live and payable
+/// long after the fridge has moved on, so somebody could pay for a drink the
+/// system has already written off, or pay twice.
+///
+/// FIRE AND FORGET, AND DELIBERATELY SO. Nothing waits for the answer: by the
+/// time this is called the customer is already looking at the next screen, and
+/// making them watch a spinner while an HTTP request completes would be worse
+/// than the small risk this closes. The Pi confirms with RSP SQUARE_CANCELLED,
+/// which is logged and nothing more.
+///
+/// It is valid to call this for a link that does not exist yet. A request that
+/// timed out may still be in flight on the Pi, and that is exactly the case
+/// where an orphaned link would otherwise be created and never cancelled — so
+/// the Pi is expected to remember the cancellation and apply it on arrival.
+void request_square_cancel(uint32_t transaction_id);
+
 // --- Answers from the Pi ----------------------------------------------------
 
 /// Collect the most recent shelf contents.

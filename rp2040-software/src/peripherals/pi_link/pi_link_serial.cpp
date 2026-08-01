@@ -153,6 +153,40 @@ void handle_frame(const frame::Frame &f)
         return;
     }
 
+    if (strcmp(f.type, "SQUARE_CANCELLED") == 0) {
+        // Logged, not turned into an event. Nothing in the state machine is
+        // waiting on this — the customer was sent back to the payment choice
+        // the instant the cancel was sent — so raising an event would only
+        // create a message every state has to ignore. What it IS good for is
+        // the serial log: `ok=0` means the link is still live and payable, and
+        // that is worth being able to find after the fact.
+        uint32_t ok = 0;
+        uint32_t id = 0;
+        (void)frame::u32_for_key(f.payload, "id", id);
+        if (frame::u32_for_key(f.payload, "ok", ok) && ok != 0) {
+            logf(LogLevel::INFORMATION, "pi_link: payment link for txn %" PRIu32
+                 " cancelled", id);
+        } else {
+            logf(LogLevel::WARNING, "pi_link: payment link for txn %" PRIu32
+                 " could NOT be cancelled - it may still be payable", id);
+        }
+        return;
+    }
+
+    if (strcmp(f.type, "SQUARE_LATE_PAID") == 0) {
+        // Money arrived after the link was cancelled. Rare, and impossible to
+        // rule out entirely: the customer can be mid-payment at the exact
+        // moment the cancel is sent. It cannot be handled automatically — the
+        // drinks are already gone and the transaction is closed — so it is
+        // raised as an event purely to get it recorded where a human will find
+        // it. See decision D17.
+        events::Event event(events::Kind::SquareLatePaid);
+        (void)frame::u32_for_key(f.payload, "cents", event.payment.cents);
+        (void)frame::u32_for_key(f.payload, "id", event.payment.txn_id);
+        events::push(event);
+        return;
+    }
+
     if (strcmp(f.type, "HB") == 0 || strcmp(f.type, "PING") == 0) {
         return;     // liveness only; last_frame_ms above is the whole effect
     }
@@ -235,6 +269,21 @@ void request_square_link(uint32_t cents, uint32_t transaction_id)
     snprintf(payload, sizeof(payload), "cents=%" PRIu32 " id=%" PRIu32,
              cents, transaction_id);
     send(frame::Prefix::Command, "SQUARE_LINK", payload);
+}
+
+void request_square_cancel(uint32_t transaction_id)
+{
+    // Any answer still sitting in the pending slots belongs to the checkout
+    // being abandoned. Clearing them here stops a URL that arrived a moment too
+    // late being handed to the NEXT transaction, which would show a QR code for
+    // the wrong amount.
+    url_waiting = false;
+    paid_waiting = false;
+    error_waiting = false;
+
+    char payload[24];
+    snprintf(payload, sizeof(payload), "id=%" PRIu32, transaction_id);
+    send(frame::Prefix::Command, "SQUARE_CANCEL", payload);
 }
 
 bool poll_inventory(basket::Inventory &out)

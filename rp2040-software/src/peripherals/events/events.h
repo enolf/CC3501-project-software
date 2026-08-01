@@ -85,6 +85,12 @@ struct Event {
             uint8_t len;            ///< Valid UID bytes: 4 or 7
         } card;
 
+        /// SquareLatePaid
+        struct {
+            uint32_t cents;         ///< What Square actually took
+            uint32_t txn_id;        ///< Which transaction it was meant for
+        } payment;
+
         /// Fault
         struct {
             uint16_t code;

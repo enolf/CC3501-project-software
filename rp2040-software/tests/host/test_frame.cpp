@@ -116,6 +116,10 @@ void test_frame_round_trip()
         { frame::Prefix::Response, "SQUARE_URL",  "id=99 url=https://sq.co/abc123" },
         { frame::Prefix::Event,    "SQUARE_PAID", "id=99 order=ORD42" },
         { frame::Prefix::Response, "SQUARE_ERR",  "id=99 reason=timeout" },
+        // Cancellation, stage 15.3.
+        { frame::Prefix::Command,  "SQUARE_CANCEL",    "id=99" },
+        { frame::Prefix::Response, "SQUARE_CANCELLED", "id=99 ok=1" },
+        { frame::Prefix::Event,    "SQUARE_LATE_PAID", "id=99 order=ORD42 cents=600" },
     };
 
     for (const Case &c : cases) {
@@ -129,7 +133,48 @@ void test_frame_round_trip()
         CHECK(strcmp(f.type, c.type) == 0);
         CHECK(strcmp(f.payload, c.payload == nullptr ? "" : c.payload) == 0);
     }
-    testing::case_passed("all 17 message types survive a round trip");
+    testing::case_passed("all 20 message types survive a round trip");
+
+    // The type-length boundary, pinned deliberately.
+    //
+    // This caught a real bug at stage 15.3: MAX_TYPE_LEN was 16, and both
+    // SQUARE_CANCELLED and SQUARE_LATE_PAID are exactly 16 characters, so a
+    // cancellation would have been refused by build() and never reached the
+    // wire at all. Nothing downstream would have shown a symptom — the frame is
+    // rejected at the sender — so the link would simply have stopped cancelling
+    // with no evidence anywhere. The two checks below make the limit itself the
+    // thing under test, so adding a longer type fails here rather than in the
+    // field.
+    {
+        char longest[frame::MAX_TYPE_LEN];
+        memset(longest, 'T', sizeof(longest) - 1);
+        longest[sizeof(longest) - 1] = '\0';
+        CHECK(round_trip(frame::Prefix::Event, 1, longest, "x=1", f));
+        CHECK(strcmp(f.type, longest) == 0);
+
+        char too_long[frame::MAX_TYPE_LEN + 1];
+        memset(too_long, 'T', sizeof(too_long) - 1);
+        too_long[sizeof(too_long) - 1] = '\0';
+        char wire[frame::MAX_FRAME_LEN];
+        CHECK_EQ(frame::build(wire, sizeof(wire), frame::Prefix::Event, 1,
+                              too_long, "x=1"), 0);
+        testing::case_passed("the longest allowed type fits and one longer is refused");
+    }
+
+    // Every type actually sent by the firmware must fit, checked against the
+    // limit rather than against a count someone has to remember to update.
+    {
+        const char *types[] = {
+            "BOOT", "HB", "DOOR", "TEMP", "RFID", "TXN_START", "TXN_METHOD",
+            "COIN", "COIN_REJECT", "TXN_END", "HEALTH", "SCAN", "SQUARE_LINK",
+            "INV", "SQUARE_URL", "SQUARE_PAID", "SQUARE_ERR", "SQUARE_CANCEL",
+            "SQUARE_CANCELLED", "SQUARE_LATE_PAID",
+        };
+        for (const char *t : types) {
+            CHECK(strlen(t) < frame::MAX_TYPE_LEN);
+        }
+        testing::case_passed("no message type in the protocol exceeds MAX_TYPE_LEN");
+    }
 
     // Payloads contain spaces, which is exactly why the length field exists —
     // the parser must take the payload by count, not by scanning for a space.

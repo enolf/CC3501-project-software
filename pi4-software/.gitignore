@@ -1,3 +1,20 @@
+# --- Secrets ---
+# tokens.py holds SQUARE_ACCESS_TOKEN and LOCATION_ID. It is created by hand on
+# each machine and must never be committed; documentation.md explains what goes
+# in it.
+#
+# The bare name is matched as well as the path, so a copy left in tools/ or in a
+# scratch directory is caught too. A credential that leaks because it sat in an
+# unexpected folder is no less leaked.
+online-payment/tokens.py
+tokens.py
+
+# Python bytecode. See the long note in the root .gitignore: a .pyc compiled
+# from tokens.py contains the token in plain text and is NOT covered by the
+# rules above.
+__pycache__/
+*.py[cod]
+
+# --- Build output and editor settings ---
 build/
 .vscode/settings.json
-online-payment/tokens.py

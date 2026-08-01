@@ -11,8 +11,9 @@ before the camera works.
 
 What it does automatically:
 
-    CMD SCAN         ->  EVT INV with the current simulated shelf
-    CMD SQUARE_LINK  ->  RSP SQUARE_URL after a short delay
+    CMD SCAN           ->  EVT INV with the current simulated shelf
+    CMD SQUARE_LINK    ->  RSP SQUARE_URL after a short delay
+    CMD SQUARE_CANCEL  ->  RSP SQUARE_CANCELLED, and any unsent link is dropped
 
 Type these and press Enter to drive it:
 
@@ -21,6 +22,7 @@ Type these and press Enter to drive it:
     i         show the shelf
     p         tell the board Square reports the payment received
     e         tell the board Square reports a failure
+    l         tell the board money arrived AFTER the link was cancelled
     o c b n   forward a single-character debug key to the board
     stats     frames in, frames out, bad frames
     q         quit
@@ -141,10 +143,31 @@ class FakePi:
         self.ignored = 0
         self.running = True
         self.next_heartbeat = 0.0
+        self.last_txn = "0"
 
     def schedule(self, delay, data: bytes):
         self.seq += 1
         self.pending.put((time.monotonic() + delay, self.seq, data))
+
+    def drop_pending(self, type_: bytes) -> int:
+        """Remove scheduled-but-unsent frames of one type. Returns how many.
+
+        A PriorityQueue has no way to remove a specific item, so the whole
+        backlog is drained and the survivors put back. It is never more than a
+        handful of frames, and doing it properly here keeps the fake honest
+        about a race the real bridge genuinely has.
+        """
+        kept = []
+        while not self.pending.empty():
+            kept.append(self.pending.get())
+
+        removed = 0
+        for item in kept:
+            if f" {type_.decode()} ".encode() in item[2]:
+                removed += 1
+            else:
+                self.pending.put(item)
+        return removed
 
     def send_now(self, data: bytes):
         self.port.write(data)
@@ -180,9 +203,25 @@ class FakePi:
                           build("EVT", "INV", self.inventory_payload()))
         elif type_ == "SQUARE_LINK":
             txn = field(payload, "id", "0")
+            self.last_txn = txn
             self.schedule(SQUARE_DELAY_S,
                           build("RSP", "SQUARE_URL", f"id={txn} url={SQUARE_URL}"))
             print("      (type 'p' to confirm payment, 'e' to fail it)")
+        elif type_ == "SQUARE_CANCEL":
+            txn = field(payload, "id", "0")
+            self.last_txn = txn
+
+            # Drop a link reply that has not gone out yet. The real bridge has
+            # the same job in a harder form: the board can cancel a checkout the
+            # Square API has not finished creating, and that pending link must
+            # still end up cancelled rather than left live.
+            dropped = self.drop_pending(b"SQUARE_URL")
+            if dropped:
+                print(f"      dropped {dropped} unsent link reply "
+                      f"- the board gave up before it arrived")
+
+            self.schedule(0.3, build("RSP", "SQUARE_CANCELLED", f"id={txn} ok=1"))
+            print("      (type 'l' to simulate the money arriving anyway)")
 
     def command(self, text):
         text = text.strip()
@@ -207,6 +246,13 @@ class FakePi:
             self.send_now(build("EVT", "SQUARE_PAID", "order=SIM1"))
         elif text == "e":
             self.send_now(build("RSP", "SQUARE_ERR", "reason=simulated"))
+        elif text == "l":
+            # The race the design cannot close: the customer's payment and our
+            # cancellation cross in flight. The board's only correct response is
+            # to record that a refund is owed, and this is how that path gets
+            # exercised on demand instead of once in a hundred runs.
+            self.send_now(build("EVT", "SQUARE_LATE_PAID",
+                                f"id={self.last_txn} order=SIM1 cents=600"))
         elif text == "stats":
             print(f"      in={self.frames_in} out={self.frames_out} "
                   f"bad={self.bad} ignored={self.ignored}")
@@ -217,7 +263,7 @@ class FakePi:
             self.port.flush()
             print(f"      sent debug key '{text}'")
         else:
-            print("      ? try 1-4, r, i, p, e, stats, q, or a single debug key")
+            print("      ? try 1-4, r, i, p, e, l, stats, q, or a single debug key")
 
 
 def reader(pi: FakePi):

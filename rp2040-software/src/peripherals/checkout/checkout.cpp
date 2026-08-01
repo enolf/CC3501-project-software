@@ -96,6 +96,32 @@ void enter(State next)
     logf(LogLevel::INFORMATION, "checkout: %s -> %s",
          state_name(previous), state_name(next));
 
+    // --- Abandoning an online payment kills the checkout link ---
+    //
+    // Leaving an online payment state for anywhere other than the QR screen
+    // means the customer is not going to pay that link: they pressed BACK to
+    // use cash, they walked away and timed out, Square failed, or a fault was
+    // raised. A link left live stays payable indefinitely, so somebody could
+    // pay for a drink already written off — or pay twice, having also fed the
+    // coin box.
+    //
+    // Putting it HERE, in the one function that performs every transition,
+    // rather than at each of those four call sites is the whole reason enter()
+    // is the only place `state` is assigned. Four separate cancels would be
+    // four chances to forget one, and a fifth exit path added next year would
+    // silently not cancel at all.
+    //
+    // Two transitions are excluded, and both matter:
+    //   PayOnlineLink -> PayOnlineQr   the normal progression, not an exit
+    //   PayOnlineQr   -> ThankYou      reached BECAUSE the link was paid
+    const bool was_paying_online = (previous == State::PayOnlineLink ||
+                                    previous == State::PayOnlineQr);
+    const bool still_paying_online = (next == State::PayOnlineQr ||
+                                      next == State::ThankYou);
+    if (was_paying_online && !still_paying_online) {
+        pi_link::request_square_cancel(transaction_id);
+    }
+
     // Each state owns exactly one screen, so the display is driven from the
     // transition rather than scattered through the event handling.
     switch (next) {
@@ -274,6 +300,26 @@ void handle_event(const events::Event &event)
 
     if (event.kind == events::Kind::Fault) {
         raise_fault(event.fault.code);
+        return;
+    }
+
+    // A late payment belongs to a transaction that is already over, so it is
+    // handled here rather than in any one state — by the time it arrives the
+    // machine is usually back in Idle, which is why the event carries its own
+    // transaction id instead of relying on the current one.
+    //
+    // Nothing can be done automatically: the drinks have gone, the transaction
+    // is closed, and this firmware has no authority to move money. The only
+    // useful action is to make it FINDABLE — serial for whoever is watching at
+    // the time, SD card for whoever is not. Decision D17: the refund is a human
+    // job, and this line is the evidence that one is owed.
+    if (event.kind == events::Kind::SquareLatePaid) {
+        logf(LogLevel::ERROR,
+             "checkout: REFUND OWED - Square took %" PRIu32 "c for txn %" PRIu32
+             " after the link was cancelled",
+             event.payment.cents, event.payment.txn_id);
+        sd_log::write_linef("REFUND_OWED id=%" PRIu32 " cents=%" PRIu32,
+                            event.payment.txn_id, event.payment.cents);
         return;
     }
 

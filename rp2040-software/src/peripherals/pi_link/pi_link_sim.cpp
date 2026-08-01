@@ -67,6 +67,10 @@ bool     square_paid_waiting = false;
 bool     square_error_waiting = false;
 uint32_t square_amount_cents = 0;
 
+/// The transaction whose link was last cancelled. Remembered only so the 'l'
+/// key can produce a late-payment report that names a plausible transaction.
+uint32_t square_cancelled_id = 0;
+
 uint32_t now_ms()
 {
     return to_ms_since_boot(get_absolute_time());
@@ -166,6 +170,24 @@ void request_square_link(uint32_t cents, uint32_t transaction_id)
          "pi_link[sim]: CMD SQUARE_LINK cents=%" PRIu32 " id=%" PRIu32,
          cents, transaction_id);
     printf("  (press 'p' to simulate payment, 'e' to simulate a failure)\n");
+}
+
+void request_square_cancel(uint32_t transaction_id)
+{
+    // The simulator has no real link to kill, so it does the two things that
+    // actually matter for testing: it stops a pending link from ever arriving,
+    // and it drops any answer already waiting. Without the second part a URL
+    // that landed a moment before the back button was pressed would still be
+    // collected by the next transaction.
+    square_link_pending = false;
+    square_url_waiting = false;
+    square_paid_waiting = false;
+    square_error_waiting = false;
+    square_cancelled_id = transaction_id;
+
+    logf(LogLevel::INFORMATION,
+         "pi_link[sim]: CMD SQUARE_CANCEL id=%" PRIu32, transaction_id);
+    printf("  (press 'l' to simulate the money arriving anyway - a late payment)\n");
 }
 
 bool poll_inventory(basket::Inventory &out)
@@ -335,6 +357,20 @@ bool handle_debug_key(int key)
             events::push(events::Kind::SquareError);
             printf("  Square reports a failure\n");
             return true;
+
+        case 'l': {
+            // The race that cannot be designed away: the customer's payment and
+            // our cancellation cross in flight. The point of this key is to make
+            // that path testable on demand rather than hoping to catch it once
+            // in a hundred runs.
+            events::Event late(events::Kind::SquareLatePaid);
+            late.payment.cents = square_amount_cents;
+            late.payment.txn_id = square_cancelled_id;
+            events::push(late);
+            printf("  Square took %lu cents AFTER the link was cancelled"
+                   " - a refund is owed\n", (unsigned long)square_amount_cents);
+            return true;
+        }
 
         default:
             return false;   // not ours; the caller will try its own keys

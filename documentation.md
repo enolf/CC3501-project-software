@@ -174,6 +174,63 @@ LOCATION_ID         = "<your sandbox location id>"
 
 Currently points at `connect.squareupsandbox.com` — sandbox, not live money.
 
+### 3.5 Secrets and what must never be committed
+
+**The rule.** Credentials live in `tokens.py`, which every developer creates by
+hand and nobody commits. Nothing else in the repository may contain a token, a
+key, or a password — not in a comment, not in a test fixture, not in a commit
+message.
+
+| Pattern | Ignored in | Why |
+|---|---|---|
+| `tokens.py`, `secrets.py` | root + `pi4-software/` | The credential files themselves |
+| `__pycache__/`, `*.py[cod]` | root + `pi4-software/` | **Compiled bytecode contains the token — see below** |
+| `credentials.json`, `*.pem`, `*.key` | root | Standard credential formats, ignored pre-emptively |
+| `.env`, `.env.*` | root | Ditto |
+
+Both `tokens.py` rules are written twice, once as a path and once as a bare
+name, so a copy left in `tools/` or a scratch folder is caught as well. A
+credential that leaks because it sat in an unexpected directory is no less
+leaked.
+
+#### The bytecode trap — a real incident, not a hypothetical
+
+`tokens.py` was correctly gitignored from the start. **The token still reached a
+public GitHub repository**, inside
+`pi4-software/online-payment/__pycache__/tokens.cpython-313.pyc`.
+
+Importing a module makes CPython write a `.pyc` next to it, and **a `.pyc`
+embeds the string constants of the module it compiled**. So the moment
+`square.py` ran `import tokens`, a second file containing
+`SQUARE_ACCESS_TOKEN` in plain text appeared — one that the `tokens.py` rule
+did not match. `strings` recovers both the token and the location id from it
+without any tooling. The `.pyc` also embedded the absolute source path,
+exposing the build machine's username.
+
+The lesson generalises past Python: **ignoring a secret file is not the same as
+ignoring its derivatives.** Compiled output, caches, editor backups (`*.py~`),
+logs and core dumps can all carry a copy of something the original rule
+protected. When adding a secret to `.gitignore`, ask what else on disk will
+contain the same bytes.
+
+**Checking before you commit** — this catches the whole class, not just Python:
+
+```bash
+# Anything staged that looks like a Square credential
+git diff --cached | grep -iE "EAAA[A-Za-z0-9_-]{20,}|sq0[a-z]{3}-|access_token"
+
+# Anything staged that is compiled or cached rather than written by hand
+git diff --cached --name-only | grep -E "__pycache__|\.py[cod]$|\.env"
+```
+
+Both should print nothing.
+
+**If a credential does get committed, rotate it.** Removing the file in a later
+commit does not help — the old commit still contains it, and on a public repo it
+must be assumed to have been scraped within minutes. Rotation at the provider is
+the only fix that actually works; history rewriting is optional cleanup
+afterwards, and on a shared branch it needs everyone to re-clone.
+
 ---
 
 ## 4. RP2040 software
@@ -525,6 +582,7 @@ Ordered by how much they will hurt.
 | 10 | `hx711_reader.pio.h` **defines** its init functions and has no `extern "C"` guard | submodule | Including it from a second C++ file causes duplicate symbols. Already hit and worked around in `mass_sensor.cpp` — do not include it there |
 | 11 | Signed/unsigned comparisons in `for` loops over `.size()` | `inventory.cpp:17`, `picapture/main.cpp:79` | Warnings only |
 | 12 | `tokens.py` is gitignored, so `square.py` cannot run from a fresh clone without manual setup | `online-payment/` | Documented in §3.4 |
+| 13 | **Square sandbox credentials were committed and pushed to a public repo** inside `__pycache__/tokens.cpython-313.pyc` — the `.pyc` embeds the token as a plain-text string even though `tokens.py` itself was correctly ignored | `online-payment/__pycache__/`, commit `c8cd1b6` on `all_together` | Untracked and now ignored, **but still present in history**. Sandbox only, so play money — **rotate the token**. See §3.5 |
 
 ---
 

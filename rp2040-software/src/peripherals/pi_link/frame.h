@@ -51,8 +51,15 @@ namespace frame {
 /// is dropped rather than buffered, so a stuck sender cannot exhaust memory.
 constexpr size_t MAX_FRAME_LEN = 128;
 
-/// Longest message type token, including the terminating null.
-constexpr size_t MAX_TYPE_LEN = 16;
+/// Longest message type token, INCLUDING the terminating null — so 19 usable
+/// characters.
+///
+/// Raised from 16 at stage 15.3. `SQUARE_CANCELLED` and `SQUARE_LATE_PAID` are
+/// both exactly 16 characters, which needs 17 bytes with the null, and both
+/// build() and the parser reject an over-long type outright. The failure would
+/// have been a cancellation that silently never left the board — the frame is
+/// refused at the sender, so there is nothing on the wire to look at.
+constexpr size_t MAX_TYPE_LEN = 20;
 
 /// Longest payload, including the terminating null.
 constexpr size_t MAX_PAYLOAD_LEN = 96;
