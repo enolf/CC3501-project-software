@@ -104,6 +104,7 @@ const char *name(Kind kind)
         case Kind::SquareUrlReady:   return "SquareUrlReady";
         case Kind::SquarePaid:       return "SquarePaid";
         case Kind::SquareError:      return "SquareError";
+        case Kind::SquareLatePaid:   return "SquareLatePaid";
         case Kind::TouchCash:        return "TouchCash";
         case Kind::TouchOnline:      return "TouchOnline";
         case Kind::TouchBack:        return "TouchBack";

@@ -47,6 +47,8 @@ enum class Kind : uint8_t {
     SquareUrlReady,     ///< Doorbell: call pi_link::poll_square_url() for it.
     SquarePaid,         ///< Square confirmed money actually arrived.
     SquareError,        ///< The Pi could not produce a payment link.
+    SquareLatePaid,     ///< Money arrived AFTER the link was cancelled, so a
+                        ///< refund is owed. Payload: payment
 
     // --- Touch (peripherals/tft_display, real from stage 6) ---
     TouchCash,
