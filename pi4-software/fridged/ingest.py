@@ -164,6 +164,48 @@ class Ingest:
         self.store.note_sensor(rom, ts)
         self.store.measurement(ts, f"temp.rom.{rom}", celsius)
 
+    def _on_door(self, frame, ts):
+        """`EVT DOOR state=open|closed`.
+
+        The door is on the critical path for the whole transaction flow, not
+        just a graph annotation (dashboard.md section 4.2) — it is what tells
+        the camera when the scene is stable enough to count. Here it is only
+        recorded; stage D6 uses it to trigger a scan.
+        """
+        state = protocol.field(frame.payload, "state")
+        if state == "open":
+            self.store.door_opened(ts)
+        elif state == "closed":
+            duration = self.store.door_closed(ts)
+            if duration is None:
+                # Started while the fridge was already open. Normal on a restart
+                # and not an error, but it means one open has no duration.
+                log.info("door closed with no open on record "
+                         "(fridged probably started while it was open)")
+            elif duration > 120.0:
+                log.warning("door was open for %.0f s", duration)
+        else:
+            log.warning("DOOR frame with an unrecognised state: %r", state)
+
+    def _on_health(self, frame, ts):
+        """`EVT HEALTH die_c= box_g= faults=`, every 30 s.
+
+        Three unrelated things share one frame because the board assembles it in
+        `main.cpp` from three tasks that should not have to know about each
+        other. Unpacked into three metrics here, because on the dashboard they
+        belong in different places: a temperature, a mass, and a fault count.
+        """
+        for key, metric in (("die_c", "temp.rp2040_die"),
+                            ("box_g", "coinbox.mass_g"),
+                            ("faults", "health.faults")):
+            raw = protocol.field(frame.payload, key)
+            if raw is None:
+                continue
+            try:
+                self.store.measurement(ts, metric, float(raw))
+            except ValueError:
+                log.warning("HEALTH %s is not a number: %r", key, raw)
+
     # --- Our own telemetry --------------------------------------------------
 
     def tick(self):

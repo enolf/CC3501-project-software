@@ -31,6 +31,7 @@ the invented history stops.
 """
 
 import argparse
+import math
 import os
 import sys
 import time
@@ -38,7 +39,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fake_board import DEFAULT_ZONES, TEMP_SAMPLE_S  # noqa: E402  (tools/)
+from fake_board import (  # noqa: E402  (tools/)
+    BOX_FULL_G, COIN_MASSES_G, COIN_ON_CLOSE_RATE, DEFAULT_ZONES,
+    DoorSchedule, HEALTH_INTERVAL_S, TEMP_SAMPLE_S,
+)
 
 from . import config          # noqa: E402
 from .store import Store      # noqa: E402
@@ -74,7 +78,7 @@ def clear(store):
           f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(boundary))}")
 
 
-def seed_temperature(store, start_ts, end_ts, rng):
+def seed_temperature(store, start_ts, end_ts, rng, door):
     """Temperature for every sensor, at the interval the firmware really uses."""
     for zone in DEFAULT_ZONES:
         store.note_sensor(zone.rom, start_ts)
@@ -88,8 +92,71 @@ def seed_temperature(store, start_ts, end_ts, rng):
             # `ts` rather than seconds-since-start, so the compressor cycle is a
             # continuous function of wall time and the seam where seeded history
             # meets live data has no phase jump in it.
-            batch.append((ts, metric[zone.rom], zone.celsius(ts, rng)))
+            #
+            # `door` is passed for the same reason at a different scale: every
+            # warming bump in this history has to sit under a real door event in
+            # the timeline panel, or the two panels contradict each other.
+            batch.append((ts, metric[zone.rom], zone.celsius(ts, rng, door)))
         ts += TEMP_SAMPLE_S
+
+        if len(batch) >= CHUNK:
+            written += _write(store, batch)
+            batch = []
+
+    written += _write(store, batch)
+    return written
+
+
+def seed_doors(store, door):
+    """Door events, with `duration_s` filled in exactly as ingest would."""
+    rows = []
+    for open_t, close_t in door.intervals:
+        rows.append((open_t, "open", close_t - open_t))
+        rows.append((close_t, "closed", None))
+
+    store._conn.execute("BEGIN")
+    store._conn.executemany(
+        "INSERT INTO door_event (ts, state, duration_s) VALUES (?,?,?)", rows)
+    store._conn.execute("COMMIT")
+    return len(rows)
+
+
+def seed_health(store, start_ts, end_ts, rng, door):
+    """Die temperature, coin-box mass and fault count, every 30 s.
+
+    The box mass follows door closes using the same rule as the live simulator,
+    so the sawtooth in the seeded history and the sawtooth after it are produced
+    by one model rather than two that will disagree.
+    """
+    closes = [close_t for _, close_t in door.intervals]
+    next_close = 0
+    box_g = 0.0
+
+    batch = []
+    written = 0
+    ts = start_ts
+    while ts < end_ts:
+        # Apply every door close that has happened since the last sample.
+        while next_close < len(closes) and closes[next_close] <= ts:
+            next_close += 1
+            if rng.random() < COIN_ON_CLOSE_RATE:
+                for _ in range(rng.randint(1, 2)):
+                    box_g += rng.choice(COIN_MASSES_G)
+                if box_g >= BOX_FULL_G:
+                    box_g = 0.0
+
+        die_c = (32.0 + 2.5 * math.sin(2.0 * math.pi * ts / 86400.0)
+                 + rng.gauss(0.0, 0.25))
+        # The Pi's own SoC, which on a live system comes from
+        # /sys/class/thermal. Warmer than the board and it climbs under load.
+        soc_c = 52.0 + 4.0 * math.sin(2.0 * math.pi * ts / 86400.0 + 1.0) \
+            + rng.gauss(0.0, 0.8)
+
+        batch.append((ts, "temp.rp2040_die", die_c))
+        batch.append((ts, "coinbox.mass_g", box_g))
+        batch.append((ts, "health.faults", 0.0))
+        batch.append((ts, "temp.pi_soc", soc_c))
+        ts += HEALTH_INTERVAL_S
 
         if len(batch) >= CHUNK:
             written += _write(store, batch)
@@ -145,13 +212,29 @@ def main(argv=None):
         store.open_boot(start_ts, fw=None, reason="seed")
 
         began = time.monotonic()
-        rows = seed_temperature(store, start_ts, end_ts, rng)
+
+        # The door schedule is generated FIRST and in full, because both the
+        # temperature and the coin box are functions of it. Its own RNG so that
+        # changing the noise model cannot shuffle the door times, which would
+        # silently re-roll the whole history.
+        door = DoorSchedule(random.Random(args.seed + 1), start_ts)
+        door.ensure_until(end_ts)
+
+        temps = seed_temperature(store, start_ts, end_ts, rng, door)
+        doors = seed_doors(store, door)
+        health = seed_health(store, start_ts, end_ts,
+                             random.Random(args.seed + 2), door)
         store.raw_line(end_ts, f"{MARKER_PREFIX}{end_ts}", source="seed")
         store.flush(force=True)
 
-        print(f"seeded {rows:,} temperature readings over {args.days:g} days "
-              f"({len(DEFAULT_ZONES)} sensors at {TEMP_SAMPLE_S:g}s) "
-              f"in {time.monotonic() - began:.1f}s")
+        left_open = sum(1 for o, c in door.intervals if c - o > 120.0)
+        print(f"seeded over {args.days:g} days in "
+              f"{time.monotonic() - began:.1f}s:")
+        print(f"  {temps:>8,} temperature readings "
+              f"({len(DEFAULT_ZONES)} sensors at {TEMP_SAMPLE_S:g}s)")
+        print(f"  {doors:>8,} door events "
+              f"({len(door.intervals)} opens, {left_open} left open >2 min)")
+        print(f"  {health:>8,} health readings (at {HEALTH_INTERVAL_S:g}s)")
         print(f"  from {time.strftime('%Y-%m-%d %H:%M', time.localtime(start_ts))}"
               f"  to {time.strftime('%Y-%m-%d %H:%M', time.localtime(end_ts))}")
         print(f"  database: {store.path}")

@@ -33,6 +33,7 @@ Stage D1 emits `BOOT` and `HB`. Temperature, door, health and transactions arriv
 with the stages that consume them.
 """
 
+import bisect
 import math
 import random
 import time
@@ -61,6 +62,58 @@ TEMP_PER_SENSOR_S = 0.004
 #: nowhere in between, which is worth reproducing: a graph of impossibly smooth
 #: values would not look like this sensor.
 DS18B20_STEP_C = 0.0625
+
+#: `HEALTH_INTERVAL_MS` in main.cpp.
+HEALTH_INTERVAL_S = 30.0
+
+# --- Door behaviour ---------------------------------------------------------
+
+#: Relative door-opening rate by hour of the LOCAL day. A society fridge is not
+#: used uniformly: it is busy at lunch and again after work, and almost nobody
+#: opens it at 3am. Flat rates would make "sales by hour" (stage D5) and the
+#: whole diurnal story meaningless.
+HOUR_WEIGHT = (0.05, 0.02, 0.02, 0.02, 0.02, 0.05,
+               0.20, 0.50, 0.80, 0.90, 1.00, 1.50,
+               3.00, 3.00, 1.20, 1.00, 1.20, 2.50,
+               2.50, 1.50, 1.00, 0.60, 0.30, 0.10)
+
+OPENS_PER_DAY = 40.0
+
+#: A normal open: someone takes a drink and shuts the door.
+NORMAL_OPEN_S = (4.0, 40.0)
+
+#: Occasionally the door is left ajar. **This is the failure that actually
+#: happens**, and the one the alert exists for (dashboard.md section 10), so the
+#: simulator has to produce it or the alert is built against a case that never
+#: occurs in testing.
+LEFT_OPEN_RATE = 0.015
+LEFT_OPEN_S = (600.0, 1500.0)
+
+#: Warming while the door is open, and recovery after it shuts. The recovery
+#: constant is the slower of the two because a fridge loses cold air quickly and
+#: gets it back slowly — which is exactly what makes "temperature recovery after
+#: a door open" worth a panel.
+DOOR_TAU_OPEN_S = 90.0
+DOOR_TAU_RECOVER_S = 420.0
+
+#: How far back excursion() looks. Ten recovery constants leaves under a
+#: hundredth of a percent of any earlier excursion, so older intervals cannot
+#: change the answer and iterating them would be pure cost.
+LOOKBACK_S = 10.0 * DOOR_TAU_RECOVER_S
+
+# --- Coin box ---------------------------------------------------------------
+# A stand-in until stage D5 makes the box mass follow real transactions. Tying
+# it to door closes rather than inventing a smooth ramp keeps it correlated with
+# something real, so the money-box panel and the door panels tell a consistent
+# story.
+
+COIN_ON_CLOSE_RATE = 0.5
+COIN_MASSES_G = (9.00, 6.60)
+
+#: ~$50 in $1 coins against a 500 g cell (dashboard.md section 10). Past this
+#: the box needs emptying, which is an operational necessity rather than a
+#: curiosity.
+BOX_FULL_G = 450.0
 
 #: The board sends its heartbeat every 10 s (`HEARTBEAT_INTERVAL_MS` in main.cpp).
 HEARTBEAT_S = 10.0
@@ -92,6 +145,118 @@ BOOT_BANNER = [
 ]
 
 
+class DoorSchedule:
+    """When the door opens and closes, and what that does to the temperature.
+
+    Shared by the live simulator and by `fridged/seed.py`. That sharing is the
+    point: seeded history and live data have to describe ONE fridge, so that a
+    door event in the timeline lines up with a warming bump in the temperature
+    graph above it. Two independent models would put the bumps in the wrong
+    places and every panel would be validated against a fridge that cannot
+    exist.
+
+    Works entirely in absolute unix time, for the same reason.
+    """
+
+    def __init__(self, rng, start_unix):
+        self.rng = rng
+        #: (open_time, close_time) pairs, in order and non-overlapping.
+        self.intervals = []
+        #: (time, is_open) edges, in order. What the board actually emits.
+        self.edges = []
+        #: Close times only, kept sorted so excursion() can binary-search.
+        self._closes = []
+        self._next_open = self._next_open_after(start_unix)
+
+    def _next_open_after(self, t):
+        """The time of the next door open, by thinning.
+
+        WHY NOT JUST SAMPLE A GAP FROM THE CURRENT HOUR'S RATE
+        ------------------------------------------------------
+        Because the gap can be longer than the hour it was drawn in, and then
+        the rate that produced it no longer applies. A sample taken at 3am, when
+        the weight is 0.02, has a mean gap of about thirty hours — so one draw
+        skips the whole of the next day including both its busy periods. The
+        first version of this did exactly that and produced 16 opens a day
+        instead of 40, with entire days missing.
+
+        Thinning fixes it properly: propose events at the PEAK rate, then keep
+        each one with probability weight(hour)/peak. The survivors have exactly
+        the intended hourly rate, and no proposal ever spans more time than the
+        peak rate allows.
+        """
+        peak = max(HOUR_WEIGHT)
+        rate = (OPENS_PER_DAY / 86400.0) * peak
+        while True:
+            t += self.rng.expovariate(rate)
+            # Local time, not UTC: the busy periods have to land at local
+            # lunchtime to look right on a dashboard drawn in local time.
+            hour = time.localtime(t).tm_hour
+            if self.rng.random() < HOUR_WEIGHT[hour] / peak:
+                return t
+
+    def ensure_until(self, t):
+        """Generate every door event up to time `t`. Idempotent and cheap."""
+        while self._next_open <= t:
+            open_t = self._next_open
+            if self.rng.random() < LEFT_OPEN_RATE:
+                duration = self.rng.uniform(*LEFT_OPEN_S)
+            else:
+                duration = self.rng.uniform(*NORMAL_OPEN_S)
+            close_t = open_t + duration
+
+            self.intervals.append((open_t, close_t))
+            self.edges.append((open_t, True))
+            self.edges.append((close_t, False))
+            self._closes.append(close_t)
+            self._next_open = self._next_open_after(close_t)
+
+    def excursion(self, t, peak_c):
+        """How far above baseline the temperature sits at time `t`, in degrees.
+
+        The elevation is a STATE that relaxes: towards `peak_c` while the door
+        is open, towards zero while it is shut. It is therefore continuous, and
+        each door event carries forward whatever the last one left behind.
+
+        The first version of this took a shortcut — use only the most recent
+        interval — on the reasoning that earlier excursions have decayed away.
+        That holds when opens are well separated and fails badly when they are
+        not: a brief 18-second open following a 24-minute one RESET the state to
+        the small value that short open alone would produce, so the model showed
+        the fridge cooling by 3 degrees because somebody opened the door. A
+        short open cannot cool a fridge, and a panel about recovery time built on
+        that would have been measuring an artefact.
+
+        Cost is kept down by starting from `LOOKBACK_S` ago instead of from the
+        beginning of time: after ten recovery constants the residue is under a
+        hundredth of a percent, so intervals older than that cannot matter.
+        """
+        if peak_c <= 0.0:
+            return 0.0
+
+        begin = t - LOOKBACK_S
+        # Intervals are generated in order, so their close times are sorted and
+        # the first one that can still matter is a binary search away.
+        index = bisect.bisect_left(self._closes, begin)
+
+        elevation = 0.0
+        last_t = begin
+        for open_t, close_t in self.intervals[index:]:
+            if open_t > t:
+                break
+            if open_t > last_t:            # shut: decay towards zero
+                elevation *= math.exp(-(open_t - last_t) / DOOR_TAU_RECOVER_S)
+                last_t = open_t
+            end = min(t, close_t)          # open: rise towards peak
+            elevation = peak_c + (elevation - peak_c) * math.exp(
+                -(end - last_t) / DOOR_TAU_OPEN_S)
+            last_t = end
+            if t <= close_t:
+                return elevation
+
+        return elevation * math.exp(-(t - last_t) / DOOR_TAU_RECOVER_S)
+
+
 class Zone:
     """One DS18B20: a setpoint, a compressor cycle around it, and sensor noise.
 
@@ -102,21 +267,28 @@ class Zone:
     breaking it here to make the simulator tidier would defeat the exercise.
     """
 
-    def __init__(self, rom, setpoint_c, swing_c, period_s, phase, noise_c=0.05):
+    def __init__(self, rom, setpoint_c, swing_c, period_s, phase,
+                 door_rise_c=0.0, noise_c=0.05):
         self.rom = rom
         self.setpoint_c = setpoint_c
         self.swing_c = swing_c
         self.period_s = period_s
         self.phase = phase
+        #: Peak warming this zone would reach with the door held open
+        #: indefinitely. The freezer is a separate compartment and barely
+        #: notices; the top shelf sits right behind the door and notices most.
+        self.door_rise_c = door_rise_c
         self.noise_c = noise_c
 
-    def celsius(self, t, rng):
+    def celsius(self, t, rng, door=None):
         # A fridge does not hold a temperature, it cycles around one: the
         # compressor runs, overshoots cold, stops, drifts warm, runs again. A
         # flat line with noise on it would look nothing like the real thing, and
         # the threshold colours on the stat tiles would never be exercised.
         value = self.setpoint_c + self.swing_c * math.sin(
             2.0 * math.pi * t / self.period_s + self.phase)
+        if door is not None:
+            value += door.excursion(t, self.door_rise_c)
         value += rng.gauss(0.0, self.noise_c)
         return round(value / DS18B20_STEP_C) * DS18B20_STEP_C
 
@@ -127,9 +299,9 @@ class Zone:
 #: naming a sensor would be undone by every restart and the naming workflow could
 #: never be tested.
 DEFAULT_ZONES = [
-    Zone("28FF3A1C92160341", -18.0, 1.6, 2400.0, 0.0),
-    Zone("28FF7B4E5501A2C7",   4.0, 0.9, 2100.0, 1.1),
-    Zone("28FFD1082B640F19",   6.2, 1.1, 2100.0, 2.4),
+    Zone("28FF3A1C92160341", -18.0, 1.6, 2400.0, 0.0, door_rise_c=0.8),
+    Zone("28FF7B4E5501A2C7",   4.0, 0.9, 2100.0, 1.1, door_rise_c=3.5),
+    Zone("28FFD1082B640F19",   6.2, 1.1, 2100.0, 2.4, door_rise_c=2.0),
 ]
 
 
@@ -173,11 +345,23 @@ class FakeBoard:
         self._next_hb = 0.0
         self._next_reboot = 0.0
         self._next_temp = 0.0
+        self._next_health = 0.0
 
         self.frames_out = 0
         self.frames_in = 0
         self.reboots = 0
         self.lost_boot_frames = 0
+
+        #: The door lives in absolute time and SURVIVES A REBOOT, unlike the
+        #: board's timers. A fridge door does not care that the microcontroller
+        #: restarted, and pretending otherwise would hide the case where the
+        #: board misses an edge because it was down.
+        self.door = DoorSchedule(self.rng, self._unix_start)
+        self._door_index = 0
+        self.door_open = False
+
+        self.box_g = 0.0
+        self.emptied = 0
 
         self._reboot(0.0, first=True)
 
@@ -262,6 +446,7 @@ class FakeBoard:
         # leaves a 30 s gap in the temperature graph, which is real and which the
         # dashboard should show rather than paper over.
         self._next_temp = at + TEMP_SAMPLE_S
+        self._next_health = at + HEALTH_INTERVAL_S
         if not first:
             self.reboots += 1
 
@@ -311,15 +496,66 @@ class FakeBoard:
             # Stamped when the readings come OUT, not when the conversion was
             # started, and spread by one superloop pass each.
             for index, zone in enumerate(self.zones):
-                celsius = zone.celsius(self.unix_time(sampled_at), self.rng)
+                celsius = zone.celsius(self.unix_time(sampled_at), self.rng,
+                                       self.door)
                 due.append((sampled_at + TEMP_CONVERSION_S +
                             index * TEMP_PER_SENSOR_S,
                             "EVT", "TEMP",
                             f"rom={zone.rom} c={celsius:.3f}"))
 
+        # The door. Generated in absolute time, then converted back to
+        # sim-relative for the frame's `ms` stamp.
+        self.door.ensure_until(self.unix_time(now))
+        while self._door_index < len(self.door.edges):
+            edge_t, is_open = self.door.edges[self._door_index]
+            at = edge_t - self._unix_start
+            if at > now:
+                break
+            self._door_index += 1
+            self.door_open = is_open
+            if not is_open:
+                self._maybe_take_payment()
+            due.append((at, "EVT", "DOOR",
+                        f"state={'open' if is_open else 'closed'}"))
+
+        while now >= self._next_health:
+            at = self._next_health
+            self._next_health += HEALTH_INTERVAL_S
+            due.append((at, "EVT", "HEALTH",
+                        f"die_c={self._die_celsius(at):.1f} "
+                        f"box_g={self.box_g:.2f} faults=0"))
+
         due.sort(key=lambda item: item[0])
         for at, prefix, type_, payload in due:
             self._emit(prefix, type_, payload, at=at)
+
+    def _die_celsius(self, at):
+        """RP2040 die temperature: ADC channel 4.
+
+        Only accurate to several degrees absolute (dashboard.md section 7), so
+        it is a trend signal rather than a measurement — modelled as a slow
+        daily swing around a warm-ish idle, not as anything precise.
+        """
+        unix_t = self.unix_time(at)
+        return (32.0 + 2.5 * math.sin(2.0 * math.pi * unix_t / 86400.0)
+                + self.rng.gauss(0.0, 0.25))
+
+    def _maybe_take_payment(self):
+        """Some door closes end in coins going in the box.
+
+        A stand-in until stage D5 drives this from real transactions. Hung off
+        door closes rather than a smooth ramp so the money-box panel and the
+        door panels agree with each other.
+        """
+        if self.rng.random() >= COIN_ON_CLOSE_RATE:
+            return
+        for _ in range(self.rng.randint(1, 2)):
+            self.box_g += self.rng.choice(COIN_MASSES_G)
+        if self.box_g >= BOX_FULL_G:
+            # The treasurer emptied it. A sawtooth, which is what the fill-level
+            # panel is for: the drop is the takings.
+            self.box_g = 0.0
+            self.emptied += 1
 
     # --- The serial.Serial surface `fridged` uses ---------------------------
 

@@ -23,6 +23,7 @@ produces no symptom at the time and a hole in the data later:
 """
 
 import json
+import math
 import os
 import re
 import sqlite3
@@ -364,6 +365,145 @@ def test_fake_board():
           min(v for v in values if v < -10) > 1.0)
 
 
+# --- Door and health --------------------------------------------------------
+
+def test_door_model():
+    print("\n--- door model ---")
+    import random
+
+    from fake_board import (DOOR_TAU_RECOVER_S, DoorSchedule, HOUR_WEIGHT,
+                            OPENS_PER_DAY)
+
+    start = time.time() - 14 * 86400
+    door = DoorSchedule(random.Random(4), start)
+    door.ensure_until(start + 14 * 86400)
+
+    opens_per_day = len(door.intervals) / 14.0
+    # The first version sampled each gap from the CURRENT hour's rate. A gap
+    # drawn at 3am has a mean of thirty hours, so one draw skipped a whole day
+    # including both busy periods, and the rate came out at 40% of target.
+    check(f"the open rate is close to the configured {OPENS_PER_DAY:g}/day "
+          f"(got {opens_per_day:.1f})",
+          0.6 * OPENS_PER_DAY < opens_per_day < 1.6 * OPENS_PER_DAY)
+
+    by_hour = [0] * 24
+    for open_t, _ in door.intervals:
+        by_hour[time.localtime(open_t).tm_hour] += 1
+    busiest = by_hour.index(max(by_hour))
+    check(f"the busiest hour is one of the configured peaks (got {busiest:02d}:00)",
+          HOUR_WEIGHT[busiest] >= max(HOUR_WEIGHT) * 0.8)
+    check("the small hours are quieter than the peak",
+          sum(by_hour[1:5]) < max(by_hour))
+
+    check("the door is sometimes left open for minutes, not seconds",
+          any(close - open_t > 300 for open_t, close in door.intervals))
+
+    # THE regression test for this model, on a HAND-BUILT scenario rather than
+    # a random one: the case that broke needs a short open shortly after a long
+    # one, and waiting for the RNG to produce that is not a test.
+    #
+    # The first version used only the most recent interval, so the brief open
+    # below reset the elevation to the small value that 20 seconds alone would
+    # produce — the fridge appeared to COOL by three degrees because somebody
+    # opened the door.
+    peak = 3.5
+    scripted = DoorSchedule(random.Random(0), 0.0)
+    scripted.intervals = [(1000.0, 2200.0),    # 20 minutes, wide open
+                          (2300.0, 2320.0)]    # 20 seconds, 100 s later
+    scripted._closes = [close for _, close in scripted.intervals]
+
+    samples = [(t, scripted.excursion(t, peak))
+               for t in [i * 10.0 for i in range(0, 800)]]
+
+    # Rises are fine and fast — that is what opening a door does. Only DROPS are
+    # constrained, by how much the recovery constant permits in ten seconds.
+    max_drop = peak * (1.0 - math.exp(-10.0 / DOOR_TAU_RECOVER_S)) * 1.05
+    drops = [(a[0], a[1], b[1]) for a, b in zip(samples, samples[1:])
+             if a[1] - b[1] > max_drop]
+    check(f"the excursion never drops faster than the recovery constant allows "
+          f"({len(drops)} violations, limit {max_drop:.3f} C per 10 s)", not drops)
+    for t, before, after in drops[:3]:
+        print(f"        t={t:.0f}s  {before:.3f} -> {after:.3f}")
+
+    check("the excursion never exceeds the zone's peak",
+          all(value <= peak + 1e-9 for _, value in samples))
+    check("the excursion is never negative — a door cannot cool a fridge",
+          all(value >= -1e-9 for _, value in samples))
+
+    # The specific failure, stated directly: the short open must leave the
+    # elevation at least as high as simply carrying on decaying would have.
+    before_short = scripted.excursion(2299.0, peak)
+    after_short = scripted.excursion(2321.0, peak)
+    check(f"a brief open does not cool the fridge "
+          f"({before_short:.2f} C before, {after_short:.2f} C after)",
+          after_short >= before_short - 0.05)
+
+    # A door open must show up in the temperature at all, or the timeline panel
+    # and the graph above it are telling unrelated stories.
+    during = scripted.excursion(2199.0, peak)
+    later = scripted.excursion(2320.0 + 8 * DOOR_TAU_RECOVER_S, peak)
+    check(f"a long open warms the zone ({during:.2f} C when it shuts)",
+          during > 0.9 * peak)
+    check(f"and it recovers once the door stays shut ({later:.3f} C later)",
+          later < 0.02 * peak)
+
+
+def test_door_and_health_ingest():
+    print("\n--- door and health ingest ---")
+    store = Store(temp_db()).open()
+    link = Link(StubTransport())
+    ingest = Ingest(store, link)
+
+    feed(ingest, link, protocol.build("EVT", "BOOT", "fw=0.2", ms=0))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=1000))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=closed", ms=2000))
+    store.flush(force=True)
+
+    rows = store._conn.execute(
+        "SELECT state, duration_s FROM door_event ORDER BY ts").fetchall()
+    check("an open and a close are both recorded",
+          [r[0] for r in rows] == ["open", "closed"])
+    check("the open row gets its duration filled in on close",
+          rows[0][1] is not None and rows[0][1] > 0)
+    check("the close row carries no duration of its own", rows[1][1] is None)
+
+    # Starting while the door is already open. Legitimate, and it must not
+    # attach the duration to some unrelated earlier open.
+    store2 = Store(temp_db()).open()
+    link2 = Link(StubTransport())
+    ingest2 = Ingest(store2, link2)
+    feed(ingest2, link2, protocol.build("EVT", "DOOR", "state=closed", ms=500))
+    store2.flush(force=True)
+    check("a close with no open on record is recorded but matched to nothing",
+          store2._conn.execute(
+              "SELECT COUNT(*) FROM door_event WHERE duration_s IS NOT NULL"
+          ).fetchone()[0] == 0)
+
+    # A missed close must strand ONE open, not corrupt the next pair.
+    feed(ingest2, link2, protocol.build("EVT", "DOOR", "state=open", ms=1000))
+    feed(ingest2, link2, protocol.build("EVT", "DOOR", "state=open", ms=2000))
+    feed(ingest2, link2, protocol.build("EVT", "DOOR", "state=closed", ms=3000))
+    store2.flush(force=True)
+    unterminated = store2._conn.execute(
+        "SELECT COUNT(*) FROM door_event "
+        "WHERE state='open' AND duration_s IS NULL").fetchone()[0]
+    check("a missed close strands exactly one open, not both",
+          unterminated == 1)
+
+    feed(ingest2, link2, protocol.build(
+        "EVT", "HEALTH", "die_c=31.4 box_g=250.5 faults=0", ms=4000))
+    store2.flush(force=True)
+    got = dict(store2._conn.execute(
+        "SELECT metric, value FROM measurement "
+        "WHERE metric IN ('temp.rp2040_die','coinbox.mass_g','health.faults')"))
+    check("HEALTH is unpacked into three separate metrics",
+          got == {"temp.rp2040_die": 31.4, "coinbox.mass_g": 250.5,
+                  "health.faults": 0.0})
+
+    store.close()
+    store2.close()
+
+
 # --- Grafana dashboards -----------------------------------------------------
 
 #: How `frser-sqlite-datasource` expands its ONLY grouping macro:
@@ -404,8 +544,11 @@ def test_dashboards():
     check(f"dashboard JSON files exist ({len(files)})", bool(files))
 
     store = Store(temp_db()).open()
-    # Give the schema something to return, so an empty result distinguishes
-    # "query is wrong" from "no data yet".
+
+    # A fixture covering EVERY table the panels touch. Without the door and
+    # health rows the queries still parsed and still "passed" while returning
+    # nothing — which is exactly the failure mode a panel has on the Pi, so a
+    # test that cannot tell the two apart is not testing the thing that matters.
     now = time.time()
     for offset in range(0, 600, 30):
         for rom, base in (("28FF3A1C92160341", -18.0),
@@ -413,11 +556,23 @@ def test_dashboards():
                           ("28FFD1082B640F19", 6.2)):
             store.note_sensor(rom, now - offset)
             store.measurement(now - offset, f"temp.rom.{rom}", base)
+        for metric, value in (("temp.rp2040_die", 32.0),
+                              ("temp.pi_soc", 52.0),
+                              ("coinbox.mass_g", 120.0),
+                              ("link.age_s", 1.2),
+                              ("health.faults", 0.0)):
+            store.measurement(now - offset, metric, value)
+
     store._conn.execute(
         "UPDATE sensor SET zone_label = CASE rom_code "
         "WHEN '28FF3A1C92160341' THEN 'freezer' "
         "WHEN '28FF7B4E5501A2C7' THEN 'fridge_top' "
         "ELSE 'fridge_bottom' END")
+
+    store.door_opened(now - 500)
+    store.door_closed(now - 480)
+    store.door_opened(now - 300)
+    store.door_closed(now - 90)
     store.flush(force=True)
 
     for path in files:
@@ -437,6 +592,14 @@ def test_dashboards():
                 except sqlite3.Error as exc:
                     ok, detail = False, str(exc)
                 check(f"{title[:38]}: query runs ({detail})", ok)
+
+                # A query that parses and returns nothing is a blank panel, and
+                # blank is how a broken panel looks on the Pi. The fixture above
+                # populates every table these panels read, so zero rows here
+                # means the query is wrong, not that the fridge is quiet.
+                if ok:
+                    check(f"{title[:38]}: returns data for the fixture",
+                          len(rows) > 0)
 
                 # A time column named here but absent from the result means the
                 # panel plots nothing, with no error anywhere.
@@ -489,7 +652,7 @@ def test_end_to_end():
     check(f"reboots are recorded ({boots} boot rows)", boots >= 2)
     check("no frame was silently lost: every line is in raw_line",
           frames + rejected == link.frames_in + link.ignored + link.bad)
-    check("nothing unexpected arrived (D1 sends only BOOT and HB)",
+    check("every message type the board sends has a handler",
           ingest.unhandled == {})
     store.close()
 
@@ -504,6 +667,8 @@ if __name__ == "__main__":
     test_link()
     test_ingest()
     test_fake_board()
+    test_door_model()
+    test_door_and_health_ingest()
     test_dashboards()
     test_end_to_end()
 

@@ -101,14 +101,22 @@ That re-runs every panel query against the schema and checks the export kept
 — the two fields whose loss would silently break the dashboard on a fresh
 install.
 
-### Avoiding the collision entirely
+### Who owns the file, and when
 
-Once you start styling, **you own `fridge-overview.json`.** Later stages add
-their panels as separate files or as JSON to paste in, rather than editing that
-one — because a three-way merge of a 10,000-line generated JSON file is not
-something anybody should have to do.
+**Until the panels are all built: the repo owns it.** Stages D3–D7 add their
+panels to `dashboards/fridge-overview.json` directly, so each arrives laid out
+and query-tested. Pull and re-run `setup-pi.sh` freely — there is nothing in
+Grafana's database to lose, because nothing has been styled yet.
 
-Once the design has settled, set `allowUiUpdates: false` in
+**Once you start styling: you own it.** From that point `export-dashboard.sh`
+before every pull, and whoever is adding panels adds them as a separate
+dashboard file instead of editing yours. A three-way merge of a generated
+10,000-line JSON file is not something anybody should have to do.
+
+The handover is deliberate rather than a date: it happens the first time you
+press Save in the browser. Say so, and panel work moves out of this file.
+
+When the design has settled for good, set `allowUiUpdates: false` in
 `provisioning/dashboards/fridge.yml` and re-run the script. The files become the
 source of truth again and a stray browser edit can no longer diverge from git.
 

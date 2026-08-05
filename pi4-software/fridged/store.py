@@ -353,6 +353,44 @@ class Store:
         self.rows_written += 1
         return cur.lastrowid
 
+    def door_opened(self, ts):
+        """Record the door opening. `duration_s` is filled in when it shuts."""
+        self._conn.execute(
+            "INSERT INTO door_event (ts, state, duration_s) "
+            "VALUES (?, 'open', NULL)", (ts,))
+        self.rows_written += 1
+
+    def door_closed(self, ts):
+        """Record the door shutting, and close off the open it belongs to.
+
+        Returns the duration in seconds, or None if no open was outstanding —
+        which happens legitimately when the service starts while the door is
+        already open, and is worth knowing rather than silently treating as zero.
+
+        Immediate rather than batched: the UPDATE has to see the INSERT that the
+        matching open produced, and a batch could still be holding it.
+        """
+        self._conn.execute(
+            "INSERT INTO door_event (ts, state, duration_s) "
+            "VALUES (?, 'closed', NULL)", (ts,))
+
+        # The most recent open that has not been closed off yet. Scoped by
+        # `duration_s IS NULL` rather than by "the last row", so a missed close
+        # leaves one unterminated open behind instead of corrupting the next one.
+        row = self._conn.execute(
+            "SELECT rowid, ts FROM door_event "
+            "WHERE state = 'open' AND duration_s IS NULL "
+            "ORDER BY ts DESC LIMIT 1").fetchone()
+        self.rows_written += 1
+        if row is None:
+            return None
+
+        rowid, opened_ts = row
+        duration = ts - opened_ts
+        self._conn.execute("UPDATE door_event SET duration_s = ? WHERE rowid = ?",
+                           (duration, rowid))
+        return duration
+
     def note_sensor(self, rom_code, ts, kind="ds18b20"):
         """Make sure a ROM code has a row, without disturbing its zone label.
 
