@@ -1,0 +1,13 @@
+# One nightly backup. Triggered by fridge-backup.timer, not enabled directly.
+
+[Unit]
+Description=Back up the fridge database
+Documentation=file:/etc/systemd/system/fridge-backup.service
+
+[Service]
+Type=oneshot
+User=__USER__
+Group=grafana
+UMask=0002
+EnvironmentFile=/etc/default/fridged
+ExecStart=/bin/bash __WORKDIR__/deploy/backup.sh

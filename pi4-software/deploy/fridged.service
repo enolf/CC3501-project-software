@@ -1,0 +1,56 @@
+# The fridge data service, under systemd.
+#
+# Installed to /etc/systemd/system/fridged.service by deploy/install.sh.
+# Everything that varies between machines lives in /etc/default/fridged, so
+# switching from the simulator to the real board is one line in a config file
+# rather than an edit to this unit.
+
+[Unit]
+Description=Smart fridge data service (serial link -> SQLite)
+Documentation=file:%h/CC3501-project-software/pi4-software/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+
+# Primary group `grafana`, so every file this service creates is group-readable
+# and group-writable by Grafana. SQLite CANNOT open a WAL database read-only —
+# a reader has to write the -shm wal-index — so Grafana needs write access to
+# fridge.db and to the -wal and -shm files beside it.
+Group=grafana
+
+# 0002 keeps the group-write bit on files this service creates. fridged also
+# sets this itself, deliberately duplicated: the daemon should not depend on
+# being launched correctly, and the unit should not depend on the daemon
+# remembering.
+UMask=0002
+
+EnvironmentFile=/etc/default/fridged
+WorkingDirectory=__WORKDIR__
+ExecStart=/usr/bin/python3 -m fridged $FRIDGED_ARGS
+
+# fridged installs a SIGTERM handler that flushes the pending write batch before
+# exiting. Without it, every restart would silently discard up to
+# FLUSH_INTERVAL_S of rows and punch a small invisible hole in the history.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+Restart=always
+RestartSec=5
+
+# Journal only. The service logs through Python's logging module, and a second
+# copy in a file nobody rotates is how a Pi fills its SD card.
+StandardOutput=journal
+StandardError=journal
+
+# Modest hardening. Not a security boundary — this is a LAN appliance — but
+# these cost nothing and narrow the blast radius of a mistake.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/fridge
+
+[Install]
+WantedBy=multi-user.target

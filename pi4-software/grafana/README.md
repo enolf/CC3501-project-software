@@ -236,14 +236,20 @@ it returns nothing, `fridged` is not writing and Grafana is innocent.
 
 ## What is deliberately not here yet
 
-- **No systemd unit for `fridged`** — stage D8. Until then run it in `tmux` or a
-  terminal. It handles `SIGTERM` cleanly already, so the unit will be short.
-- **No mDNS hostname.** `fridge.local:3000` needs Avahi and a DHCP reservation,
-  also D8. Use the IP for now.
-- **No backup.** The database is one file, so a nightly `cp` is enough, but it is
-  not set up.
-- **No alerting.** Discord contact point and the temperature / door-left-open
-  rules are stage D7.
+- ~~**No systemd unit for `fridged`**~~ — **done.** `bash deploy/install.sh`
+  makes it a service that starts at boot and restarts on crash. See
+  [../deploy/](../deploy/), which also covers swapping the simulated parts for
+  real ones.
+- ~~**No backup.**~~ **Done**, nightly at 03:30 into `/var/lib/fridge/backups`.
+  It uses `sqlite3 .backup`, **not** `cp`: a WAL database is three files, and
+  copying one of them while it is being written captures a database missing
+  every commit still in the write-ahead log.
+- **mDNS** — `http://<hostname>.local:3000` usually works already on Raspberry
+  Pi OS, which ships avahi. Try it before installing anything; details in
+  ../deploy/README.md.
+- **No alerting**, deliberately. Dropped at the user's request: without a
+  notification channel a Grafana alert rule is only a coloured state, and the
+  longest-open tile already turns red.
 - **No admin password set.** Anonymous viewing is on and the admin account is
   still `admin`/`admin`. Fine on a bench, not fine on the society network —
   change it in the UI before this goes up anywhere.

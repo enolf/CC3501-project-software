@@ -1,0 +1,30 @@
+# Runtime configuration for fridged. Installed to /etc/default/fridged.
+#
+# THIS IS THE FILE YOU EDIT to swap a simulated part for a real one. The systemd
+# unit never changes; after editing here:
+#
+#     sudo systemctl restart fridged
+#     journalctl -u fridged -f
+#
+# Not in git once installed: it is machine-local, and the copy in deploy/ is a
+# template.
+
+# Where the database lives. Must match the path in the Grafana datasource
+# (grafana/provisioning/datasources/sqlite.yml), and must be a directory the
+# `grafana` group can write — see the note about WAL in fridged.service.
+FRIDGE_DB=/var/lib/fridge/fridge.db
+
+# Arguments to `python3 -m fridged`.
+#
+# Swap ONE THING AT A TIME and confirm it before the next, so a failure has one
+# possible cause instead of three. The intended order is in deploy/README.md:
+#
+#   1. the board      --port sim          ->  --port /dev/ttyACM0
+#   2. card payments  --square fake       ->  --square real
+#   3. the camera     (simulated shelf)   ->  picapture, when it exists
+#
+# Simulated board, busy enough to watch:
+FRIDGED_ARGS=--port sim --sim-activity 30 --square fake
+
+# Real board, real Square, once you get there:
+# FRIDGED_ARGS=--port /dev/ttyACM0 --square real
