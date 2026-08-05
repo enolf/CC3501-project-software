@@ -6,7 +6,10 @@ place the sim/real choice is made, so there is exactly one place to look when
 asking which configuration is running.
 
     python -m fridged --port sim                    simulated board
-    python -m fridged --port sim --sim-speed 200    a day of fridge in minutes
+    python -m fridged --port sim --sim-activity 30  a busy fridge, for
+                                                   watching a live dashboard
+    python -m fridged --port sim --sim-speed 200    a day of fridge in minutes,
+                                                   for exercising reboots
     python -m fridged --port COM7                   the real board (Windows)
     python -m fridged --port /dev/ttyACM0           the real board (Pi)
 """
@@ -38,7 +41,8 @@ def build_transport(args):
         from fake_board import FakeBoard  # tools/, on the path via __init__.py
         log.warning("SIMULATED BOARD - no hardware involved, "
                     "speed=%gx seed=%s", args.sim_speed, args.sim_seed)
-        return FakeBoard(speed=args.sim_speed, seed=args.sim_seed)
+        return FakeBoard(speed=args.sim_speed, seed=args.sim_seed,
+                         activity=args.sim_activity)
 
     try:
         import serial
@@ -80,6 +84,13 @@ def parse_args(argv=None):
     parser.add_argument(
         "--sim-seed", type=int, default=None,
         help="seed the simulator's RNG so a run is reproducible")
+    parser.add_argument(
+        "--sim-activity", type=float, default=1.0,
+        help="how heavily the simulated fridge is used. 1 is realistic (~34 "
+             "door opens a day); 30 gives one every couple of minutes, which "
+             "is what you want when watching a live dashboard. Unlike "
+             "--sim-speed this does not distort the clock, so timestamps stay "
+             "honest. Ignored unless --port sim")
     parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"])

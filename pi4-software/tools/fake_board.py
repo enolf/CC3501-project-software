@@ -158,8 +158,16 @@ class DoorSchedule:
     Works entirely in absolute unix time, for the same reason.
     """
 
-    def __init__(self, rng, start_unix):
+    def __init__(self, rng, start_unix, activity=1.0):
         self.rng = rng
+        #: Multiplier on the opening rate. 1.0 is a realistic society fridge —
+        #: about 34 opens a day. Higher values do NOT distort time: the clock
+        #: still runs at its normal speed and every timestamp is honest, the
+        #: fridge is simply used more. That is what makes it usable for watching
+        #: a live dashboard, where `--sim-speed` is not: speeding the clock up
+        #: compresses hours of events into the few seconds of wall time the Pi
+        #: stamps them with, giving a vertical wall of points instead of a graph.
+        self.activity = activity
         #: (open_time, close_time) pairs, in order and non-overlapping.
         self.intervals = []
         #: (time, is_open) edges, in order. What the board actually emits.
@@ -186,7 +194,7 @@ class DoorSchedule:
         peak rate allows.
         """
         peak = max(HOUR_WEIGHT)
-        rate = (OPENS_PER_DAY / 86400.0) * peak
+        rate = (OPENS_PER_DAY / 86400.0) * peak * self.activity
         while True:
             t += self.rng.expovariate(rate)
             # Local time, not UTC: the busy periods have to land at local
@@ -313,7 +321,8 @@ class FakeBoard:
     """
 
     def __init__(self, speed=1.0, seed=None, corruption_rate=CORRUPTION_RATE,
-                 reboot_interval_hours=REBOOT_INTERVAL_HOURS, zones=None):
+                 reboot_interval_hours=REBOOT_INTERVAL_HOURS, zones=None,
+                 activity=1.0):
         self.speed = float(speed)
         self.corruption_rate = corruption_rate
         self.reboot_interval_s = reboot_interval_hours * 3600.0
@@ -356,7 +365,7 @@ class FakeBoard:
         #: board's timers. A fridge door does not care that the microcontroller
         #: restarted, and pretending otherwise would hide the case where the
         #: board misses an edge because it was down.
-        self.door = DoorSchedule(self.rng, self._unix_start)
+        self.door = DoorSchedule(self.rng, self._unix_start, activity)
         self._door_index = 0
         self.door_open = False
 
