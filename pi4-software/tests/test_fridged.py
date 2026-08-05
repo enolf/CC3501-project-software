@@ -285,21 +285,42 @@ def test_ingest():
 
 # --- The simulated board ----------------------------------------------------
 
-def collect(board, until_sim_s):
-    """Run the board and return every line it emits."""
-    import time as _time
-    raw = bytearray()
-    while board.sim_time() < until_sim_s:
-        raw += board.read(65536)
-        _time.sleep(0.001)
-    return [r.decode("utf-8", "replace").strip()
-            for r in bytes(raw).split(b"\n") if r.strip()]
+#: Simulated seconds per step. Smaller than the shortest interval that matters
+#: (the 10 s heartbeat), so nothing is ever generated in a lump.
+STEP_S = 5.0
+
+
+def run_simulated(board, total_sim_s, on_bytes=None):
+    """Drive the board over `total_sim_s` of simulated time, deterministically.
+
+    The clock is STEPPED rather than raced. A wall-clock version of this covered
+    however much simulated time the host managed to get through, which made
+    every count in the tests a measurement of the machine rather than of the
+    code — the end-to-end test drained 8,591 frames on a laptop and 404 on a
+    Pi 4, and failed on the Pi for no reason that had anything to do with a bug.
+
+    Each step drains until the board goes quiet, because `_pump()` returns early
+    on a reboot and leaves the rest of that moment's traffic for the next call.
+    """
+    collected = bytearray()
+    for _ in range(int(total_sim_s / STEP_S)):
+        board.advance(STEP_S)
+        while True:
+            chunk = board.read(65536)
+            if not chunk:
+                break
+            if on_bytes is None:
+                collected += chunk
+            else:
+                on_bytes(chunk)
+    return bytes(collected)
 
 
 def test_fake_board():
     print("\n--- fake board ---")
-    board = FakeBoard(speed=20_000.0, seed=11)
-    lines = collect(board, 8 * 3600)
+    board = FakeBoard(seed=11)
+    lines = [r.decode("utf-8", "replace").strip()
+             for r in run_simulated(board, 8 * 3600).split(b"\n") if r.strip()]
     frames = [f for f in (protocol.parse(line) for line in lines) if f]
 
     # THE regression test for this simulator. One pump pass can cover minutes of
@@ -438,18 +459,22 @@ def test_dashboards():
 def test_end_to_end():
     print("\n--- end to end: fake board -> link -> ingest -> sqlite ---")
     store = Store(temp_db()).open()
-    board = FakeBoard(speed=50_000.0, seed=3)
+    board = FakeBoard(seed=3)
     link = Link(board)
     ingest = Ingest(store, link)
 
-    # ~12 simulated hours, which is long enough to cross the 6-hour reboot
-    # interval and produce both kinds of boot record.
-    import time as _time
-    while board.sim_time() < 12 * 3600:
-        for event in link.poll():
-            ingest.handle(event)
+    # 14 simulated hours: long enough to cross the 6-hour reboot interval twice,
+    # so "reboots are recorded" is not riding on a single boundary. The clock is
+    # stepped, so this covers exactly 14 hours on any machine.
+    for _ in range(int(14 * 3600 / STEP_S)):
+        board.advance(STEP_S)
+        while True:
+            events = link.poll()
+            if not events:
+                break
+            for event in events:
+                ingest.handle(event)
         store.flush()
-        _time.sleep(0.001)
     store.flush(force=True)
 
     frames = store._conn.execute(

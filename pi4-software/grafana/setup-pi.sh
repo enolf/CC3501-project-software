@@ -110,6 +110,23 @@ if [[ -f "${DB_DIR}/fridge.db" ]]; then
     sudo chmod -R g+rw "${DB_DIR}"
 fi
 
+# Both processes must be able to write all three SQLite files, and ownership
+# depends on which one got there first: Grafana creates the -shm and -wal as
+# `grafana`, fridged creates them as you. The setgid directory makes the GROUP
+# `grafana` either way, so group membership is what makes it symmetric.
+#
+# Without this, a -shm created by Grafana is grafana:grafana 0664 and fridged
+# cannot write it — the same order-dependent failure the UMask drop-in below
+# addresses from the other side.
+NEEDS_RELOGIN=0
+if id -nG "${USER}" | tr ' ' '\n' | grep -qx grafana; then
+    echo "    ${USER} is already in the grafana group"
+else
+    sudo usermod -aG grafana "${USER}"
+    NEEDS_RELOGIN=1
+    echo "    added ${USER} to the grafana group"
+fi
+
 # --- 3. Provisioning --------------------------------------------------------
 
 say "Installing provisioning files into ${PROV_DIR}"
@@ -192,6 +209,20 @@ systemctl is-active --quiet grafana-server \
     || { echo "    NOT running - sudo journalctl -u grafana-server -n 40"; exit 1; }
 
 # --- Done -------------------------------------------------------------------
+
+if [[ "${NEEDS_RELOGIN}" -eq 1 ]]; then
+    cat <<'EOF'
+
+  ****************************************************************
+  *  LOG OUT AND BACK IN before running fridged.                 *
+  *                                                              *
+  *  You were just added to the `grafana` group, and group       *
+  *  membership is only picked up by a new login session. Until  *
+  *  then fridged may fail to write fridge.db-shm if Grafana     *
+  *  created it first.  `id -nG` should list grafana.            *
+  ****************************************************************
+EOF
+fi
 
 cat <<EOF
 

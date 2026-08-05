@@ -153,6 +153,10 @@ class FakeBoard:
 
         self._wall_start = time.monotonic()
 
+        #: None while the board follows the wall clock (the live case). Set by
+        #: advance(), which tests use to make timing independent of host speed.
+        self._manual_t = None
+
         # Where this simulated fridge sits on the real calendar. The thermal
         # model is a function of absolute time, not of time-since-boot, so that
         # seeded history (fridged/seed.py, which uses unix timestamps) and this
@@ -181,7 +185,27 @@ class FakeBoard:
 
     def sim_time(self):
         """Seconds of simulated time since this board was created."""
+        if self._manual_t is not None:
+            return self._manual_t
         return (time.monotonic() - self._wall_start) * self.speed
+
+    def advance(self, seconds):
+        """Step the simulated clock by hand instead of following the wall clock.
+
+        Calling this once switches the board to a manual clock for good.
+
+        WHY TESTS NEED THIS. With the wall clock, how much simulated time a test
+        covers depends on how many times the host manages to go round the loop —
+        so the same test drained 8,591 frames on a laptop and 404 on a Pi 4, and
+        an assertion about reboots happening passed on one and failed on the
+        other. The test was measuring the host's speed, not the simulator's
+        behaviour.
+
+        Stepping the clock explicitly makes a test deterministic on any machine.
+        Live runs keep the wall clock, which is the whole point of `--sim-speed`.
+        """
+        self._manual_t = (0.0 if self._manual_t is None else self._manual_t)
+        self._manual_t += seconds
 
     def unix_time(self, at=None):
         """The simulated fridge's position on the real calendar.
