@@ -24,13 +24,18 @@ log = logging.getLogger("fridged.ingest")
 class Ingest:
     """Turns link events into database rows."""
 
-    def __init__(self, store, link, camera=None):
+    def __init__(self, store, link, camera=None, payments=None):
         self.store = store
         self.link = link
         #: Answers CMD SCAN. None means stock is not wired up, which
         #: is a warning rather than a failure - every other metric
         #: still works without a camera.
         self.camera = camera
+        #: Answers CMD SQUARE_LINK. None means card payments are not
+        #: configured, which is answered with SQUARE_ERR rather than
+        #: silence - the board would otherwise sit on 'Contacting payment
+        #: service' until its own timeout.
+        self.payments = payments
 
         #: Which `boot` row everything currently belongs to. None until the first
         #: frame arrives — we may have been started before the board, or after.
@@ -345,6 +350,71 @@ class Ingest:
             return float(raw)
         except (TypeError, ValueError):
             return None
+
+    # --- Card payments ------------------------------------------------------
+
+    def _on_square_link(self, frame, ts):
+        """`CMD SQUARE_LINK cents= id= desc=` — make a checkout.
+
+        Answered asynchronously: the reply goes out from `drain_payments()` when
+        the network call finishes, because doing it here would stall the loop
+        that also drains the serial link.
+        """
+        txn_id = protocol.u32(frame.payload, "id")
+        cents = protocol.u32(frame.payload, "cents")
+        if txn_id is None or cents is None:
+            log.warning("SQUARE_LINK missing id= or cents=: %s", frame.payload)
+            return
+        if self.payments is None:
+            self.link.send("RSP", "SQUARE_ERR", f"id={txn_id} reason=nopayments")
+            return
+
+        # `desc` becomes the line item on the customer's receipt, so it should
+        # say what they bought rather than "Test Drink" (decision D20).
+        description = protocol.field(frame.payload, "desc") or "Fridge drinks"
+        self.payments.request_link(txn_id, cents, description)
+
+    def _on_square_cancel(self, frame, ts):
+        """`CMD SQUARE_CANCEL id=` — the customer changed their mind.
+
+        May name a link that does not exist yet: the board can give up while the
+        Square API call is still in flight, and that is exactly the case where an
+        orphaned live link would otherwise be created and never killed. The
+        payment service remembers the cancellation and applies it on arrival.
+        """
+        txn_id = protocol.u32(frame.payload, "id")
+        if txn_id is None or self.payments is None:
+            return
+        self.payments.request_cancel(txn_id)
+
+    def drain_payments(self):
+        """Turn finished Square work into frames. Called every service pass."""
+        if self.payments is None:
+            return
+        for result in self.payments.drain():
+            kind, txn_id = result[0], result[1]
+            if kind == "url":
+                self.link.send("RSP", "SQUARE_URL", f"id={txn_id} url={result[2]}")
+            elif kind == "error":
+                self.link.send("RSP", "SQUARE_ERR",
+                               f"id={txn_id} reason={result[2]}")
+            elif kind == "paid":
+                self.link.send("EVT", "SQUARE_PAID",
+                               f"id={txn_id} order={result[2]}")
+            elif kind == "cancelled":
+                ok = 1 if result[2] else 0
+                if not ok:
+                    # The link is still payable. Worth a warning: it is money
+                    # that can still arrive against a transaction nobody expects.
+                    log.warning("cancel for txn %s did not take", txn_id)
+                self.link.send("RSP", "SQUARE_CANCELLED", f"id={txn_id} ok={ok}")
+            elif kind == "late_paid":
+                _, _, order_id, cents = result
+                log.error("LATE PAYMENT on txn %s (order %s, %d cents) - "
+                          "a refund is owed and must be issued by hand",
+                          txn_id, order_id, cents)
+                self.link.send("EVT", "SQUARE_LATE_PAID",
+                               f"id={txn_id} order={order_id} cents={cents}")
 
     # --- Our own telemetry --------------------------------------------------
 

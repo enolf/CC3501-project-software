@@ -23,6 +23,7 @@ import time
 
 from . import config
 from .camera import SimCamera
+from .payments import BACKENDS, PaymentService
 from .ingest import Ingest
 from .link import Link
 from .store import SCHEMA_VERSION, Store
@@ -94,6 +95,12 @@ def parse_args(argv=None):
              "--sim-speed this does not distort the clock, so timestamps stay "
              "honest. Ignored unless --port sim")
     parser.add_argument(
+        "--square", default="fake", choices=sorted(BACKENDS),
+        help="card payments: 'fake' needs no credentials or network; 'real' "
+             "talks to the Square account configured in "
+             "online-payment/tokens.py. Independent of --port, so a real "
+             "payment can be taken against a simulated board")
+    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     return parser.parse_args(argv)
@@ -139,7 +146,13 @@ def main(argv=None):
     # Stage D8 swaps this for a picapture subprocess. The board cannot
     # tell the difference: it sends CMD SCAN and something answers.
     camera = SimCamera(random.Random(args.sim_seed))
-    ingest = Ingest(store, link, camera)
+
+    # Independent of --port on purpose: a REAL payment against a SIMULATED
+    # board is the hybrid test in plan.md stage 15.5, and it works because
+    # the board cannot tell who answers CMD SQUARE_LINK.
+    payments = PaymentService(BACKENDS[args.square]())
+    log.info("card payments: %s", payments.backend.name)
+    ingest = Ingest(store, link, camera, payments)
 
     next_status = time.monotonic() + config.SELF_METRIC_INTERVAL_S
     log.info("running - Ctrl-C to stop")
@@ -149,6 +162,7 @@ def main(argv=None):
             for event in link.poll():
                 ingest.handle(event)
 
+            ingest.drain_payments()
             ingest.tick()
             store.flush()
 
@@ -172,6 +186,7 @@ def main(argv=None):
         # which matters more than it sounds: the batch is up to five seconds of
         # data, and losing it every time the service is restarted would put
         # small holes throughout the history.
+        payments.close()
         store.close()
         link.close()
         log.info("wrote %d rows; frames in=%d out=%d bad=%d",

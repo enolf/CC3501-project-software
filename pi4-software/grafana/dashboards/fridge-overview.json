@@ -1915,6 +1915,401 @@
       }
     },
     {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Theft rate",
+      "description": "Share of completed transactions that ended unpaid, in six-hour buckets. The central question for an honour-system fridge (dashboard.md section 10) - a single number says little, the trend says whether it is getting worse.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 65
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts_end\", 21600) AS ts,\n       100.0 * SUM(CASE WHEN outcome = 'stolen' THEN 1 ELSE 0 END)\n             / COUNT(*) AS \"Theft rate\"\nFROM txn\nWHERE outcome IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts_end\", 21600) AS ts,\n       100.0 * SUM(CASE WHEN outcome = 'stolen' THEN 1 ELSE 0 END)\n             / COUNT(*) AS \"Theft rate\"\nFROM txn\nWHERE outcome IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 41,
+      "type": "barchart",
+      "title": "Unpaid units per drink",
+      "description": "Which drinks walk out without being paid for.\n\nINCOMPLETE, and the reason is a firmware gap rather than a query: an abandoned CARD sale sends no TXN_START, so it arrives with no item list and cannot appear here (dashboard.md section 6.2). What is shown is real; the total is an undercount. Fixing notify_sale() to fire on entering PaymentSelect would close it.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 65
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT i.drink AS \"Drink\", SUM(i.qty) AS \"Unpaid units\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'stolen' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT i.drink AS \"Drink\", SUM(i.qty) AS \"Unpaid units\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'stolen' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "Board resets",
+      "description": "How many times the RP2040 restarted in this range. A cheap reliability metric: every reset is a transaction that may have been interrupted. Seeded history is excluded - it has one synthetic boot row that would otherwise read as a reset that never happened.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 73
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COUNT(*) AS \"Resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COUNT(*) AS \"Resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "Mean time between resets",
+      "description": "Blank until there have been at least two resets, which is correct rather than broken: one reset gives no interval to average.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 73
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT CASE WHEN COUNT(*) > 1\n            THEN (MAX(ts) - MIN(ts)) / (COUNT(*) - 1)\n       END AS \"Mean time between resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT CASE WHEN COUNT(*) > 1\n            THEN (MAX(ts) - MIN(ts)) / (COUNT(*) - 1)\n       END AS \"Mean time between resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 3600
+              },
+              {
+                "color": "green",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 44,
+      "type": "table",
+      "title": "Temperature recovery - the ten longest door opens",
+      "description": "What each long door open actually did to the top shelf: the average temperature in the five minutes before it, the peak reached during and shortly after, and the difference.\n\nCosts no new hardware and no new message - it is a query over the door and temperature data already being collected, which is what makes it good report material (dashboard.md section 10). Top shelf because it sits behind the door and notices most; the freezer barely moves.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 77
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "WITH longest AS (\n  SELECT ts, duration_s FROM door_event\n  WHERE state = 'open' AND duration_s IS NOT NULL\n    AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  ORDER BY duration_s DESC LIMIT 10)\nSELECT DATETIME(l.ts, 'unixepoch', 'localtime') AS \"When\",\n       ROUND(l.duration_s)                        AS \"Open (s)\",\n       ROUND((SELECT AVG(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Before\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts\n                            AND l.ts + l.duration_s + 300), 2) AS \"Peak\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts AND l.ts + l.duration_s + 300)\n             - (SELECT AVG(celsius) FROM temperature\n                WHERE zone = 'fridge_top'\n                  AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Rise\"\nFROM longest l\nORDER BY l.duration_s DESC",
+          "rawQueryText": "WITH longest AS (\n  SELECT ts, duration_s FROM door_event\n  WHERE state = 'open' AND duration_s IS NOT NULL\n    AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  ORDER BY duration_s DESC LIMIT 10)\nSELECT DATETIME(l.ts, 'unixepoch', 'localtime') AS \"When\",\n       ROUND(l.duration_s)                        AS \"Open (s)\",\n       ROUND((SELECT AVG(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Before\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts\n                            AND l.ts + l.duration_s + 300), 2) AS \"Peak\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts AND l.ts + l.duration_s + 300)\n             - (SELECT AVG(celsius) FROM temperature\n                WHERE zone = 'fridge_top'\n                  AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Rise\"\nFROM longest l\nORDER BY l.duration_s DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rise"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "#EAB839",
+                      "value": 2
+                    },
+                    {
+                      "color": "red",
+                      "value": 4
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Before"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Peak"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
       "id": 5,
       "type": "table",
       "title": "Sensors — name a new one here",
@@ -1923,7 +2318,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 65
+        "y": 85
       },
       "datasource": {
         "type": "frser-sqlite-datasource",

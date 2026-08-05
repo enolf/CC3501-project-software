@@ -221,7 +221,7 @@ def _coins_for(rng, owed_cents):
     return coins
 
 
-def plan_transaction(rng, txn_id, closed_at, items, owed):
+def plan_transaction(rng, txn_id, closed_at, items, owed, method=None):
     """The frames for one purchase, exactly as the firmware would send them.
 
     Returns `(at, prefix, type, payload)` tuples in time order. A pure function
@@ -250,7 +250,10 @@ def plan_transaction(rng, txn_id, closed_at, items, owed):
     frames = []
     item_text = ",".join(f"{name}:{n}" for name, n in items.items())
     abandoned = rng.random() < ABANDON_RATE
-    cash = rng.random() < CASH_SHARE
+    # `method` is forced by the live board, which runs the card branch itself so
+    # it can do the actual Square round trip. Left None it picks one, which is
+    # what the seeder wants: seeding the PAST must not create real checkouts.
+    cash = (method == "cash") if method else (rng.random() < CASH_SHARE)
     method = "cash" if cash else "card"
     at = closed_at + rng.uniform(*CASH_DECIDE_S)
 
@@ -524,6 +527,8 @@ class FakeBoard:
         self._inv_before = None
         self._expect_before = False
         self._expect_after = None
+        #: A card payment waiting on Square, or None.
+        self._card = None
         #: Frames whose moment has not arrived yet, kept sorted by time.
         #: A transaction runs for minutes, so appending its frames to the
         #: current pass would emit them with future timestamps and the
@@ -756,9 +761,19 @@ class FakeBoard:
                       (at, self._seq, prefix, type_, payload))
 
     def _run_transaction(self, txn_id, closed_at, items, owed):
-        """Schedule one purchase, and put its coins in the box."""
+        """Schedule one purchase, and put its coins in the box.
+
+        The CARD branch is run here rather than in `plan_transaction`, because
+        it is not a script: the board asks the Pi for a checkout, waits for the
+        URL, shows a QR and waits again for the payment. Only the cash branch is
+        knowable in advance.
+        """
+        if self.rng.random() >= CASH_SHARE:
+            self._start_card_payment(txn_id, closed_at, items, owed)
+            return
+
         for at, prefix, type_, payload in plan_transaction(
-                self.rng, txn_id, closed_at, items, owed):
+                self.rng, txn_id, closed_at, items, owed, method="cash"):
             self._schedule(at, prefix, type_, payload)
             if type_ in ("COIN", "COIN_REJECT"):
                 # Rejected mass goes in the box too. A washer that is not
@@ -767,6 +782,50 @@ class FakeBoard:
                 # exactly what the cash reconciliation check exists to find
                 # (dashboard.md section 11).
                 self._add_to_box(float(payload.split("delta_g=")[1]))
+
+    def _start_card_payment(self, txn_id, closed_at, items, owed):
+        """Ask the Pi for a checkout and wait. `PayOnlineLink` in the firmware.
+
+        Note what is NOT sent here: no `TXN_START`. The firmware only calls
+        `notify_sale()` on completion for a card sale, which is why an abandoned
+        one leaves no item list at all (dashboard.md section 6.2). Faithfully
+        reproduced, because the panels have to cope with it.
+        """
+        at = closed_at + self.rng.uniform(*CASH_DECIDE_S)
+        description = ",".join(f"{n}x{name}" for name, n in items.items())
+        self._schedule(at, "CMD", "SQUARE_LINK",
+                       f"cents={owed} id={txn_id} desc={description}")
+        self._card = {"txn_id": txn_id, "items": items, "owed": owed,
+                      "abandoned": self.rng.random() < ABANDON_RATE,
+                      "at": at}
+
+        if self._card["abandoned"]:
+            # The customer walks off. The board cancels on timeout as well as on
+            # the back button (decision D19), or a transaction already written
+            # off as stolen could still be paid five minutes later.
+            give_up = at + 120.0
+            self._schedule(give_up, "CMD", "SQUARE_CANCEL", f"id={txn_id}")
+            self._schedule(give_up, "EVT", "TXN_END",
+                           f"id={txn_id} outcome=stolen owed={owed} paid=0")
+            self._card = None
+
+    def _handle_square_paid(self, payload):
+        """`EVT SQUARE_PAID` — the money arrived. `PayOnlineQr -> ThankYou`."""
+        if self._card is None:
+            return
+        txn_id = protocol.u32(payload, "id")
+        if txn_id is not None and txn_id != self._card["txn_id"]:
+            return
+
+        card, self._card = self._card, None
+        item_text = ",".join(f"{name}:{n}" for name, n in card["items"].items())
+        at = max(self.sim_time(), card["at"])
+        self._schedule(at, "EVT", "TXN_START",
+                       f"id={card['txn_id']} items={item_text} "
+                       f"owed={card['owed']} method=card")
+        self._schedule(at, "EVT", "TXN_END",
+                       f"id={card['txn_id']} outcome=paid "
+                       f"owed={card['owed']} paid={card['owed']}")
 
     def _handle_inventory(self, payload):
         """An `EVT INV` arrived. Diff it, and start a sale if anything left.
@@ -834,6 +893,8 @@ class FakeBoard:
             self.frames_in += 1
             if frame.type == "INV":
                 self._handle_inventory(frame.payload)
+            elif frame.type == "SQUARE_PAID":
+                self._handle_square_paid(frame.payload)
         return len(data)
 
     def flush(self):

@@ -62,6 +62,43 @@ Open `http://<pi-address>:3000` and pick *Fridge — Overview*.
 
 ---
 
+## Card payments
+
+`fridged` answers `CMD SQUARE_LINK` from the board and reports the payment back.
+Two backends, chosen with `--square`:
+
+```bash
+python3 -m fridged --port sim                 # --square fake, the default
+python3 -m fridged --port sim --square real   # the real Square account
+```
+
+**`fake` needs no credentials and no network** — a canned URL after a second,
+marked paid a few seconds later. That is what the tests use and what the default
+gives you.
+
+**`real` needs `online-payment/tokens.py`** with `SQUARE_ACCESS_TOKEN` and
+`LOCATION_ID`, and `pip`-free installs of `requests`:
+
+```bash
+sudo apt install python3-requests
+```
+
+`square.py` is imported **lazily**, only when `--square real` is passed — it
+reads the access token while being imported, so an eager import would stop
+`fridged` starting on any machine without credentials, including every machine
+that only ever wanted the simulator.
+
+`--square` is independent of `--port`, so a **real payment against a simulated
+board** works: the board cannot tell who answers `CMD SQUARE_LINK`. That is the
+hybrid test in plan.md stage 15.5.
+
+> Square is still on the **sandbox** (`SANDBOX = True` in `square.py`). Moving to
+> production needs three changes, not one: that flag, plus a production token and
+> location id. And the sandbox keys have been pasted into a chat log — rotate
+> them before anything touches a real account.
+
+---
+
 ## Styling the dashboard
 
 `allowUiUpdates` is **true** while the layout is being designed, so the Save

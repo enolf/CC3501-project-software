@@ -675,6 +675,98 @@ def test_stock():
     store.close()
 
 
+# --- Card payments -----------------------------------------------------------
+
+def wait_for(service, kinds, timeout=20.0):
+    """Collect results until every kind in `kinds` has been seen, or time out."""
+    seen = {}
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not set(kinds) <= set(seen):
+        for result in service.drain():
+            seen[result[0]] = result
+        time.sleep(0.05)
+    return seen
+
+
+def test_payments():
+    print("\n--- card payments ---")
+    from fridged.payments import BACKENDS, FakeSquare, PaymentService
+
+    check("both backends are selectable by name",
+          set(BACKENDS) == {"fake", "real"})
+
+    # The happy path: link, then payment.
+    service = PaymentService(FakeSquare())
+    service.request_link(7, 400, "2xCoke")
+    seen = wait_for(service, ("url", "paid"))
+    check("a checkout link comes back", "url" in seen and seen["url"][1] == 7)
+    check("and the payment is reported once Square shows it",
+          "paid" in seen and seen["paid"][1] == 7)
+    service.close()
+
+    # Cancelling a link that EXISTS.
+    service = PaymentService(FakeSquare())
+    service.request_link(8, 200, "1xFanta")
+    wait_for(service, ("url",))
+    service.request_cancel(8)
+    seen = wait_for(service, ("cancelled",), timeout=5.0)
+    check("cancelling an existing link is acknowledged",
+          "cancelled" in seen and seen["cancelled"][2] is True)
+    check("a cancelled order is not then reported as paid",
+          "paid" not in wait_for(service, ("nothing",), timeout=3.0))
+    service.close()
+
+    # THE RACE THAT MATTERS. The board can give up while the Square API call is
+    # still in flight, so the cancel names a link that does not exist yet. If
+    # the cancellation is dropped, a live payable checkout is orphaned and
+    # nothing will ever kill it (plan.md stage 15.3).
+    service = PaymentService(FakeSquare())
+    service.request_cancel(9)          # cancel FIRST
+    time.sleep(0.05)
+    service.request_link(9, 200, "1xCoke")
+    seen = wait_for(service, ("cancelled",), timeout=8.0)
+    check("a cancel arriving BEFORE the link still cancels it",
+          "cancelled" in seen)
+    check("...and no URL is handed to the board for a dead checkout",
+          "url" not in seen)
+    service.close()
+
+    # A backend that throws must produce SQUARE_ERR, not a hung terminal.
+    class Broken(FakeSquare):
+        def create(self, txn_id, cents, description):
+            raise RuntimeError("square is down")
+
+    service = PaymentService(Broken())
+    service.request_link(10, 200, "1xCoke")
+    seen = wait_for(service, ("error",), timeout=5.0)
+    check("a backend failure is reported as an error, not silence",
+          "error" in seen and seen["error"][1] == 10)
+    service.close()
+
+    # And the frames those results turn into.
+    store = Store(temp_db()).open()
+    link = Link(StubTransport())
+    service = PaymentService(FakeSquare())
+    ingest = Ingest(store, link, None, service)
+    ingest.boot_id = store.open_boot(time.time(), "0.2")
+    feed(ingest, link, protocol.build(
+        "CMD", "SQUARE_LINK", "cents=400 id=11 desc=2xCoke", ms=1))
+
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        ingest.drain_payments()
+        if b"SQUARE_PAID" in link.transport.written:
+            break
+        time.sleep(0.05)
+    sent = link.transport.written.decode("utf-8", "replace")
+    check("CMD SQUARE_LINK is answered with RSP SQUARE_URL",
+          "RSP" in sent and "SQUARE_URL" in sent and "id=11" in sent)
+    check("and EVT SQUARE_PAID follows when the money arrives",
+          "SQUARE_PAID" in sent)
+    service.close()
+    store.close()
+
+
 # --- Grafana dashboards -----------------------------------------------------
 
 #: How `frser-sqlite-datasource` expands its ONLY grouping macro:
@@ -869,6 +961,7 @@ if __name__ == "__main__":
     test_door_and_health_ingest()
     test_transaction_ingest()
     test_stock()
+    test_payments()
     test_dashboards()
     test_end_to_end()
 
