@@ -34,6 +34,26 @@ build-host/
 build-baseline.txt
 
 # =============================================================================
+# Generated data — the fridge database, camera frames, Grafana's own state
+# =============================================================================
+# The database is machine-local operational data, not source. The -wal and -shm
+# files are SQLite's write-ahead log and shared-memory index: they are part of
+# the database, so committing one without the others would produce a file that
+# opens but is missing the most recent writes.
+*.db
+*.db-wal
+*.db-shm
+
+# Camera frames written by picapture for the dashboard to display.
+pi4-software/frames/
+
+# Grafana's own database and logs when it is run from inside the repo during
+# development. The dashboards themselves ARE committed, as exported JSON in
+# pi4-software/grafana/dashboards/ — see dashboard-plan.md stage D2 for why:
+# a dashboard that exists only inside Grafana is lost with Grafana.
+grafana-data/
+
+# =============================================================================
 # Machine-local editor and toolchain settings
 # =============================================================================
 # These carry absolute paths from whoever generated them, so they are personal

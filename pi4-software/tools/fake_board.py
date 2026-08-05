@@ -1,0 +1,364 @@
+#!/usr/bin/env python3
+"""Stand in for the RP2040, in-process, so `fridged` can be built without one.
+
+The mirror image of `fake_pi.py`: that one is a fake Pi talking to a real board,
+this one is a fake board talking to a real `fridged`. Run both and the whole
+system exercises end to end on a laptop with no hardware at all.
+
+    python -m fridged --port sim
+
+WHY IT IMITATES A SERIAL PORT RATHER THAN CALLING fridged DIRECTLY
+------------------------------------------------------------------
+`FakeBoard` duck-types the handful of `serial.Serial` methods the service uses —
+`read`, `write`, `flush`, `close` — so `fridged` cannot tell it from a real port,
+because on its side of the interface the difference does not exist. Every line of
+the ingest path (bytes -> parse -> Frame -> handler -> SQLite) therefore runs
+today exactly as it will in production, and going live is one command-line
+argument.
+
+The alternative, a "demo mode" writing plausible rows straight into SQLite, gets
+a chart on screen a day sooner and leaves the entire ingest path unrun until the
+moment it has to work. See dashboard-plan.md section 0.
+
+WHY THE DATA IS NOT TIDY
+------------------------
+The easiest way to waste this work is to emit a clean stream, build panels that
+assume that cleanliness, and discover on demo day that the firmware never
+promised it. So this deliberately reproduces the awkward things the real board
+actually does: log output interleaved with frames on the same stream, the
+occasional corrupted frame, and reboots — including reboots whose `BOOT` frame is
+lost, which is what the Pi's `ms` rollback detector exists to catch.
+
+Stage D1 emits `BOOT` and `HB`. Temperature, door, health and transactions arrive
+with the stages that consume them.
+"""
+
+import math
+import random
+import time
+
+import protocol
+
+#: Firmware version string, as `pi_link_serial.cpp` reports it.
+FW_VERSION = "0.2"
+
+#: `SAMPLE_INTERVAL_MS` in temperature_task.cpp.
+TEMP_SAMPLE_S = 30.0
+
+#: A 12-bit DS18B20 conversion takes ~750 ms, and the firmware starts the
+#: conversion, leaves, and reads the scratchpads when it finishes — so the
+#: readings are stamped about three quarters of a second after the sample point,
+#: not at it.
+TEMP_CONVERSION_S = 0.75
+
+#: The firmware reads ONE sensor per superloop pass, deliberately: a scratchpad
+#: read is ~6 ms of bit-banged 1-Wire timing that cannot be interrupted, so three
+#: back to back would be a visible hitch. The frames therefore arrive together
+#: but not simultaneously.
+TEMP_PER_SENSOR_S = 0.004
+
+#: 12-bit resolution is 1/16 of a degree. Readings land on these steps and
+#: nowhere in between, which is worth reproducing: a graph of impossibly smooth
+#: values would not look like this sensor.
+DS18B20_STEP_C = 0.0625
+
+#: The board sends its heartbeat every 10 s (`HEARTBEAT_INTERVAL_MS` in main.cpp).
+HEARTBEAT_S = 10.0
+
+#: Chance that any given outgoing frame is corrupted on the wire. Small, but not
+#: zero: a link that never produces a bad frame never exercises the code that
+#: counts them, and `raw_line`'s reject column would go untested until it mattered.
+CORRUPTION_RATE = 0.004
+
+#: Simulated hours between spontaneous reboots. The reset counter and the
+#: `(boot_id, txn_id)` scoping both exist because of these, so they have to
+#: actually happen. At `--sim-speed 1` you will wait six hours to see one; at
+#: 200x it is every two minutes, which is the point of the speed control.
+REBOOT_INTERVAL_HOURS = 6.0
+
+#: Fraction of reboots whose `BOOT` frame never arrives — a cable pulled at the
+#: wrong moment. Forces the `ms_rollback` path, which is otherwise dead code that
+#: nobody finds out is wrong.
+LOST_BOOT_FRAME_RATE = 0.25
+
+#: The board's log format, from `logging.cpp`. These lines share the stream with
+#: frames by design (decision D1) and must be discarded by the parser without
+#: disturbing it.
+BOOT_BANNER = [
+    "=== Smart Fridge ===",
+    "[{t:.3f} Information]: build: bench (simulation stand-ins ENABLED)",
+    "[{t:.3f} Information]: pi_link: backend=serial",
+    "[{t:.3f} Information]: switches: door starts CLOSED",
+]
+
+
+class Zone:
+    """One DS18B20: a setpoint, a compressor cycle around it, and sensor noise.
+
+    The board has no idea which shelf this sensor is on and neither does this
+    class — it carries a ROM code and a thermal behaviour, and nothing else.
+    Which zone it *is* gets decided on the Pi, in the `sensor` table
+    (dashboard.md section 4.3). That separation is the thing being tested, so
+    breaking it here to make the simulator tidier would defeat the exercise.
+    """
+
+    def __init__(self, rom, setpoint_c, swing_c, period_s, phase, noise_c=0.05):
+        self.rom = rom
+        self.setpoint_c = setpoint_c
+        self.swing_c = swing_c
+        self.period_s = period_s
+        self.phase = phase
+        self.noise_c = noise_c
+
+    def celsius(self, t, rng):
+        # A fridge does not hold a temperature, it cycles around one: the
+        # compressor runs, overshoots cold, stops, drifts warm, runs again. A
+        # flat line with noise on it would look nothing like the real thing, and
+        # the threshold colours on the stat tiles would never be exercised.
+        value = self.setpoint_c + self.swing_c * math.sin(
+            2.0 * math.pi * t / self.period_s + self.phase)
+        value += rng.gauss(0.0, self.noise_c)
+        return round(value / DS18B20_STEP_C) * DS18B20_STEP_C
+
+
+#: Three sensors with fixed, plausible ROM codes: family code 0x28 (DS18B20)
+#: followed by a factory serial. Fixed rather than random so a database survives
+#: a restart of the simulator with its zone names still attached — otherwise
+#: naming a sensor would be undone by every restart and the naming workflow could
+#: never be tested.
+DEFAULT_ZONES = [
+    Zone("28FF3A1C92160341", -18.0, 1.6, 2400.0, 0.0),
+    Zone("28FF7B4E5501A2C7",   4.0, 0.9, 2100.0, 1.1),
+    Zone("28FFD1082B640F19",   6.2, 1.1, 2100.0, 2.4),
+]
+
+
+class FakeBoard:
+    """A simulated RP2040 that speaks the frame protocol over a fake serial port.
+
+    All timing is against a *simulated* clock, so `speed` compresses a day of
+    fridge behaviour into minutes without changing a single interval constant.
+    """
+
+    def __init__(self, speed=1.0, seed=None, corruption_rate=CORRUPTION_RATE,
+                 reboot_interval_hours=REBOOT_INTERVAL_HOURS, zones=None):
+        self.speed = float(speed)
+        self.corruption_rate = corruption_rate
+        self.reboot_interval_s = reboot_interval_hours * 3600.0
+        self.zones = DEFAULT_ZONES if zones is None else zones
+
+        # Seeded so a run is reproducible. A simulator that cannot reproduce the
+        # sequence that broke something is only half a test rig.
+        self.rng = random.Random(seed)
+
+        self._wall_start = time.monotonic()
+
+        # Where this simulated fridge sits on the real calendar. The thermal
+        # model is a function of absolute time, not of time-since-boot, so that
+        # seeded history (fridged/seed.py, which uses unix timestamps) and this
+        # live simulation describe ONE fridge with one continuous compressor
+        # cycle. Without it the graph steps by a degree or so at the moment the
+        # service starts — not a real event, but indistinguishable from one, and
+        # exactly the sort of artefact that gets designed around by mistake.
+        self._unix_start = time.time()
+
+        self._out = bytearray()
+
+        # Set by _reboot()
+        self._boot_sim_t = 0.0
+        self._next_hb = 0.0
+        self._next_reboot = 0.0
+        self._next_temp = 0.0
+
+        self.frames_out = 0
+        self.frames_in = 0
+        self.reboots = 0
+        self.lost_boot_frames = 0
+
+        self._reboot(0.0, first=True)
+
+    # --- The simulated clock ------------------------------------------------
+
+    def sim_time(self):
+        """Seconds of simulated time since this board was created."""
+        return (time.monotonic() - self._wall_start) * self.speed
+
+    def unix_time(self, at=None):
+        """The simulated fridge's position on the real calendar.
+
+        At `--sim-speed 1` this is simply the wall clock. Above that the fridge
+        genuinely experiences time faster — a day of thermal cycling in a few
+        minutes — which is the point of the speed control, so the thermal model
+        is driven from here rather than from the wall clock directly.
+        """
+        return self._unix_start + (self.sim_time() if at is None else at)
+
+    def ms_since_boot(self, at=None):
+        """The board's `to_ms_since_boot()`, at a given simulated time.
+
+        `at` defaults to now, but callers pass the time the event was *due*. The
+        distinction is invisible at 1x and glaring at 10,000x: one pump pass then
+        covers seconds of simulated time, and stamping frames with "now" would
+        scatter heartbeats that are meant to be exactly 10 s apart. The real
+        board stamps within a millisecond of due, so this matches it.
+        """
+        if at is None:
+            at = self.sim_time()
+        return int((at - self._boot_sim_t) * 1000.0)
+
+    # --- Emitting -----------------------------------------------------------
+
+    def _emit_line(self, text):
+        """Send a raw line that is not a frame — the board's own log output."""
+        self._out += (text + "\n").encode()
+
+    def _emit(self, prefix, type_, payload="", at=None):
+        wire = protocol.build(prefix, type_, payload,
+                              ms=self.ms_since_boot(at))
+
+        # Corruption is applied to the finished bytes, after the CRC is computed,
+        # which is exactly how a real disturbance on a shared stream behaves: the
+        # checksum is right for what was *meant* and wrong for what arrived.
+        if self.rng.random() < self.corruption_rate:
+            body = bytearray(wire)
+            index = self.rng.randrange(4, max(5, len(body) - 4))
+            body[index] = body[index] ^ 0x20  # flips a letter's case, usually
+            wire = bytes(body)
+
+        self._out += wire
+        self.frames_out += 1
+
+    def _reboot(self, at, first=False):
+        """Restart: the ms counter goes back to zero and the banner reprints."""
+        self._boot_sim_t = at
+        self._next_hb = at
+        self._next_reboot = at + self.reboot_interval_s
+        # The board's first temperature sample is one full interval after boot —
+        # `init()` sets `next_sample_ms = now + SAMPLE_INTERVAL_MS`. So a reboot
+        # leaves a 30 s gap in the temperature graph, which is real and which the
+        # dashboard should show rather than paper over.
+        self._next_temp = at + TEMP_SAMPLE_S
+        if not first:
+            self.reboots += 1
+
+        for line in BOOT_BANNER:
+            self._emit_line(line.format(t=self.rng.uniform(0.01, 0.2)))
+
+        # Sometimes the BOOT frame simply does not arrive. The Pi then has to
+        # notice the ms counter restarting instead, which is the only other
+        # evidence a reset leaves.
+        if first or self.rng.random() >= LOST_BOOT_FRAME_RATE:
+            self._emit("EVT", "BOOT", f"fw={FW_VERSION}", at=at)
+        else:
+            self.lost_boot_frames += 1
+
+    # --- The pump -----------------------------------------------------------
+
+    def _pump(self):
+        """Generate whatever the simulated clock says is now due.
+
+        Every generator adds `(due_time, ...)` tuples to one list, and the list
+        is SORTED before anything is written. That is not tidiness.
+
+        One pump pass can cover a lot of simulated time — at 3000x, a 10 ms wall
+        pause is half a simulated minute — so several timers come due together.
+        Draining them one generator at a time emits, say, all the heartbeats up
+        to 70 s and only then the temperatures at 60.75 s, and the board's `ms`
+        field goes *backwards* on the wire. The Pi reads a backwards jump as the
+        board having reset (dashboard.md section 6) and opens a spurious boot
+        record. So: merge by due time, exactly as a real board would, where the
+        events genuinely happen in the order the clock reaches them.
+        """
+        now = self.sim_time()
+
+        if now >= self._next_reboot:
+            self._reboot(self._next_reboot)
+            return  # a reboot resets every other timer; pick them up next pass
+
+        due = []
+
+        while now >= self._next_hb:
+            due.append((self._next_hb, "EVT", "HB", ""))
+            self._next_hb += HEARTBEAT_S
+
+        while now >= self._next_temp:
+            sampled_at = self._next_temp
+            self._next_temp += TEMP_SAMPLE_S
+            # Stamped when the readings come OUT, not when the conversion was
+            # started, and spread by one superloop pass each.
+            for index, zone in enumerate(self.zones):
+                celsius = zone.celsius(self.unix_time(sampled_at), self.rng)
+                due.append((sampled_at + TEMP_CONVERSION_S +
+                            index * TEMP_PER_SENSOR_S,
+                            "EVT", "TEMP",
+                            f"rom={zone.rom} c={celsius:.3f}"))
+
+        due.sort(key=lambda item: item[0])
+        for at, prefix, type_, payload in due:
+            self._emit(prefix, type_, payload, at=at)
+
+    # --- The serial.Serial surface `fridged` uses ---------------------------
+
+    def read(self, size=1):
+        self._pump()
+        if not self._out:
+            return b""
+        take = min(size, len(self._out))
+        chunk = bytes(self._out[:take])
+        del self._out[:take]
+        return chunk
+
+    def write(self, data):
+        """Receive what the Pi sends. Frames are counted; the rest is ignored.
+
+        Stage D1 has nothing to reply to — `EVT HB` from the Pi is the only
+        traffic, and its arrival is the entire message. `CMD SCAN` and
+        `CMD SQUARE_LINK` get answers when the stages that send them arrive.
+        """
+        for raw in bytes(data).split(b"\n"):
+            line = raw.decode("utf-8", "replace").strip()
+            if line and protocol.parse(line) is not None:
+                self.frames_in += 1
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        pass
+
+
+# --- Standalone inspection --------------------------------------------------
+# `python fake_board.py` prints what the board would say, fast. Useful on its own
+# and, more to the point, it means a change here can be eyeballed without
+# starting the service and opening a database.
+
+if __name__ == "__main__":
+    import sys
+
+    minutes = float(sys.argv[1]) if len(sys.argv) > 1 else 30.0
+    board = FakeBoard(speed=10_000.0, seed=1)
+
+    print(f"=== {minutes:g} simulated minutes of board output ===\n")
+    target = minutes * 60.0
+    text = bytearray()
+    while board.sim_time() < target:
+        text += board.read(4096)
+        time.sleep(0.001)
+
+    good = bad = other = 0
+    for raw in bytes(text).split(b"\n"):
+        line = raw.decode("utf-8", "replace").strip()
+        if not line:
+            continue
+        print(f"  {line}")
+        if protocol.parse(line) is not None:
+            good += 1
+        elif line[:3] in protocol.PREFIXES:
+            bad += 1
+        else:
+            other += 1
+
+    print(f"\n  {good} valid frames, {bad} corrupted, {other} log lines, "
+          f"{board.reboots} reboots ({board.lost_boot_frames} with the BOOT "
+          f"frame lost)")

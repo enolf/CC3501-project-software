@@ -1,0 +1,212 @@
+{
+  "uid": "fridge-overview",
+  "title": "Fridge — Overview",
+  "description": "Temperature for the three zones. Readings are stored under each sensor's ROM code and the zone name is joined on by the `temperature` view, so naming a sensor relabels its whole history. If the three tiles are empty, the sensors have not been named yet — see the table at the bottom.",
+  "tags": ["fridge"],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Freezer",
+      "gridPos": { "h": 5, "w": 8, "x": 0, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+          "queryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'freezer'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'freezer'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": ["ts"]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": -22 },
+              { "color": "#EAB839", "value": -15 },
+              { "color": "red", "value": -10 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Fridge — top shelf",
+      "gridPos": { "h": 5, "w": 8, "x": 8, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+          "queryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_top'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_top'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": ["ts"]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "#EAB839", "value": 8 },
+              { "color": "red", "value": 12 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Fridge — bottom shelf",
+      "gridPos": { "h": 5, "w": 8, "x": 16, "y": 0 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+          "queryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_bottom'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_bottom'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": ["ts"]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": { "mode": "thresholds" },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "blue", "value": null },
+              { "color": "green", "value": 1 },
+              { "color": "#EAB839", "value": 8 },
+              { "color": "red", "value": 12 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Temperature — all three zones",
+      "description": "Bucketed to 60 s with $__unixEpochGroupSeconds, the only grouping macro this plugin provides. Readings arrive every 30 s, so a bucket averages a pair. Nulls are NOT spanned: the 30 s gap after the board reboots is real and should look like a gap.",
+      "gridPos": { "h": 11, "w": 24, "x": 0, "y": 5 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 60) AS ts,\n       AVG(CASE WHEN zone = 'freezer'       THEN celsius END) AS \"Freezer\",\n       AVG(CASE WHEN zone = 'fridge_top'    THEN celsius END) AS \"Top shelf\",\n       AVG(CASE WHEN zone = 'fridge_bottom' THEN celsius END) AS \"Bottom shelf\"\nFROM temperature\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 60) AS ts,\n       AVG(CASE WHEN zone = 'freezer'       THEN celsius END) AS \"Freezer\",\n       AVG(CASE WHEN zone = 'fridge_top'    THEN celsius END) AS \"Top shelf\",\n       AVG(CASE WHEN zone = 'fridge_bottom' THEN celsius END) AS \"Bottom shelf\"\nFROM temperature\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": ["ts"]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 2,
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 6,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": { "type": "linear" }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "min", "max"]
+        },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Sensors — name a new one here",
+      "description": "Every DS18B20 the board has ever reported. A sensor appears automatically the first time it is seen, with no zone name, and shows a live temperature straight away. That is how you identify one: warm the sensor you just fitted, watch which row moves, then give it a name with\n\n  UPDATE sensor SET zone_label='freezer' WHERE rom_code='...';\n\nNaming it relabels its entire history, not just readings from that moment on. The HTTP endpoint that does this from a browser arrives at stage D4.",
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "frser-sqlite-datasource", "uid": "fridge-sqlite" },
+          "queryText": "SELECT COALESCE(s.zone_label, '(not named yet)') AS \"Zone\",\n       s.rom_code AS \"ROM code\",\n       ROUND((SELECT value FROM measurement\n              WHERE metric = 'temp.rom.' || s.rom_code\n              ORDER BY ts DESC LIMIT 1), 2) AS \"Latest C\",\n       DATETIME((SELECT MAX(ts) FROM measurement\n                 WHERE metric = 'temp.rom.' || s.rom_code),\n                'unixepoch', 'localtime') AS \"Last reading\"\nFROM sensor s\nORDER BY (s.zone_label IS NULL) DESC, s.zone_label",
+          "rawQueryText": "SELECT COALESCE(s.zone_label, '(not named yet)') AS \"Zone\",\n       s.rom_code AS \"ROM code\",\n       ROUND((SELECT value FROM measurement\n              WHERE metric = 'temp.rom.' || s.rom_code\n              ORDER BY ts DESC LIMIT 1), 2) AS \"Latest C\",\n       DATETIME((SELECT MAX(ts) FROM measurement\n                 WHERE metric = 'temp.rom.' || s.rom_code),\n                'unixepoch', 'localtime') AS \"Last reading\"\nFROM sensor s\nORDER BY (s.zone_label IS NULL) DESC, s.zone_label",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "thresholds" }, "custom": { "align": "auto" } },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "Latest C" },
+            "properties": [{ "id": "unit", "value": "celsius" }]
+          }
+        ]
+      },
+      "options": { "showHeader": true, "cellHeight": "sm", "footer": { "show": false } }
+    }
+  ]
+}

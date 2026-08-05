@@ -11,6 +11,23 @@
 // driver or application file should ever contain a raw pin number, bus
 // address, or wiring assumption.
 
+// Some definitions below name an SDK peripheral instance (i2c1, spi0) rather
+// than a plain number, and those names are macros the SDK headers define. They
+// are included here so this header stands on its own: a file that includes
+// board.h gets working definitions no matter what order its own includes are
+// in. Without this it only ever compiled by luck — every current consumer
+// happens to include the SDK header first, and the first one that did not
+// would fail with an unhelpful "'i2c1' was not declared" pointing at board.h
+// rather than at the missing include.
+//
+// HX711_RATE below has the same shape but is deliberately NOT covered: its
+// enum lives in a vendored pico-scale header, and including that here would
+// drag third-party code into every file that includes board.h — including the
+// plain-C display driver, which has no business seeing it. Only mass_sensor.cpp
+// uses HX711_RATE, and it includes that header itself.
+#include "hardware/i2c.h"
+#include "hardware/spi.h"
+
 // DS18B20 1-Wire temperature sensor bus.
 // Every DS18B20 shares this single data pin. The data line MUST have an
 // external 4.7 kOhm pull-up resistor to 3V3 — the RP2040's internal pull-up
@@ -35,8 +52,11 @@
 #define DS18B20_PULLUP_FET_ACTIVE_LOW 1
 
 // --- PiicoDev RFID module (MFRC522 over I2C) ---
-// TODO: confirm these match the pins the PiicoDev connector is actually wired to.
-// GP2/GP3 are the RP2040 default i2c1 pins — change if your board uses different ones.
+// CONFIRMED against the PCB: the PiicoDev connector is wired to GP2/GP3.
+//
+// Worth knowing if these ever move: GP6/GP7 are the *other* pin pair i2c1 can
+// use, and this board has already spent both of them (limit switch and DS18B20
+// bus). So i2c1 has exactly one free home on this design.
 #define RFID_I2C_INSTANCE   i2c1
 #define RFID_SDA_PIN        2
 #define RFID_SCL_PIN        3

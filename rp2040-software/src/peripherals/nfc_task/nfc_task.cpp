@@ -169,10 +169,11 @@ void scan_bus()
 
     if (found == 0) {
         printf("  nothing responded.\n");
-        printf("  Check in this order: 3V3 and GND at the module, SDA/SCL not\n");
-        printf("  swapped, pull-ups present (the PiicoDev module has its own),\n");
-        printf("  and that these really are the pins the connector is wired to\n");
-        printf("  - board.h still carries a TODO saying they are unconfirmed.\n");
+        printf("  The pins above are confirmed against the PCB, so suspect the\n");
+        printf("  module or the cable, not board.h. Check in this order: 3V3 and\n");
+        printf("  GND actually present at the module, SDA/SCL not swapped in the\n");
+        printf("  cable, and pull-ups present (the PiicoDev module has its own,\n");
+        printf("  so a module that is not powered takes them away with it).\n");
     } else {
         printf("  %d device(s) found.\n", found);
         printf("  If the RFID module answered at an address other than 0x%02X,\n",
