@@ -40,7 +40,21 @@ def build_transport(args):
                     "speed=%gx seed=%s", args.sim_speed, args.sim_seed)
         return FakeBoard(speed=args.sim_speed, seed=args.sim_seed)
 
-    import serial
+    try:
+        import serial
+    except ImportError:
+        # Raspberry Pi OS is an externally managed environment (PEP 668), so the
+        # obvious `pip install pyserial` is refused and people reach for
+        # --break-system-packages. It is packaged; say so rather than letting a
+        # bare ImportError traceback be the whole message.
+        raise SystemExit(
+            "pyserial is not installed, and it is needed for a real serial "
+            "port.\n"
+            "  Raspberry Pi OS / Debian:  sudo apt install python3-serial\n"
+            "  elsewhere:                 python3 -m pip install pyserial\n"
+            "\n"
+            "`--port sim` does not need it.")
+
     log.info("opening %s at %d baud", args.port, config.SERIAL_BAUD)
     # timeout=0 makes read() non-blocking, which is what the service loop needs:
     # it must come back and flush the database and answer the board even when

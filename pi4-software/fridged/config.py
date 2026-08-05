@@ -38,21 +38,34 @@ DEFAULT_DB_PATH = Path(os.environ.get("FRIDGE_DB", PI4_ROOT / "fridge.db"))
 
 #: Umask for the files this service creates.
 #:
-#: 0o002 clears the group-write bit from the mask, so `fridge.db` and — the ones
-#: that actually matter — `fridge.db-wal` and `fridge.db-shm` are created mode
-#: 664 rather than 644.
+#: WHY BOTH THIS AND THE EXPLICIT chmod IN store.py ARE NEEDED
+#: ----------------------------------------------------------
+#: Grafana runs as a different user (`grafana`) and SQLite **cannot open a WAL
+#: database read-only**: a reader has to take a lock in the -shm wal-index, and
+#: that is a write. So `grafana` needs write access to `fridge.db`,
+#: `fridge.db-wal` and `fridge.db-shm` alike.
 #:
-#: This is not tidiness. Grafana runs as a different user (`grafana`) and SQLite
-#: **cannot open a WAL database read-only**: a reader has to take a lock in the
-#: -shm wal-index, which is a write. With the default umask the -shm comes out
-#: group-read-only and every Grafana query fails with "attempt to write a
-#: readonly database" — which reads like a Grafana bug and is a file-mode one.
+#: Getting that takes two separate things, and the first attempt here used only
+#: the umask and did not work:
 #:
-#: Set here rather than left to whoever starts the service, because a daemon
-#: whose output another process must write is entitled to say so itself, and
+#:   * **umask can only REMOVE permission bits, never add them.** SQLite creates
+#:     the database with mode 0644 built in, so there is no group-write bit for
+#:     any umask to preserve. Hence `Store.open()` chmods the file explicitly.
+#:
+#:   * SQLite then creates the -wal and -shm files with **the database file's
+#:     mode**, which the process umask is applied to. So without this, a 0664
+#:     database still yields 0644 sidecars under the default 022 umask, and the
+#:     failure comes back on the next write.
+#:
+#: Set here rather than left to whoever starts the service: a daemon whose
+#: output another process must write is entitled to say so itself, and
 #: "remember to run `umask 002` first" is a step that gets forgotten exactly
 #: once. On Windows this is inert.
 DB_FILE_UMASK = 0o002
+
+#: Mode the database file is forced to, for the reason above. Group-writable so
+#: Grafana can take its WAL read lock; not world-writable.
+DB_FILE_MODE = 0o664
 
 #: Where `picapture` writes the annotated frame that the dashboard displays.
 #: Served by the HTTP API (stage D4) because Grafana can only show an image over

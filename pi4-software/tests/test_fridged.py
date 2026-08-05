@@ -23,8 +23,10 @@ produces no symptom at the time and a hole in the data later:
 """
 
 import json
+import os
 import re
 import sqlite3
+import stat
 import sys
 import tempfile
 import time
@@ -107,6 +109,24 @@ def test_store():
           conn.execute("SELECT COUNT(*) FROM measurement").fetchone()[0] == 1 and
           conn.execute("SELECT COUNT(*) FROM raw_line").fetchone()[0] == 1)
     conn.close()
+
+    # Grafana runs as another user and cannot open a WAL database read-only, so
+    # the file has to be group-writable. Checked on the machine it matters on:
+    # this is a no-op on Windows, and the suite is meant to be run on the Pi too.
+    if os.name == "posix":
+        store = Store(path).open()
+        store.close()
+        mode = stat.S_IMODE(path.stat().st_mode)
+        check(f"the database is group-writable for Grafana (mode {mode:o})",
+              bool(mode & stat.S_IWGRP))
+        # The bug this replaced: a umask alone cannot do this, because umask
+        # only ever REMOVES permission bits and SQLite creates the file 0644.
+        path.chmod(0o644)
+        Store(path).open().close()
+        check("...and a 0644 database is corrected on open",
+              bool(stat.S_IMODE(path.stat().st_mode) & stat.S_IWGRP))
+    else:
+        print("  --    group-writable checks skipped (not POSIX)")
 
     # A sensor someone has named must not lose its name on the next reading.
     store = Store(path).open()

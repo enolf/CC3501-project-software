@@ -20,7 +20,9 @@ later; writer methods arrive with the stage that needs them. So an empty table
 here means "stage not reached", not "forgotten".
 """
 
+import os
 import sqlite3
+import stat
 import time
 from pathlib import Path
 
@@ -224,8 +226,42 @@ class Store:
         self._conn.execute(f"PRAGMA busy_timeout={config.SQLITE_BUSY_TIMEOUT_MS}")
 
         self._migrate()
+        self._ensure_group_writable()
         self._last_flush = time.monotonic()
         return self
+
+    def _ensure_group_writable(self):
+        """Force the database to a group-writable mode.
+
+        SQLite creates the file 0644 and **umask can only remove permission
+        bits, never add them**, so setting a umask alone does not produce a
+        group-writable database — an earlier version of this code assumed it did
+        and quietly did not work.
+
+        It has to be group-writable because Grafana runs as a different user and
+        SQLite cannot open a WAL database read-only: a reader takes a lock in
+        the -shm wal-index, which is a write. The group comes from the setgid
+        bit on the containing directory (`/var/lib/fridge`, group `grafana`),
+        which is why only the mode is set here and never the owner.
+
+        SQLite then creates -wal and -shm with *this* file's mode, so fixing the
+        database fixes the sidecars too — provided the umask lets it, which is
+        what `config.DB_FILE_UMASK` is for.
+
+        Best effort: a database on a filesystem without Unix modes, or owned by
+        somebody else, is not a reason to refuse to run.
+        """
+        if os.name != "posix":
+            return
+        try:
+            current = stat.S_IMODE(self.path.stat().st_mode)
+            # Add the group bits and leave owner and other exactly as they are —
+            # this must not quietly widen or narrow anything an admin chose.
+            wanted = current | (config.DB_FILE_MODE & 0o070)
+            if wanted != current:
+                self.path.chmod(wanted)
+        except OSError:
+            pass
 
     def _migrate(self):
         found = self._conn.execute("PRAGMA user_version").fetchone()[0]

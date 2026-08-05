@@ -37,10 +37,22 @@ Then give it data:
 ```bash
 cd ~/CC3501-project-software/pi4-software
 export FRIDGE_DB=/var/lib/fridge/fridge.db
-python3 -m pip install pyserial
 python3 -m fridged.seed --days 14
 python3 -m fridged --port sim
 ```
+
+**pyserial comes from apt, not pip.** Raspberry Pi OS is an externally managed
+Python environment (PEP 668), so `pip install` into the system interpreter is
+refused:
+
+```bash
+sudo apt install python3-serial
+```
+
+Only needed for a real board — `--port sim` never imports it, which is why
+seeding and the simulator run happily on a Pi where the pip command failed.
+Resist `--break-system-packages`: pyserial is packaged, and a venv would then
+have to be activated by the systemd unit at D8 for no benefit.
 
 Open `http://<pi-address>:3000` and pick *Fridge — Overview*.
 

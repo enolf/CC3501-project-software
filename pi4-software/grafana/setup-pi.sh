@@ -155,7 +155,34 @@ else
     done
 fi
 
-# --- 6. Restart -------------------------------------------------------------
+# --- 6. grafana-server's umask ----------------------------------------------
+
+say "Setting grafana-server's umask"
+DROPIN_DIR="/etc/systemd/system/grafana-server.service.d"
+sudo mkdir -p "${DROPIN_DIR}"
+sudo tee "${DROPIN_DIR}/umask.conf" >/dev/null <<'EOF'
+# Written by pi4-software/grafana/setup-pi.sh — safe to delete, see that script.
+#
+# fridged and Grafana both write the SQLite -wal and -shm files beside
+# fridge.db, as different users sharing the `grafana` group. Whichever process
+# creates one of those files decides its mode, and SQLite asks for the database
+# file's mode masked by the creating process's umask.
+#
+# So BOTH ends need a umask that keeps the group-write bit. With systemd's
+# default 0022 Grafana would create a 0644 -shm that fridged cannot write, or
+# fridged would create one Grafana cannot write — and WHICH of those happens
+# depends on start order. An intermittent, order-dependent permissions failure
+# is the worst kind to chase, so it is closed at both ends rather than one.
+#
+# A drop-in rather than an edit to the packaged unit file, so `apt upgrade`
+# never has to ask about a locally modified service.
+[Service]
+UMask=0002
+EOF
+sudo systemctl daemon-reload
+echo "    ${DROPIN_DIR}/umask.conf"
+
+# --- 7. Restart -------------------------------------------------------------
 
 say "Restarting grafana-server"
 sudo systemctl restart grafana-server
