@@ -67,17 +67,46 @@ Open `http://<pi-address>:3000` and pick *Fridge — Overview*.
 `allowUiUpdates` is **true** while the layout is being designed, so the Save
 button works and changes made in the browser stick. Restyle freely.
 
-**Get it back into the repo before you re-run `setup-pi.sh`,** which re-copies
-from `dashboards/` and will overwrite anything that only exists in Grafana:
+### What survives what
 
-1. *Dashboard settings → JSON Model*, or *Export → Export as JSON*
-2. Replace `dashboards/fridge-overview.json` in the repo with it
-3. Commit
+| Action | Effect on your UI changes |
+|---|---|
+| Saving in the browser | Stored in Grafana's own database |
+| `systemctl restart grafana-server`, reboot | **Kept** |
+| `git pull` on the Pi | **Kept** — Grafana serves `/var/lib/grafana/dashboards`, not the checkout |
+| `bash setup-pi.sh` | **DESTROYED** — it re-copies from the repo and the provisioner overwrites |
 
-Two fields to preserve when you paste: `"uid": "fridge-overview"` and each
-panel's `datasource.uid` of `fridge-sqlite`. The test suite checks both, so
-`python tests/test_fridged.py` on the dev machine will tell you if an export
-dropped them — along with re-running every panel query against the schema.
+So the one dangerous sequence is: style it, pull a change to
+`fridge-overview.json`, re-run `setup-pi.sh`.
+
+### Export before you pull
+
+```bash
+bash export-dashboard.sh
+```
+
+Fetches the live dashboard from Grafana's API and writes it back over
+`dashboards/fridge-overview.json`. Commit that, and the repo and the browser
+agree again. It strips Grafana's internal `id` and `version` fields, which are
+meaningless in a file and would otherwise make every export show a diff.
+
+Then, on whichever machine holds the repo:
+
+```bash
+python3 tests/test_fridged.py       # from pi4-software/
+```
+
+That re-runs every panel query against the schema and checks the export kept
+`"uid": "fridge-overview"` and each panel's `datasource.uid` of `fridge-sqlite`
+— the two fields whose loss would silently break the dashboard on a fresh
+install.
+
+### Avoiding the collision entirely
+
+Once you start styling, **you own `fridge-overview.json`.** Later stages add
+their panels as separate files or as JSON to paste in, rather than editing that
+one — because a three-way merge of a 10,000-line generated JSON file is not
+something anybody should have to do.
 
 Once the design has settled, set `allowUiUpdates: false` in
 `provisioning/dashboards/fridge.yml` and re-run the script. The files become the
