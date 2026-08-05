@@ -39,12 +39,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from fake_board import (  # noqa: E402  (tools/)
-    BOX_FULL_G, COIN_MASSES_G, COIN_ON_CLOSE_RATE, DEFAULT_ZONES,
-    DoorSchedule, HEALTH_INTERVAL_S, TEMP_SAMPLE_S,
+import protocol                # noqa: E402  (tools/)
+from fake_board import (       # noqa: E402  (tools/)
+    BOX_FULL_G, DEFAULT_ZONES, DoorSchedule, HEALTH_INTERVAL_S,
+    TAKE_RATE, TEMP_SAMPLE_S, plan_transaction,
 )
 
 from . import config          # noqa: E402
+from .ingest import Ingest    # noqa: E402
+from .link import LinkEvent   # noqa: E402
 from .store import Store      # noqa: E402
 
 #: Marker text written into `raw_line`. Parsed by `--clear`, so it is a format,
@@ -54,6 +57,12 @@ MARKER_PREFIX = "seeded history up to ts="
 #: Rows per executemany. Large enough that 120,000 rows take a moment rather than
 #: a minute; small enough not to build the whole list in memory first.
 CHUNK = 5000
+
+
+class _StubLink:
+    """Ingest only touches the link in tick(), which seeding never calls."""
+    age_s = None
+    bad = 0
 
 
 def clear(store):
@@ -121,29 +130,70 @@ def seed_doors(store, door):
     return len(rows)
 
 
-def seed_health(store, start_ts, end_ts, rng, door):
+def plan_all_transactions(door, rng, start_ts):
+    """Every transaction across the seeded period, as protocol frames.
+
+    Returns the frames and the coin deposits they imply. Built with
+    `fake_board.plan_transaction`, the same function the live simulator uses, so
+    a seeded sale and a live one are the same shape down to the duplicated
+    `TXN_START`.
+    """
+    frames = []
+    deposits = []          # (time, grams) for the coin box
+    for open_t, close_t in door.intervals:
+        if rng.random() >= TAKE_RATE:
+            continue        # somebody looked and changed their mind
+        # `begin_selecting()` stamps the id when the door OPENS. Offsets from
+        # the start of the seeded period stand in for ms-since-boot.
+        txn_id = int((open_t - start_ts) * 1000.0)
+        for at, prefix, type_, payload in plan_transaction(rng, txn_id, close_t):
+            frames.append((at, prefix, type_, payload))
+            if type_ == "COIN":
+                deposits.append((at, float(payload.split("delta_g=")[1])))
+
+    frames.sort(key=lambda item: item[0])
+    deposits.sort()
+    return frames, deposits
+
+
+def seed_transactions(store, ingest, frames):
+    """Replay planned transaction frames through the REAL ingest path.
+
+    Not a shortcut into SQL. Every row here is produced by the same handlers
+    that process a live board, so the upserts, the coin attribution and the
+    duplicate-`TXN_START` handling are all exercised while the history is
+    built. If the ingest has a bug, the seeded fortnight has it too — which is
+    the honest outcome, and far better than a seeder that quietly writes tidy
+    rows the live path could never produce.
+    """
+    for at, prefix, type_, payload in frames:
+        wire = protocol.build(prefix, type_, payload, ms=0).decode().rstrip()
+        parsed = protocol.parse(wire)
+        ingest.handle(LinkEvent("frame", at, wire, parsed, None))
+    store.flush(force=True)
+    return len(frames)
+
+
+def seed_health(store, start_ts, end_ts, rng, deposits):
     """Die temperature, coin-box mass and fault count, every 30 s.
 
-    The box mass follows door closes using the same rule as the live simulator,
-    so the sawtooth in the seeded history and the sawtooth after it are produced
-    by one model rather than two that will disagree.
+    The box mass is integrated from the SAME coin events the transactions
+    produced, so the money-box sawtooth and the revenue panels are two views of
+    one set of coins rather than two inventions that will disagree.
     """
-    closes = [close_t for _, close_t in door.intervals]
-    next_close = 0
+    next_deposit = 0
     box_g = 0.0
 
     batch = []
     written = 0
     ts = start_ts
     while ts < end_ts:
-        # Apply every door close that has happened since the last sample.
-        while next_close < len(closes) and closes[next_close] <= ts:
-            next_close += 1
-            if rng.random() < COIN_ON_CLOSE_RATE:
-                for _ in range(rng.randint(1, 2)):
-                    box_g += rng.choice(COIN_MASSES_G)
-                if box_g >= BOX_FULL_G:
-                    box_g = 0.0
+        # Apply every coin that has gone in since the last sample.
+        while next_deposit < len(deposits) and deposits[next_deposit][0] <= ts:
+            box_g += deposits[next_deposit][1]
+            next_deposit += 1
+            if box_g >= BOX_FULL_G:
+                box_g = 0.0     # the treasurer emptied it
 
         die_c = (32.0 + 2.5 * math.sin(2.0 * math.pi * ts / 86400.0)
                  + rng.gauss(0.0, 0.25))
@@ -209,7 +259,7 @@ def main(argv=None):
 
         # Seeded rows belong to a boot of their own, so nothing invented is ever
         # attributed to a real run of the board.
-        store.open_boot(start_ts, fw=None, reason="seed")
+        seed_boot_id = store.open_boot(start_ts, fw=None, reason="seed")
 
         began = time.monotonic()
 
@@ -220,10 +270,28 @@ def main(argv=None):
         door = DoorSchedule(random.Random(args.seed + 1), start_ts)
         door.ensure_until(end_ts)
 
+        # Transactions are PLANNED before anything is written, because the
+        # coin box mass in seed_health has to integrate the very coins these
+        # produce. Its own RNG so a change to one model cannot reshuffle another.
+        txn_frames, deposits = plan_all_transactions(
+            door, random.Random(args.seed + 3), start_ts)
+
         temps = seed_temperature(store, start_ts, end_ts, rng, door)
         doors = seed_doors(store, door)
         health = seed_health(store, start_ts, end_ts,
-                             random.Random(args.seed + 2), door)
+                             random.Random(args.seed + 2), deposits)
+
+        # Replayed through a real Ingest. `raw_line` is muted for the duration:
+        # these frames were never received from anything, and recording them as
+        # if they had been would be a lie in the one table kept for forensics.
+        keep, config.RAW_LINE_KEEP = config.RAW_LINE_KEEP, "bad"
+        ingest = Ingest(store, _StubLink())
+        ingest.boot_id = seed_boot_id
+        try:
+            sales = seed_transactions(store, ingest, txn_frames)
+        finally:
+            config.RAW_LINE_KEEP = keep
+
         store.raw_line(end_ts, f"{MARKER_PREFIX}{end_ts}", source="seed")
         store.flush(force=True)
 
@@ -235,6 +303,13 @@ def main(argv=None):
         print(f"  {doors:>8,} door events "
               f"({len(door.intervals)} opens, {left_open} left open >2 min)")
         print(f"  {health:>8,} health readings (at {HEALTH_INTERVAL_S:g}s)")
+        paid, stolen = store._conn.execute(
+            "SELECT SUM(outcome='paid'), SUM(outcome='stolen') FROM txn"
+        ).fetchone()
+        revenue = store._conn.execute(
+            "SELECT SUM(paid_cents) FROM txn WHERE outcome='paid'").fetchone()[0]
+        print(f"  {sales:>8,} transaction frames -> {paid} paid, {stolen} "
+              f"unpaid, ${(revenue or 0) / 100:,.2f} taken")
         print(f"  from {time.strftime('%Y-%m-%d %H:%M', time.localtime(start_ts))}"
               f"  to {time.strftime('%Y-%m-%d %H:%M', time.localtime(end_ts))}")
         print(f"  database: {store.path}")

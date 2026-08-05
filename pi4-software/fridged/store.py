@@ -391,6 +391,69 @@ class Store:
                            (duration, rowid))
         return duration
 
+    def upsert_txn(self, boot_id, txn_id, ts_start=None, ts_end=None,
+                   method=None, owed_cents=None, paid_cents=None, outcome=None):
+        """Create or update one transaction. **Never a plain INSERT.**
+
+        The firmware does not give us one clean "transaction begins" message
+        (dashboard.md section 6.2). A cash sale sends `TXN_START` twice with the
+        same id; a card sale sends it once, at the end; a card sale that is
+        abandoned sends only `TXN_END`, for a transaction we have never heard
+        of. Any of those can be the first frame to arrive for a given id, so
+        every writer has to be able to create the row or fill in part of it.
+
+        `ts_start` keeps the EARLIEST value seen — the duplicate `TXN_START`
+        arrives at completion and must not drag the start time forward. Every
+        other column prefers the newest non-null value.
+        """
+        self._conn.execute(
+            "INSERT INTO txn (boot_id, txn_id, ts_start, ts_end, method, "
+            "                 owed_cents, paid_cents, outcome) "
+            "VALUES (?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(boot_id, txn_id) DO UPDATE SET "
+            "  ts_start   = MIN(COALESCE(txn.ts_start, excluded.ts_start), "
+            "                   COALESCE(excluded.ts_start, txn.ts_start)), "
+            "  ts_end     = COALESCE(excluded.ts_end, txn.ts_end), "
+            "  method     = COALESCE(excluded.method, txn.method), "
+            "  owed_cents = COALESCE(excluded.owed_cents, txn.owed_cents), "
+            "  paid_cents = COALESCE(excluded.paid_cents, txn.paid_cents), "
+            "  outcome    = COALESCE(excluded.outcome, txn.outcome)",
+            (boot_id, txn_id, ts_start, ts_end, method,
+             owed_cents, paid_cents, outcome))
+        self.rows_written += 1
+
+    def set_txn_items(self, boot_id, txn_id, items, unit_price_cents=None):
+        """Replace the item list for a transaction.
+
+        REPLACE rather than INSERT because the duplicate `TXN_START` carries the
+        same basket again; adding it would double every quantity and silently
+        double the units-sold panel.
+        """
+        for drink, qty in items.items():
+            self._conn.execute(
+                "INSERT INTO txn_item (boot_id, txn_id, drink, qty, "
+                "                      unit_price_cents) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(boot_id, txn_id, drink) DO UPDATE SET "
+                "  qty = excluded.qty, "
+                "  unit_price_cents = excluded.unit_price_cents",
+                (boot_id, txn_id, drink, qty, unit_price_cents))
+        self.rows_written += len(items)
+
+    def coin_event(self, ts, boot_id, txn_id, denom_cents, mass_delta_g,
+                   classified):
+        """One coin, or one thing that was not a coin.
+
+        `txn_id` is attributed by the caller, not read from the frame — `EVT
+        COIN` carries no id (dashboard.md section 5.3 amendment 2). NULL when no
+        transaction was open, which is itself worth being able to see.
+        """
+        self._queue(
+            "INSERT INTO coin_event (ts, boot_id, txn_id, denom_cents, "
+            "                        mass_delta_g, classified) "
+            "VALUES (?,?,?,?,?,?)",
+            (ts, boot_id, txn_id, denom_cents, mass_delta_g,
+             1 if classified else 0))
+
     def note_sensor(self, rom_code, ts, kind="ds18b20"):
         """Make sure a ROM code has a row, without disturbing its zone label.
 

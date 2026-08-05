@@ -101,6 +101,42 @@ DOOR_TAU_RECOVER_S = 420.0
 #: change the answer and iterating them would be pure cost.
 LOOKBACK_S = 10.0 * DOOR_TAU_RECOVER_S
 
+# --- Transactions -----------------------------------------------------------
+# Names and prices come from catalogue.h, which is "THE ONLY PLACE A PRICE
+# APPEARS" on the firmware side. Copied rather than shared because the two live
+# in different languages; if they diverge, catalogue.h is right.
+DRINKS = ("Coke", "Sprite", "Fanta", "Pasito")
+PRICE_CENTS = 200
+
+#: Chance a door cycle actually removed something. Plenty of opens are somebody
+#: looking and changing their mind, and those produce no transaction at all —
+#: net-zero returns to Idle silently (decision D8).
+TAKE_RATE = 0.55
+
+#: How many drinks get taken when something is. Mostly one.
+BASKET_WEIGHTS = ((1, 0.72), (2, 0.22), (3, 0.06))
+
+#: Split between the two payment buttons. `PaymentMethod::Online` reports itself
+#: as "card", NOT "online" — see payment_method_name() in checkout.h.
+CASH_SHARE = 0.6
+
+#: Fraction of transactions nobody pays for. Logged as `outcome=stolen`, which
+#: is what makes the theft panels work at all — a simulator where everyone pays
+#: would leave them permanently empty and untested.
+ABANDON_RATE = 0.17
+
+#: Coin masses after the stage-8 recalibration (plan.md risk R1): the $1 is
+#: 9.00 g, not the 9.80 g an uncalibrated scale reported.
+COIN_G = {100: 9.00, 200: 6.60}
+
+#: Something that is not a coin goes in — a washer, a slug, a knock on the box.
+COIN_REJECT_RATE = 0.04
+
+#: Roughly how long the customer takes, in seconds.
+CASH_DECIDE_S = (3.0, 12.0)
+CASH_PER_COIN_S = (1.5, 5.0)
+CARD_PAY_S = (12.0, 45.0)
+
 # --- Coin box ---------------------------------------------------------------
 # A stand-in until stage D5 makes the box mass follow real transactions. Tying
 # it to door closes rather than inventing a smooth ramp keeps it correlated with
@@ -143,6 +179,110 @@ BOOT_BANNER = [
     "[{t:.3f} Information]: pi_link: backend=serial",
     "[{t:.3f} Information]: switches: door starts CLOSED",
 ]
+
+
+def _basket(rng):
+    """Pick what was taken, and what it costs."""
+    roll = rng.random()
+    cumulative = 0.0
+    count = 1
+    for size, weight in BASKET_WEIGHTS:
+        cumulative += weight
+        if roll <= cumulative:
+            count = size
+            break
+    items = {}
+    for _ in range(count):
+        drink = rng.choice(DRINKS)
+        items[drink] = items.get(drink, 0) + 1
+    return items, count * PRICE_CENTS
+
+
+def _coins_for(rng, owed_cents):
+    """A plausible way to pay `owed_cents` in $1 and $2 coins.
+
+    No change is given, so the customer either has the exact combination or
+    overpays slightly. Both happen here.
+    """
+    coins = []
+    remaining = owed_cents
+    while remaining > 0:
+        if remaining >= 200 and rng.random() < 0.65:
+            coins.append(200)
+            remaining -= 200
+        else:
+            coins.append(100)
+            remaining -= 100
+    return coins
+
+
+def plan_transaction(rng, txn_id, closed_at):
+    """The frames for one purchase, exactly as the firmware would send them.
+
+    Returns `(at, prefix, type, payload)` tuples in time order. A pure function
+    of its arguments, so `fake_board` can schedule them onto a live link and
+    `fridged/seed.py` can push the same frames through the real ingest path to
+    build history. One description of what a sale looks like, not two.
+
+    THE POINT OF THIS FUNCTION IS THE AWKWARD SHAPE, NOT THE HAPPY PATH.
+    The firmware's `notify_sale()` is called from two places, and the result is
+    genuinely lopsided (dashboard.md section 6.2):
+
+      * a CASH sale sends `TXN_START` TWICE with the same id — once when the
+        CASH button is pressed and again on completion;
+      * a CARD sale sends it ONCE, at the very end;
+      * a CARD sale that is abandoned sends **no `TXN_START` at all**, so
+        `TXN_END outcome=stolen` arrives for a transaction the Pi has never
+        heard of, with no item list attached.
+
+    Reproducing that is what proves the ingest upserts rather than inserts, and
+    stops a panel being built on an assumption the firmware never made.
+    """
+    frames = []
+    items, owed = _basket(rng)
+    item_text = ",".join(f"{name}:{n}" for name, n in items.items())
+    abandoned = rng.random() < ABANDON_RATE
+    cash = rng.random() < CASH_SHARE
+    method = "cash" if cash else "card"
+    at = closed_at + rng.uniform(*CASH_DECIDE_S)
+
+    def start(when):
+        frames.append((when, "EVT", "TXN_START",
+                       f"id={txn_id} items={item_text} owed={owed} "
+                       f"method={method}"))
+
+    paid = 0
+    if cash:
+        start(at)                                       # on the CASH button
+        for denom in _coins_for(rng, owed):
+            at += rng.uniform(*CASH_PER_COIN_S)
+            if rng.random() < COIN_REJECT_RATE:
+                # Not a coin. The mass changed and nothing was credited.
+                frames.append((at, "EVT", "COIN_REJECT",
+                               f"delta_g={rng.uniform(2.0, 5.0):.2f}"))
+                at += rng.uniform(*CASH_PER_COIN_S)
+            if abandoned and paid > 0:
+                break                                   # walked off part-paid
+            frames.append((at, "EVT", "COIN",
+                           f"denom={denom} delta_g={COIN_G[denom]:.2f}"))
+            paid += denom
+    else:
+        at += rng.uniform(*CARD_PAY_S)
+        if not abandoned:
+            start(at)                                   # ONLY on completion
+            paid = owed
+
+    if abandoned:
+        at += 120.0                                     # PAYMENT_TIMEOUT_MS
+        frames.append((at, "EVT", "TXN_END",
+                       f"id={txn_id} outcome=stolen owed={owed} paid={paid}"))
+        return frames
+
+    if cash:
+        start(at)                                       # the duplicate
+    frames.append((at, "EVT", "TXN_END",
+                   f"id={txn_id} outcome=paid owed={owed} paid={paid}"))
+    return frames
 
 
 class DoorSchedule:
@@ -371,6 +511,16 @@ class FakeBoard:
 
         self.box_g = 0.0
         self.emptied = 0
+        self._pending_txn_id = 0
+        #: Frames whose moment has not arrived yet, kept sorted by time.
+        #: A transaction runs for minutes, so appending its frames to the
+        #: current pass would emit them with future timestamps and the
+        #: board's `ms` would go BACKWARDS on the next door event - which
+        #: the Pi reads as a reset.
+        self._scheduled = []
+        #: Tie-break for frames scheduled at the same instant, so they
+        #: come out in insertion order rather than alphabetically.
+        self._seq = 0
 
         self._reboot(0.0, first=True)
 
@@ -456,6 +606,11 @@ class FakeBoard:
         # dashboard should show rather than paper over.
         self._next_temp = at + TEMP_SAMPLE_S
         self._next_health = at + HEALTH_INTERVAL_S
+        # Anything mid-flight dies with the reset. That is what a
+        # reboot during a transaction really looks like, and it
+        # also keeps `ms` honest: a scheduled time belongs to the
+        # boot that scheduled it.
+        self._scheduled = []
         if not first:
             self.reboots += 1
 
@@ -502,15 +657,19 @@ class FakeBoard:
         while now >= self._next_temp:
             sampled_at = self._next_temp
             self._next_temp += TEMP_SAMPLE_S
-            # Stamped when the readings come OUT, not when the conversion was
-            # started, and spread by one superloop pass each.
+            # SCHEDULED, not appended to this pass. The readings are stamped
+            # when they come OUT — 750 ms after the conversion starts — so
+            # emitting them the moment the SAMPLE falls due sends them up to
+            # three quarters of a second early. That is long enough for a
+            # temperature frame to overtake a door event, which puts the board's
+            # `ms` backwards on the wire and reads as a reset at the far end.
             for index, zone in enumerate(self.zones):
                 celsius = zone.celsius(self.unix_time(sampled_at), self.rng,
                                        self.door)
-                due.append((sampled_at + TEMP_CONVERSION_S +
-                            index * TEMP_PER_SENSOR_S,
-                            "EVT", "TEMP",
-                            f"rom={zone.rom} c={celsius:.3f}"))
+                self._schedule(sampled_at + TEMP_CONVERSION_S +
+                               index * TEMP_PER_SENSOR_S,
+                               "EVT", "TEMP",
+                               f"rom={zone.rom} c={celsius:.3f}")
 
         # The door. Generated in absolute time, then converted back to
         # sim-relative for the frame's `ms` stamp.
@@ -522,10 +681,15 @@ class FakeBoard:
                 break
             self._door_index += 1
             self.door_open = is_open
-            if not is_open:
-                self._maybe_take_payment()
             due.append((at, "EVT", "DOOR",
                         f"state={'open' if is_open else 'closed'}"))
+
+            if is_open:
+                # `begin_selecting()` sets transaction_id = now_ms() when the
+                # door OPENS, not when it shuts, so the id is stamped here.
+                self._pending_txn_id = max(0, int(self.ms_since_boot(at)))
+            elif self.rng.random() < TAKE_RATE:
+                self._run_transaction(self._pending_txn_id, at)
 
         while now >= self._next_health:
             at = self._next_health
@@ -533,6 +697,11 @@ class FakeBoard:
             due.append((at, "EVT", "HEALTH",
                         f"die_c={self._die_celsius(at):.1f} "
                         f"box_g={self.box_g:.2f} faults=0"))
+
+        # Frames from transactions already in flight, now due.
+        while self._scheduled and self._scheduled[0][0] <= now:
+            at_, _seq, prefix, type_, payload = self._scheduled.pop(0)
+            due.append((at_, prefix, type_, payload))
 
         due.sort(key=lambda item: item[0])
         for at, prefix, type_, payload in due:
@@ -549,22 +718,34 @@ class FakeBoard:
         return (32.0 + 2.5 * math.sin(2.0 * math.pi * unix_t / 86400.0)
                 + self.rng.gauss(0.0, 0.25))
 
-    def _maybe_take_payment(self):
-        """Some door closes end in coins going in the box.
-
-        A stand-in until stage D5 drives this from real transactions. Hung off
-        door closes rather than a smooth ramp so the money-box panel and the
-        door panels agree with each other.
-        """
-        if self.rng.random() >= COIN_ON_CLOSE_RATE:
-            return
-        for _ in range(self.rng.randint(1, 2)):
-            self.box_g += self.rng.choice(COIN_MASSES_G)
+    def _add_to_box(self, grams):
+        self.box_g += grams
         if self.box_g >= BOX_FULL_G:
             # The treasurer emptied it. A sawtooth, which is what the fill-level
             # panel is for: the drop is the takings.
             self.box_g = 0.0
             self.emptied += 1
+
+
+
+    def _schedule(self, at, prefix, type_, payload):
+        # The sequence number breaks ties by INSERTION ORDER. Without it,
+        # frames sharing a timestamp sort alphabetically and TXN_END would
+        # precede the TXN_START it belongs to - the firmware sends them the
+        # other way round, and imitating it wrongly is how a simulator
+        # stops being evidence of anything.
+        self._seq += 1
+        bisect.insort(self._scheduled,
+                      (at, self._seq, prefix, type_, payload))
+
+    def _run_transaction(self, txn_id, closed_at):
+        """Schedule one purchase, and put its coins in the box."""
+        for at, prefix, type_, payload in plan_transaction(
+                self.rng, txn_id, closed_at):
+            self._schedule(at, prefix, type_, payload)
+            if type_ == "COIN":
+                grams = float(payload.split("delta_g=")[1])
+                self._add_to_box(grams)
 
     # --- The serial.Serial surface `fridged` uses ---------------------------
 

@@ -39,6 +39,11 @@ class Ingest:
         #: visible: a type sitting in here is a to-do with a count attached.
         self.unhandled = {}
 
+        #: The transaction coins are currently being attributed to. Set by
+        #: TXN_START, cleared by TXN_END. Needed because `EVT COIN` carries
+        #: no id of its own.
+        self.open_txn_id = None
+
         self._next_self_metric = 0.0
 
     # --- Entry point --------------------------------------------------------
@@ -205,6 +210,102 @@ class Ingest:
                 self.store.measurement(ts, metric, float(raw))
             except ValueError:
                 log.warning("HEALTH %s is not a number: %r", key, raw)
+
+    # --- Transactions -------------------------------------------------------
+
+    def _on_txn_start(self, frame, ts):
+        """`EVT TXN_START id= items=Coke:2,Fanta:1 owed= method=`.
+
+        NOT a reliable "transaction begins" marker, despite the name. See
+        `Store.upsert_txn` for the full shape; the short version is that this
+        arrives twice for a cash sale and once, at the end, for a card sale.
+        """
+        txn_id = protocol.u32(frame.payload, "id")
+        if txn_id is None:
+            log.warning("TXN_START with no id: %s", frame.payload)
+            return
+
+        owed = protocol.u32(frame.payload, "owed")
+        method = protocol.field(frame.payload, "method")
+        # "none" is what the firmware reports for a method not yet chosen. Stored
+        # as NULL so the payment-split panel does not grow a third slice that
+        # means "we do not know".
+        if method == "none":
+            method = None
+
+        self.store.upsert_txn(self.boot_id, txn_id, ts_start=ts,
+                              owed_cents=owed, method=method)
+        self.open_txn_id = txn_id
+
+        items = self._parse_items(protocol.field(frame.payload, "items"))
+        if items:
+            total = sum(items.values())
+            # The frame carries no PER-ITEM price, only the basket total, so the
+            # unit price is derived. Exact while every drink costs the same,
+            # which catalogue.h says they do; if prices ever diverge, this
+            # becomes an average and revenue-per-drink needs the firmware to
+            # send prices.
+            unit = owed // total if owed and total else None
+            self.store.set_txn_items(self.boot_id, txn_id, items, unit)
+
+    def _on_txn_end(self, frame, ts):
+        """`EVT TXN_END id= outcome=paid|stolen|cancelled owed= paid=`."""
+        txn_id = protocol.u32(frame.payload, "id")
+        if txn_id is None:
+            log.warning("TXN_END with no id: %s", frame.payload)
+            return
+
+        outcome = protocol.field(frame.payload, "outcome")
+        if outcome not in ("paid", "stolen", "cancelled"):
+            log.warning("TXN_END with an unrecognised outcome: %r", outcome)
+            outcome = None
+
+        self.store.upsert_txn(
+            self.boot_id, txn_id, ts_end=ts, outcome=outcome,
+            owed_cents=protocol.u32(frame.payload, "owed"),
+            paid_cents=protocol.u32(frame.payload, "paid"))
+
+        if outcome == "stolen":
+            log.info("transaction %s ended unpaid", txn_id)
+        self.open_txn_id = None
+
+    def _on_coin(self, frame, ts):
+        """`EVT COIN denom= delta_g=` — no id, so it is attributed here."""
+        self.store.coin_event(
+            ts, self.boot_id, self.open_txn_id,
+            protocol.u32(frame.payload, "denom"),
+            self._float(frame.payload, "delta_g"), classified=True)
+
+    def _on_coin_reject(self, frame, ts):
+        """`EVT COIN_REJECT delta_g=` — a slug, a washer, or a knock on the box.
+
+        Worth recording rather than discarding: a rising count is either someone
+        trying it on or the classifier drifting, and both are things you would
+        want to find out about from a graph rather than from a shortfall.
+        """
+        self.store.coin_event(
+            ts, self.boot_id, self.open_txn_id, None,
+            self._float(frame.payload, "delta_g"), classified=False)
+
+    @staticmethod
+    def _parse_items(text):
+        """`Coke:2,Fanta:1` -> {'Coke': 2, 'Fanta': 1}. `none` -> {}."""
+        if not text or text == "none":
+            return {}
+        items = {}
+        for part in text.split(","):
+            name, _, qty = part.partition(":")
+            if name and qty.isdigit():
+                items[name] = items.get(name, 0) + int(qty)
+        return items
+
+    @staticmethod
+    def _float(payload, key):
+        raw = protocol.field(payload, key)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return None
 
     # --- Our own telemetry --------------------------------------------------
 

@@ -504,6 +504,102 @@ def test_door_and_health_ingest():
     store2.close()
 
 
+# --- Transactions -----------------------------------------------------------
+
+def test_transaction_ingest():
+    print("\n--- transaction ingest ---")
+    import random
+
+    from fake_board import plan_transaction
+
+    store = Store(temp_db()).open()
+    link = Link(StubTransport())
+    ingest = Ingest(store, link)
+    feed(ingest, link, protocol.build("EVT", "BOOT", "fw=0.2", ms=0))
+
+    # A CASH sale, in the firmware's real order: start, coins, start AGAIN, end.
+    # The duplicate is the whole point — an INSERT would raise, and naive item
+    # handling would double the basket and the units-sold panel with it.
+    for payload in (
+        ("TXN_START", "id=7 items=Coke:2,Fanta:1 owed=600 method=cash"),
+        ("COIN", "denom=200 delta_g=6.60"),
+        ("COIN", "denom=200 delta_g=6.60"),
+        ("COIN_REJECT", "delta_g=3.40"),
+        ("COIN", "denom=200 delta_g=6.60"),
+        ("TXN_START", "id=7 items=Coke:2,Fanta:1 owed=600 method=cash"),
+        ("TXN_END", "id=7 outcome=paid owed=600 paid=600"),
+    ):
+        feed(ingest, link, protocol.build("EVT", payload[0], payload[1], ms=1))
+    store.flush(force=True)
+
+    check("a duplicated TXN_START produces ONE transaction row",
+          store._conn.execute("SELECT COUNT(*) FROM txn").fetchone()[0] == 1)
+    row = store._conn.execute(
+        "SELECT method, owed_cents, paid_cents, outcome FROM txn").fetchone()
+    check("the sale is complete after TXN_END",
+          row == ("cash", 600, 600, "paid"))
+    items = dict(store._conn.execute("SELECT drink, qty FROM txn_item"))
+    check(f"the basket is not doubled by the duplicate ({items})",
+          items == {"Coke": 2, "Fanta": 1})
+    check("coins are attributed to the open transaction",
+          store._conn.execute(
+              "SELECT COUNT(*) FROM coin_event WHERE txn_id = 7 "
+              "AND classified = 1").fetchone()[0] == 3)
+    check("a rejected coin is recorded with no denomination",
+          store._conn.execute(
+              "SELECT COUNT(*) FROM coin_event WHERE classified = 0 "
+              "AND denom_cents IS NULL").fetchone()[0] == 1)
+
+    # An abandoned CARD sale sends TXN_END for a transaction we never saw start.
+    # A plain UPDATE would silently affect nothing and the theft would vanish.
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_END", "id=9 outcome=stolen owed=400 paid=0", ms=2))
+    store.flush(force=True)
+    row = store._conn.execute(
+        "SELECT outcome, owed_cents, ts_start FROM txn WHERE txn_id = 9"
+    ).fetchone()
+    check("TXN_END alone still creates the transaction (abandoned card sale)",
+          row is not None and row[0] == "stolen" and row[1] == 400)
+    check("...with no start time, because the board never sent one",
+          row[2] is None)
+
+    # Coins with nothing open must not be attached to the last transaction.
+    feed(ingest, link, protocol.build("EVT", "COIN", "denom=100 delta_g=9.00",
+                                      ms=3))
+    store.flush(force=True)
+    check("a coin with no transaction open is recorded with a NULL txn_id",
+          store._conn.execute(
+              "SELECT COUNT(*) FROM coin_event WHERE txn_id IS NULL"
+          ).fetchone()[0] == 1)
+
+    # The duplicate arrives at completion; it must not drag ts_start forward.
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_START", "id=11 items=Coke:1 owed=200 method=cash", ms=4))
+    first = store._conn.execute(
+        "SELECT ts_start FROM txn WHERE txn_id = 11").fetchone()[0]
+    time.sleep(0.01)
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_START", "id=11 items=Coke:1 owed=200 method=cash", ms=5))
+    second = store._conn.execute(
+        "SELECT ts_start FROM txn WHERE txn_id = 11").fetchone()[0]
+    check("ts_start keeps the EARLIEST value, not the duplicate's",
+          second == first)
+
+    # And the generator really does produce all three shapes.
+    shapes = set()
+    rng = random.Random(1)
+    for i in range(400):
+        types = [f[2] for f in plan_transaction(rng, i, 0.0)]
+        starts = types.count("TXN_START")
+        stolen = any("TXN_END" == t for t in types)
+        shapes.add((starts, stolen))
+    check(f"the simulator emits 0, 1 and 2 TXN_STARTs across transactions "
+          f"({sorted(s[0] for s in shapes)})",
+          {0, 1, 2} <= {s[0] for s in shapes})
+
+    store.close()
+
+
 # --- Grafana dashboards -----------------------------------------------------
 
 #: How `frser-sqlite-datasource` expands its ONLY grouping macro:
@@ -573,6 +669,24 @@ def test_dashboards():
     store.door_closed(now - 480)
     store.door_opened(now - 300)
     store.door_closed(now - 90)
+
+    boot_id = store.open_boot(now - 600, "0.2")
+    # One cash sale, one card sale, one walked away from — enough for every
+    # transaction panel to have something in each of its slices.
+    store.upsert_txn(boot_id, 1001, ts_start=now - 460, ts_end=now - 430,
+                     method="cash", owed_cents=400, paid_cents=400,
+                     outcome="paid")
+    store.set_txn_items(boot_id, 1001, {"Coke": 1, "Fanta": 1}, 200)
+    store.upsert_txn(boot_id, 1002, ts_start=now - 300, ts_end=now - 260,
+                     method="card", owed_cents=200, paid_cents=200,
+                     outcome="paid")
+    store.set_txn_items(boot_id, 1002, {"Sprite": 1}, 200)
+    store.upsert_txn(boot_id, 1003, ts_start=now - 200, ts_end=now - 80,
+                     owed_cents=200, paid_cents=0, outcome="stolen")
+    store.set_txn_items(boot_id, 1003, {"Pasito": 1}, 200)
+    store.coin_event(now - 450, boot_id, 1001, 200, 6.60, True)
+    store.coin_event(now - 445, boot_id, 1001, 200, 6.60, True)
+    store.coin_event(now - 440, boot_id, 1001, None, 3.10, False)
     store.flush(force=True)
 
     for path in files:
@@ -669,6 +783,7 @@ if __name__ == "__main__":
     test_fake_board()
     test_door_model()
     test_door_and_health_ingest()
+    test_transaction_ingest()
     test_dashboards()
     test_end_to_end()
 
