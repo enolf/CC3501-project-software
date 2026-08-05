@@ -27,6 +27,21 @@ __pycache__/
 *$py.class
 
 # =============================================================================
+# Working documents — deliberately NOT part of the repository
+# =============================================================================
+# Planning and agent-instruction files. These are working documents between the
+# author and Claude Code, not deliverables, and they were never committed.
+#
+# CONSEQUENCE, so it is not a surprise later: a `git pull` on the Pi or a fresh
+# clone by a collaborator will NOT contain these. Anything another machine needs
+# to act on belongs in documentation.md or a README, both of which are tracked.
+CLAUDE.md
+claude_code_integration_prompt.md
+dashboard.md
+dashboard-plan.md
+plan.md
+
+# =============================================================================
 # Build output
 # =============================================================================
 build/

@@ -88,6 +88,20 @@ fi
 # at all, which makes it a nuisance to diagnose.
 sudo chown -R grafana:grafana "${PLUGIN_DIR}"
 
+# --- 1b. The sqlite3 command line -------------------------------------------
+# Python's `sqlite3` MODULE is built in, but the `sqlite3` COMMAND is a separate
+# Debian package and is not installed by default on Raspberry Pi OS. Every
+# troubleshooting step in README.md — and naming the sensors, which has to
+# happen before the dashboard shows anything — uses it.
+
+say "Checking for the sqlite3 command line"
+if command -v sqlite3 >/dev/null 2>&1; then
+    echo "    already installed"
+else
+    echo "    not found; installing"
+    sudo apt-get install -y sqlite3
+fi
+
 # --- 2. The database directory ----------------------------------------------
 # Not in a home directory. Grafana runs as `grafana` and a WAL database CANNOT
 # be opened read-only — a reader takes a lock in the -shm wal-index, so it needs
