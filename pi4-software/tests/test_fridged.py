@@ -589,7 +589,7 @@ def test_transaction_ingest():
     shapes = set()
     rng = random.Random(1)
     for i in range(400):
-        types = [f[2] for f in plan_transaction(rng, i, 0.0)]
+        types = [f[2] for f in plan_transaction(rng, i, 0.0, {"Coke": 1}, 200)]
         starts = types.count("TXN_START")
         stolen = any("TXN_END" == t for t in types)
         shapes.add((starts, stolen))
@@ -597,6 +597,81 @@ def test_transaction_ingest():
           f"({sorted(s[0] for s in shapes)})",
           {0, 1, 2} <= {s[0] for s in shapes})
 
+    store.close()
+
+
+# --- Stock -------------------------------------------------------------------
+
+def test_stock():
+    print("\n--- stock and the scan loop ---")
+    import random
+
+    from fridged.camera import DRINKS, SimCamera
+
+    camera = SimCamera(random.Random(2))
+    check("a full shelf starts at capacity",
+          all(v == camera.capacity for v in camera.shelf.values()))
+
+    payload, counts = camera.payload()
+    check(f"the INV payload uses the wire's lower-case drink keys ({payload})",
+          all(f"{d}=" in payload for d in DRINKS) and "conf=" in payload)
+    check("the payload's counts match the shelf", counts == camera.shelf)
+
+    # Restocking is what makes absolute counts self-correcting: no message
+    # announces it, the next scan simply reports more drinks.
+    for _ in range(200):
+        camera.customer_takes()
+        camera.maybe_restock()
+    check(f"the shelf restocks rather than emptying ({camera.restocks} times)",
+          camera.restocks > 0 and sum(camera.shelf.values()) > 0)
+    check("counts never go negative",
+          all(v >= 0 for v in camera.shelf.values()))
+
+    # The whole loop: board asks, Pi answers, board diffs, sale appears. This is
+    # the first BIDIRECTIONAL traffic in the system, and the piece where stock
+    # flows Pi -> board rather than the other way.
+    store = Store(temp_db()).open()
+    board = FakeBoard(seed=6, activity=400.0)
+    link = Link(board)
+    ingest = Ingest(store, link, SimCamera(random.Random(9)))
+
+    for _ in range(int(6 * 3600 / STEP_S)):
+        board.advance(STEP_S)
+        while True:
+            events = link.poll()
+            if not events:
+                break
+            for event in events:
+                ingest.handle(event)
+        store.flush()
+    store.flush(force=True)
+
+    scans = store._conn.execute(
+        "SELECT COUNT(DISTINCT ts) FROM stock_snapshot").fetchone()[0]
+    check(f"the board's CMD SCAN gets answered and snapshots are written "
+          f"({scans} scans)", scans > 4)
+
+    sold = store._conn.execute("SELECT COALESCE(SUM(qty),0) FROM txn_item "
+                               "").fetchone()[0]
+    check(f"baskets are derived from the scan difference ({sold} units sold)",
+          sold > 0)
+
+    # The strong claim: nothing was sold that the shelf did not lose. Sales are
+    # computed from camera differences, so a basket bigger than the drop would
+    # mean the diff logic is inventing drinks.
+    dropped = store._conn.execute(
+        "WITH s AS (SELECT drink, ts, count, "
+        "                  LAG(count) OVER (PARTITION BY drink ORDER BY ts) p "
+        "           FROM stock_snapshot) "
+        "SELECT COALESCE(SUM(MAX(p - count, 0)), 0) FROM s WHERE p IS NOT NULL"
+    ).fetchone()[0]
+    check(f"units sold never exceed the drop the camera saw "
+          f"(sold {sold}, shelf lost {dropped})", sold <= dropped)
+
+    check("every snapshot covers all four drinks",
+          store._conn.execute(
+              "SELECT MIN(n) FROM (SELECT COUNT(*) n FROM stock_snapshot "
+              "GROUP BY ts)").fetchone()[0] == len(DRINKS))
     store.close()
 
 
@@ -687,6 +762,15 @@ def test_dashboards():
     store.coin_event(now - 450, boot_id, 1001, 200, 6.60, True)
     store.coin_event(now - 445, boot_id, 1001, 200, 6.60, True)
     store.coin_event(now - 440, boot_id, 1001, None, 3.10, False)
+
+    # Stock over three scans, with a restock in the middle, so the
+    # reconciliation panel's restock-detection has something to detect.
+    store.stock_snapshot(now - 500,
+                         {"coke": 6, "sprite": 6, "fanta": 6, "pasito": 6})
+    store.stock_snapshot(now - 300,
+                         {"coke": 5, "sprite": 5, "fanta": 5, "pasito": 6})
+    store.stock_snapshot(now - 100,
+                         {"coke": 6, "sprite": 6, "fanta": 6, "pasito": 6})
     store.flush(force=True)
 
     for path in files:
@@ -784,6 +868,7 @@ if __name__ == "__main__":
     test_door_model()
     test_door_and_health_ingest()
     test_transaction_ingest()
+    test_stock()
     test_dashboards()
     test_end_to_end()
 

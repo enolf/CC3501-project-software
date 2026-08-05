@@ -16,11 +16,13 @@ asking which configuration is running.
 
 import argparse
 import logging
+import random
 import os
 import signal
 import time
 
 from . import config
+from .camera import SimCamera
 from .ingest import Ingest
 from .link import Link
 from .store import SCHEMA_VERSION, Store
@@ -133,7 +135,11 @@ def main(argv=None):
     log.info("database %s (schema v%d)", store.path, SCHEMA_VERSION)
 
     link = Link(build_transport(args))
-    ingest = Ingest(store, link)
+
+    # Stage D8 swaps this for a picapture subprocess. The board cannot
+    # tell the difference: it sends CMD SCAN and something answers.
+    camera = SimCamera(random.Random(args.sim_seed))
+    ingest = Ingest(store, link, camera)
 
     next_status = time.monotonic() + config.SELF_METRIC_INTERVAL_S
     log.info("running - Ctrl-C to stop")

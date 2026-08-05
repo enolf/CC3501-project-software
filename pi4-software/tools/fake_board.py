@@ -106,6 +106,11 @@ LOOKBACK_S = 10.0 * DOOR_TAU_RECOVER_S
 # APPEARS" on the firmware side. Copied rather than shared because the two live
 # in different languages; if they diverge, catalogue.h is right.
 DRINKS = ("Coke", "Sprite", "Fanta", "Pasito")
+
+#: The same drinks as they appear on the wire in `EVT INV`. The
+#: firmware lowercases catalogue::name() to build these keys.
+DRINK_KEYS = ("coke", "sprite", "fanta", "pasito")
+DRINK_DISPLAY = dict(zip(DRINK_KEYS, DRINKS))
 PRICE_CENTS = 200
 
 #: Chance a door cycle actually removed something. Plenty of opens are somebody
@@ -216,13 +221,17 @@ def _coins_for(rng, owed_cents):
     return coins
 
 
-def plan_transaction(rng, txn_id, closed_at):
+def plan_transaction(rng, txn_id, closed_at, items, owed):
     """The frames for one purchase, exactly as the firmware would send them.
 
     Returns `(at, prefix, type, payload)` tuples in time order. A pure function
     of its arguments, so `fake_board` can schedule them onto a live link and
     `fridged/seed.py` can push the same frames through the real ingest path to
     build history. One description of what a sale looks like, not two.
+
+    `items` and `owed` are passed IN rather than invented here, because from
+    stage D6 the basket is not the board's to invent: it is the difference
+    between two camera scans (dashboard.md section 6.3).
 
     THE POINT OF THIS FUNCTION IS THE AWKWARD SHAPE, NOT THE HAPPY PATH.
     The firmware's `notify_sale()` is called from two places, and the result is
@@ -239,7 +248,6 @@ def plan_transaction(rng, txn_id, closed_at):
     stops a panel being built on an assumption the firmware never made.
     """
     frames = []
-    items, owed = _basket(rng)
     item_text = ",".join(f"{name}:{n}" for name, n in items.items())
     abandoned = rng.random() < ABANDON_RATE
     cash = rng.random() < CASH_SHARE
@@ -512,6 +520,10 @@ class FakeBoard:
         self.box_g = 0.0
         self.emptied = 0
         self._pending_txn_id = 0
+        #: The scan taken when the door opened, and what we are waiting for.
+        self._inv_before = None
+        self._expect_before = False
+        self._expect_after = None
         #: Frames whose moment has not arrived yet, kept sorted by time.
         #: A transaction runs for minutes, so appending its frames to the
         #: current pass would emit them with future timestamps and the
@@ -684,12 +696,17 @@ class FakeBoard:
             due.append((at, "EVT", "DOOR",
                         f"state={'open' if is_open else 'closed'}"))
 
+            # `begin_selecting()` requests a scan when the door OPENS and
+            # `Recount` requests another when it shuts. The basket is the
+            # DIFFERENCE between the two answers; the board never decides what
+            # was taken, it finds out (dashboard.md section 6.3).
             if is_open:
-                # `begin_selecting()` sets transaction_id = now_ms() when the
-                # door OPENS, not when it shuts, so the id is stamped here.
+                # transaction_id = now_ms() at the OPEN, not at the close.
                 self._pending_txn_id = max(0, int(self.ms_since_boot(at)))
-            elif self.rng.random() < TAKE_RATE:
-                self._run_transaction(self._pending_txn_id, at)
+                self._expect_before = True
+            else:
+                self._expect_after = (self._pending_txn_id, at)
+            self._schedule(at + 0.05, "CMD", "SCAN", "")
 
         while now >= self._next_health:
             at = self._next_health
@@ -738,14 +755,56 @@ class FakeBoard:
         bisect.insort(self._scheduled,
                       (at, self._seq, prefix, type_, payload))
 
-    def _run_transaction(self, txn_id, closed_at):
+    def _run_transaction(self, txn_id, closed_at, items, owed):
         """Schedule one purchase, and put its coins in the box."""
         for at, prefix, type_, payload in plan_transaction(
-                self.rng, txn_id, closed_at):
+                self.rng, txn_id, closed_at, items, owed):
             self._schedule(at, prefix, type_, payload)
-            if type_ == "COIN":
-                grams = float(payload.split("delta_g=")[1])
-                self._add_to_box(grams)
+            if type_ in ("COIN", "COIN_REJECT"):
+                # Rejected mass goes in the box too. A washer that is not
+                # recognised as a coin still WEIGHS something, and that
+                # difference between the logged takings and the measured mass is
+                # exactly what the cash reconciliation check exists to find
+                # (dashboard.md section 11).
+                self._add_to_box(float(payload.split("delta_g=")[1]))
+
+    def _handle_inventory(self, payload):
+        """An `EVT INV` arrived. Diff it, and start a sale if anything left.
+
+        Absolute counts, never a difference - so a dropped frame costs one stale
+        reading instead of permanently offsetting the shelf.
+        """
+        counts = {}
+        for drink in DRINK_KEYS:
+            value = protocol.u32(payload, drink)
+            if value is not None:
+                counts[drink] = value
+        if not counts:
+            return
+
+        if self._expect_before:
+            self._inv_before = counts
+            self._expect_before = False
+            return
+
+        if self._expect_after is None:
+            return
+        txn_id, closed_at = self._expect_after
+        self._expect_after = None
+
+        taken = {}
+        for drink, before in (self._inv_before or {}).items():
+            gone = before - counts.get(drink, before)
+            if gone > 0:
+                taken[DRINK_DISPLAY[drink]] = gone
+        self._inv_before = counts
+
+        # Net zero, or a restock (a negative diff), returns to Idle in silence -
+        # decision D8. No screen, no frames, nothing on the dashboard.
+        if not taken:
+            return
+        self._run_transaction(txn_id, closed_at, taken,
+                              sum(taken.values()) * PRICE_CENTS)
 
     # --- The serial.Serial surface `fridged` uses ---------------------------
 
@@ -759,16 +818,22 @@ class FakeBoard:
         return chunk
 
     def write(self, data):
-        """Receive what the Pi sends. Frames are counted; the rest is ignored.
+        """Receive what the Pi sends.
 
-        Stage D1 has nothing to reply to — `EVT HB` from the Pi is the only
-        traffic, and its arrival is the entire message. `CMD SCAN` and
-        `CMD SQUARE_LINK` get answers when the stages that send them arrive.
+        `EVT HB` needs nothing but to arrive. `EVT INV` is the interesting one:
+        it is the answer to a `CMD SCAN`, and diffing two of them is how the
+        board learns what was taken. `RSP SQUARE_*` arrives with stage D7.
         """
         for raw in bytes(data).split(b"\n"):
             line = raw.decode("utf-8", "replace").strip()
-            if line and protocol.parse(line) is not None:
-                self.frames_in += 1
+            if not line:
+                continue
+            frame = protocol.parse(line)
+            if frame is None:
+                continue
+            self.frames_in += 1
+            if frame.type == "INV":
+                self._handle_inventory(frame.payload)
         return len(data)
 
     def flush(self):

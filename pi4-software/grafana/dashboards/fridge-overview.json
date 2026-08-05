@@ -1542,6 +1542,379 @@
       }
     },
     {
+      "id": 30,
+      "type": "table",
+      "title": "Stock now",
+      "description": "The camera's most recent count. Amber at 2, red at 1 - a drink about to run out is the thing worth acting on.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 47
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT drink AS \"Drink\", count AS \"In stock\"\nFROM stock_snapshot\nWHERE ts = (SELECT MAX(ts) FROM stock_snapshot)\nORDER BY drink",
+          "rawQueryText": "SELECT drink AS \"Drink\", count AS \"In stock\"\nFROM stock_snapshot\nWHERE ts = (SELECT MAX(ts) FROM stock_snapshot)\nORDER BY drink",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "In stock"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "#EAB839",
+                      "value": 2
+                    },
+                    {
+                      "color": "green",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Stock burn-down",
+      "description": "Counts fall as drinks are taken and jump straight back up on a restock. Nothing announces a restock - the next scan simply reports more drinks, which is why the camera is the source of truth (dashboard.md section 2).",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 47
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MAX(CASE WHEN drink = 'coke'   THEN count END) AS \"Coke\",\n       MAX(CASE WHEN drink = 'sprite' THEN count END) AS \"Sprite\",\n       MAX(CASE WHEN drink = 'fanta'  THEN count END) AS \"Fanta\",\n       MAX(CASE WHEN drink = 'pasito' THEN count END) AS \"Pasito\"\nFROM stock_snapshot\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MAX(CASE WHEN drink = 'coke'   THEN count END) AS \"Coke\",\n       MAX(CASE WHEN drink = 'sprite' THEN count END) AS \"Sprite\",\n       MAX(CASE WHEN drink = 'fanta'  THEN count END) AS \"Fanta\",\n       MAX(CASE WHEN drink = 'pasito' THEN count END) AS \"Pasito\"\nFROM stock_snapshot\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "stat",
+      "title": "Coin box drift",
+      "description": "Measured mass on the load cell, minus the mass the logged coins should weigh, since the box was last emptied. Should be close to the unrecognised mass beside it: a washer that is not credited as a coin still weighs something.\n\nEXACT agreement is not expected. The mass is sampled every 30 s while coins land instantly, so a coin arriving just after an emptying can sit outside the window - worth about one coin, hence the 15 g tolerance.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 54
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "WITH m AS (\n  SELECT ts, value, LAG(value) OVER (ORDER BY ts) AS prev\n  FROM measurement WHERE metric = 'coinbox.mass_g'),\nemptied AS (\n  SELECT COALESCE(MAX(ts), 0) AS t0 FROM m WHERE prev - value > 50),\nmeasured AS (\n  SELECT value AS g FROM measurement\n  WHERE metric = 'coinbox.mass_g' ORDER BY ts DESC LIMIT 1),\nlogged AS (\n  SELECT COALESCE(SUM(mass_delta_g), 0) AS g FROM coin_event, emptied\n  WHERE classified = 1 AND coin_event.ts > emptied.t0)\nSELECT (SELECT g FROM measured) - (SELECT g FROM logged) AS \"Drift\"",
+          "rawQueryText": "WITH m AS (\n  SELECT ts, value, LAG(value) OVER (ORDER BY ts) AS prev\n  FROM measurement WHERE metric = 'coinbox.mass_g'),\nemptied AS (\n  SELECT COALESCE(MAX(ts), 0) AS t0 FROM m WHERE prev - value > 50),\nmeasured AS (\n  SELECT value AS g FROM measurement\n  WHERE metric = 'coinbox.mass_g' ORDER BY ts DESC LIMIT 1),\nlogged AS (\n  SELECT COALESCE(SUM(mass_delta_g), 0) AS g FROM coin_event, emptied\n  WHERE classified = 1 AND coin_event.ts > emptied.t0)\nSELECT (SELECT g FROM measured) - (SELECT g FROM logged) AS \"Drift\"",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "massg",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 40
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 33,
+      "type": "stat",
+      "title": "Unrecognised mass",
+      "description": "Mass that went into the box and was not a coin combination the classifier recognised - slugs, washers, or a knock on the box. CoinAcceptor already emits these (dashboard.md section 10); a rising total is either somebody trying it on or the classifier drifting.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 54
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(SUM(mass_delta_g), 0) AS \"Unrecognised\"\nFROM coin_event\nWHERE classified = 0 AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COALESCE(SUM(mass_delta_g), 0) AS \"Unrecognised\"\nFROM coin_event\nWHERE classified = 0 AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "massg",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 34,
+      "type": "table",
+      "title": "Stock reconciliation - camera vs ledger",
+      "description": "Two independent accounts of the same shelf. The camera says what is there; the transaction ledger says what should be. Restocks are detected as upward jumps in the count and added in, so what is left is genuinely unexplained.\n\nNEGATIVE means drinks left without a sale being recorded. Neither hardware nor message exists for this - it falls out of data already collected, which is the most novel part of the project (dashboard.md section 11).",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 58
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "WITH s AS (\n  SELECT drink, ts, count,\n         LAG(count) OVER (PARTITION BY drink ORDER BY ts) AS prev\n  FROM stock_snapshot WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}),\nbase AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MIN(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nrestock AS (\n  SELECT drink, SUM(MAX(count - prev, 0)) AS r\n  FROM s WHERE prev IS NOT NULL GROUP BY drink),\nlatest AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MAX(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nsold AS (\n  SELECT LOWER(i.drink) AS d, SUM(i.qty) AS q\n  FROM txn_item i\n  JOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\n  WHERE t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1)\nSELECT b.drink                                   AS \"Drink\",\n       b.count                                   AS \"At start\",\n       COALESCE(r.r, 0)                          AS \"Restocked\",\n       COALESCE(so.q, 0)                         AS \"Sold\",\n       l.count                                   AS \"Now\",\n       l.count - (b.count + COALESCE(r.r, 0)\n                  - COALESCE(so.q, 0))           AS \"Unaccounted\"\nFROM base b\nJOIN latest l ON l.drink = b.drink\nLEFT JOIN restock r ON r.drink = b.drink\nLEFT JOIN sold so ON so.d = b.drink\nORDER BY 1",
+          "rawQueryText": "WITH s AS (\n  SELECT drink, ts, count,\n         LAG(count) OVER (PARTITION BY drink ORDER BY ts) AS prev\n  FROM stock_snapshot WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}),\nbase AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MIN(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nrestock AS (\n  SELECT drink, SUM(MAX(count - prev, 0)) AS r\n  FROM s WHERE prev IS NOT NULL GROUP BY drink),\nlatest AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MAX(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nsold AS (\n  SELECT LOWER(i.drink) AS d, SUM(i.qty) AS q\n  FROM txn_item i\n  JOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\n  WHERE t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1)\nSELECT b.drink                                   AS \"Drink\",\n       b.count                                   AS \"At start\",\n       COALESCE(r.r, 0)                          AS \"Restocked\",\n       COALESCE(so.q, 0)                         AS \"Sold\",\n       l.count                                   AS \"Now\",\n       l.count - (b.count + COALESCE(r.r, 0)\n                  - COALESCE(so.q, 0))           AS \"Unaccounted\"\nFROM base b\nJOIN latest l ON l.drink = b.drink\nLEFT JOIN restock r ON r.drink = b.drink\nLEFT JOIN sold so ON so.d = b.drink\nORDER BY 1",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unaccounted"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "#EAB839",
+                      "value": -2
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ],
+          "fields": [
+            "Sold",
+            "Unaccounted"
+          ]
+        }
+      }
+    },
+    {
       "id": 5,
       "type": "table",
       "title": "Sensors — name a new one here",
@@ -1550,7 +1923,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 47
+        "y": 65
       },
       "datasource": {
         "type": "frser-sqlite-datasource",

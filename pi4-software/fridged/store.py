@@ -454,6 +454,18 @@ class Store:
             (ts, boot_id, txn_id, denom_cents, mass_delta_g,
              1 if classified else 0))
 
+    def stock_snapshot(self, ts, counts, trigger="door_close"):
+        """What the camera saw, per drink.
+
+        Written when `fridged` ANSWERS a scan, not when the board reports
+        anything — stock is the one metric that flows Pi -> board
+        (dashboard.md section 6.3).
+        """
+        for drink, count in counts.items():
+            self._queue(
+                "INSERT INTO stock_snapshot (ts, drink, count, trigger) "
+                "VALUES (?,?,?,?)", (ts, drink, count, trigger))
+
     def note_sensor(self, rom_code, ts, kind="ds18b20"):
         """Make sure a ROM code has a row, without disturbing its zone label.
 

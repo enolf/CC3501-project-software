@@ -71,11 +71,19 @@ class Link:
 
         try:
             chunk = self.transport.read(config.MAX_READ_PER_POLL)
-        except Exception:
+        except OSError:
             # A disconnected USB device raises rather than returning nothing.
             # Treated as "no data": the loop keeps running, `age_s` climbs, and
             # the health panel shows the link down — which is the truth, and is
             # more useful than a traceback that stops the service.
+            #
+            # OSError SPECIFICALLY, not Exception. pyserial's SerialException is
+            # an OSError, so real disconnects are covered — while a TypeError or
+            # an AttributeError from a bug still propagates and stops the
+            # service loudly. A bare `except Exception` here once hid a
+            # completely broken simulated board behind a link that reported
+            # itself healthy, which is the worst of both outcomes: no data and
+            # no error.
             return []
 
         if not chunk:

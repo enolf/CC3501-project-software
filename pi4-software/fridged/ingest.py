@@ -24,9 +24,13 @@ log = logging.getLogger("fridged.ingest")
 class Ingest:
     """Turns link events into database rows."""
 
-    def __init__(self, store, link):
+    def __init__(self, store, link, camera=None):
         self.store = store
         self.link = link
+        #: Answers CMD SCAN. None means stock is not wired up, which
+        #: is a warning rather than a failure - every other metric
+        #: still works without a camera.
+        self.camera = camera
 
         #: Which `boot` row everything currently belongs to. None until the first
         #: frame arrives — we may have been started before the board, or after.
@@ -169,6 +173,26 @@ class Ingest:
         self.store.note_sensor(rom, ts)
         self.store.measurement(ts, f"temp.rom.{rom}", celsius)
 
+    def _on_scan(self, frame, ts):
+        """`CMD SCAN` — the board asking what is on the shelf.
+
+        The only message that gets an answer. Replying is not optional: the
+        board sits in `Recount` waiting, and gives up into a Fault screen after
+        `RECOUNT_TIMEOUT_MS` if nothing arrives.
+
+        The snapshot is written here, at the moment the answer is given, because
+        this is the point at which the Pi commits to a count.
+        """
+        if self.camera is None:
+            log.warning("CMD SCAN arrived but no camera is configured")
+            return
+
+        payload, counts = self.camera.payload()
+        if not self.link.send("EVT", "INV", payload):
+            log.error("could not send the INV reply: %s", payload)
+            return
+        self.store.stock_snapshot(ts, counts)
+
     def _on_door(self, frame, ts):
         """`EVT DOOR state=open|closed`.
 
@@ -181,6 +205,21 @@ class Ingest:
         if state == "open":
             self.store.door_opened(ts)
         elif state == "closed":
+            # The shelf changes here, NOT when the door opened.
+            #
+            # The board takes a baseline scan the instant the door opens, and
+            # that scan has to see a full shelf — the customer has not reached in
+            # yet. Removing the drinks at the open instead makes the baseline
+            # already reflect them, the two scans agree, and every transaction
+            # silently disappears. Which is exactly what happened when this was
+            # written the other way round.
+            #
+            # `CMD SCAN` for the recount arrives just after this, so by the time
+            # the Pi answers, the shelf is right.
+            if self.camera is not None:
+                self.camera.customer_takes()
+                self.camera.maybe_restock()
+
             duration = self.store.door_closed(ts)
             if duration is None:
                 # Started while the fridge was already open. Normal on a restart

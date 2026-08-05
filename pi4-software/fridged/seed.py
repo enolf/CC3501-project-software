@@ -42,10 +42,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import protocol                # noqa: E402  (tools/)
 from fake_board import (       # noqa: E402  (tools/)
     BOX_FULL_G, DEFAULT_ZONES, DoorSchedule, HEALTH_INTERVAL_S,
-    TAKE_RATE, TEMP_SAMPLE_S, plan_transaction,
+    PRICE_CENTS, TEMP_SAMPLE_S, plan_transaction,
 )
 
 from . import config          # noqa: E402
+from .camera import DISPLAY, SimCamera  # noqa: E402
 from .ingest import Ingest    # noqa: E402
 from .link import LinkEvent   # noqa: E402
 from .store import Store      # noqa: E402
@@ -131,29 +132,69 @@ def seed_doors(store, door):
 
 
 def plan_all_transactions(door, rng, start_ts):
-    """Every transaction across the seeded period, as protocol frames.
+    """Walk the shelf through every door cycle, exactly as the live system does.
 
-    Returns the frames and the coin deposits they imply. Built with
-    `fake_board.plan_transaction`, the same function the live simulator uses, so
-    a seeded sale and a live one are the same shape down to the duplicated
-    `TXN_START`.
+    Returns the transaction frames, the coin deposits they imply, and the stock
+    snapshots the camera would have produced.
+
+    THE BASKET COMES FROM THE SHELF, not from a dice roll. A `SimCamera` is
+    driven through open-scan, customer, close-scan for each door cycle, and the
+    basket is the difference between the two scans — the same path the board
+    takes over the wire. A restock therefore shows up as a NEGATIVE difference
+    and produces no transaction at all, which is decision D8's "restock returns
+    silently to Idle" arriving for free rather than being special-cased.
     """
+    camera = SimCamera(rng)
     frames = []
-    deposits = []          # (time, grams) for the coin box
+    deposits = []          # (time, grams) landing in the coin box
+    snapshots = []         # (time, {drink: count})
+
     for open_t, close_t in door.intervals:
-        if rng.random() >= TAKE_RATE:
-            continue        # somebody looked and changed their mind
+        before, _ = camera.scan()               # the baseline, at the open
+        snapshots.append((open_t, before))
+
+        camera.customer_takes()
+        camera.maybe_restock()
+
+        after, _ = camera.scan()                # the recount, at the close
+        snapshots.append((close_t, after))
+
+        taken = {DISPLAY[d]: before[d] - after[d]
+                 for d in before if before[d] > after.get(d, before[d])}
+        if not taken:
+            continue
+
         # `begin_selecting()` stamps the id when the door OPENS. Offsets from
         # the start of the seeded period stand in for ms-since-boot.
         txn_id = int((open_t - start_ts) * 1000.0)
-        for at, prefix, type_, payload in plan_transaction(rng, txn_id, close_t):
+        owed = sum(taken.values()) * PRICE_CENTS
+        for at, prefix, type_, payload in plan_transaction(
+                rng, txn_id, close_t, taken, owed):
             frames.append((at, prefix, type_, payload))
-            if type_ == "COIN":
+            if type_ in ("COIN", "COIN_REJECT"):
+                # Rejected mass counts: a washer still weighs something, and the
+                # gap between logged takings and measured mass is what the cash
+                # reconciliation check is for.
                 deposits.append((at, float(payload.split("delta_g=")[1])))
 
     frames.sort(key=lambda item: item[0])
     deposits.sort()
-    return frames, deposits
+    snapshots.sort(key=lambda item: item[0])
+    return frames, deposits, snapshots
+
+
+def seed_stock(store, snapshots):
+    """The camera's answers, one row per drink per scan."""
+    rows = []
+    for ts, counts in snapshots:
+        for drink, count in counts.items():
+            rows.append((ts, drink, count, "door_close"))
+    store._conn.execute("BEGIN")
+    store._conn.executemany(
+        "INSERT INTO stock_snapshot (ts, drink, count, trigger) "
+        "VALUES (?,?,?,?)", rows)
+    store._conn.execute("COMMIT")
+    return len(rows)
 
 
 def seed_transactions(store, ingest, frames):
@@ -273,11 +314,12 @@ def main(argv=None):
         # Transactions are PLANNED before anything is written, because the
         # coin box mass in seed_health has to integrate the very coins these
         # produce. Its own RNG so a change to one model cannot reshuffle another.
-        txn_frames, deposits = plan_all_transactions(
+        txn_frames, deposits, snapshots = plan_all_transactions(
             door, random.Random(args.seed + 3), start_ts)
 
         temps = seed_temperature(store, start_ts, end_ts, rng, door)
         doors = seed_doors(store, door)
+        stock = seed_stock(store, snapshots)
         health = seed_health(store, start_ts, end_ts,
                              random.Random(args.seed + 2), deposits)
 
@@ -310,6 +352,7 @@ def main(argv=None):
             "SELECT SUM(paid_cents) FROM txn WHERE outcome='paid'").fetchone()[0]
         print(f"  {sales:>8,} transaction frames -> {paid} paid, {stolen} "
               f"unpaid, ${(revenue or 0) / 100:,.2f} taken")
+        print(f"  {stock:>8,} stock snapshot rows")
         print(f"  from {time.strftime('%Y-%m-%d %H:%M', time.localtime(start_ts))}"
               f"  to {time.strftime('%Y-%m-%d %H:%M', time.localtime(end_ts))}")
         print(f"  database: {store.path}")
