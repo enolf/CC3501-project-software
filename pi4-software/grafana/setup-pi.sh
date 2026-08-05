@@ -30,6 +30,14 @@ PROV_DIR="/etc/grafana/provisioning"
 DEFAULTS="/etc/default/grafana-server"
 PLUGIN="frser-sqlite-datasource"
 
+# Where the Debian package puts things. The CLI does NOT infer these: run it
+# from anywhere but the homepath and it dies with "Could not find config
+# defaults, make sure homepath command line parameter is set or working
+# directory is homepath" — before it has done anything at all.
+GRAFANA_HOME="/usr/share/grafana"
+GRAFANA_CONFIG="/etc/grafana/grafana.ini"
+PLUGIN_DIR="/var/lib/grafana/plugins"
+
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
 if [[ "${EUID}" -eq 0 ]]; then
@@ -38,8 +46,16 @@ if [[ "${EUID}" -eq 0 ]]; then
     exit 1
 fi
 
-if ! command -v grafana-cli >/dev/null 2>&1; then
-    echo "grafana-cli not found - is Grafana installed from apt.grafana.com?" >&2
+# Grafana 11 renamed `grafana-cli` to the `grafana cli` subcommand and now warns
+# about the old form on every invocation. Both still work; prefer the new one so
+# the output is not buried in a deprecation notice.
+if command -v grafana >/dev/null 2>&1; then
+    GRAFANA_CLI=(sudo grafana cli)
+elif command -v grafana-cli >/dev/null 2>&1; then
+    GRAFANA_CLI=(sudo grafana-cli)
+else
+    echo "Neither 'grafana' nor 'grafana-cli' found." >&2
+    echo "Is Grafana installed from apt.grafana.com?" >&2
     exit 1
 fi
 
@@ -48,11 +64,29 @@ fi
 # "Datasource not found", which looks like a provisioning fault and is not one.
 
 say "Installing the SQLite datasource plugin"
-if sudo grafana-cli plugins ls 2>/dev/null | grep -q "${PLUGIN}"; then
-    echo "    already installed"
+
+# Presence is checked on the FILESYSTEM rather than with `plugins ls`, which has
+# to load the server config and is the command most likely to fail with the
+# homepath error. The directory either exists or it does not; nothing to
+# initialise, nothing to go wrong.
+if [[ -d "${PLUGIN_DIR}/${PLUGIN}" ]]; then
+    echo "    already installed at ${PLUGIN_DIR}/${PLUGIN}"
 else
-    sudo grafana-cli plugins install "${PLUGIN}"
+    # All three flags are needed. --homepath alone gets past the init error but
+    # then resolves the plugin directory to ${GRAFANA_HOME}/data/plugins, which
+    # is not where the packaged server looks — so the install "succeeds" and the
+    # plugin never loads.
+    "${GRAFANA_CLI[@]}" \
+        --homepath "${GRAFANA_HOME}" \
+        --config "${GRAFANA_CONFIG}" \
+        --pluginsDir "${PLUGIN_DIR}" \
+        plugins install "${PLUGIN}"
 fi
+
+# Installed under sudo, so the files land owned by root and the grafana user
+# cannot read them. The symptom is identical to the plugin not being installed
+# at all, which makes it a nuisance to diagnose.
+sudo chown -R grafana:grafana "${PLUGIN_DIR}"
 
 # --- 2. The database directory ----------------------------------------------
 # Not in a home directory. Grafana runs as `grafana` and a WAL database CANNOT

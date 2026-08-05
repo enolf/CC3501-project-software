@@ -119,7 +119,8 @@ SQL arrives at stage D4.
 
 | Symptom | Cause |
 |---|---|
-| *Datasource not found* on every panel | The plugin did not install. `sudo grafana-cli plugins ls`, then `sudo systemctl restart grafana-server` |
+| *Could not find config defaults, make sure homepath command line parameter is set* | `grafana cli` cannot locate the server config on its own. It needs `--homepath /usr/share/grafana --config /etc/grafana/grafana.ini --pluginsDir /var/lib/grafana/plugins`; `setup-pi.sh` passes all three. Check with `ls /var/lib/grafana/plugins`, not with `plugins ls` — that subcommand hits the same problem |
+| *Datasource not found* on every panel | The plugin is missing or unreadable. `ls -l /var/lib/grafana/plugins/frser-sqlite-datasource` — if it exists but is owned by `root`, `sudo chown -R grafana:grafana /var/lib/grafana/plugins` and restart. A root-owned plugin directory looks exactly like no plugin at all |
 | *attempt to write a readonly database* | Permissions on `/var/lib/fridge`. Check `ls -l` shows group `grafana` and `rw` for the group **on the `-shm` and `-wal` files too**, not only on `fridge.db`. Re-running `setup-pi.sh` fixes an existing directory |
 | *unable to open database file* | The path in the datasource does not exist. `FRIDGE_DB` was probably not exported, so `fridged` wrote to `pi4-software/fridge.db` instead |
 | Panels load, no error, no data | Time range. Seeded history ends when you ran the seeder — try *Last 7 days*. If the graph has data but the tiles are empty, the sensors are not named |
