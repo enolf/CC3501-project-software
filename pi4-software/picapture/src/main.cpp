@@ -400,7 +400,7 @@ void process_contours(int color_idx, Pipeline_Frames *pf, Trackbar_State *tb, cv
     cv::morphologyEx(pf->morphology, pf->morphology, cv::MORPH_CLOSE, cv::getStructuringElement(ms, cv::Size(*tb->iClose, (*tb->iClose)*7)));
   }
 
-  cv::imshow("Camera - Morphology", pf->morphology);
+  // cv::imshow("Camera - Morphology", pf->morphology);
   cv::waitKey(1);
 };
 
@@ -524,15 +524,29 @@ std::vector<Color_Config> colors_vec = {
   onMouse_UserData mouse_click_data;
   mouse_click_data.p_frame = &pf.original;
 
-  // Create the OpenCV window
-  cv::namedWindow("Camera", cv::WINDOW_NORMAL);
-  cv::namedWindow("Camera - Thresholded", cv::WINDOW_NORMAL);
-  cv::namedWindow("Camera - Morphology", cv::WINDOW_NORMAL);
-#ifdef USE_FLAT_IMAGE
-  cv::namedWindow("Camera - Flattend", cv::WINDOW_NORMAL);
-#endif
+  // In main(), replace the unconditional namedWindow block with:
+  if (program_mode == MODE_DEBUG_CAMERA || program_mode == MODE_DEBUG_ALL) {
+    cv::namedWindow("Camera", cv::WINDOW_NORMAL);
+  }
+  if (program_mode == MODE_DEBUG_ALL) {
+    cv::namedWindow("Camera - Thresholded", cv::WINDOW_NORMAL);
+    cv::namedWindow("Camera - Morphology", cv::WINDOW_NORMAL);
+  #ifdef USE_FLAT_IMAGE
+    cv::namedWindow("Camera - Flattend", cv::WINDOW_NORMAL);
+  #endif
+  }
 
-  cv::setMouseCallback("Camera", onMouse, &mouse_click_data);
+//   // Create the OpenCV window
+//   cv::namedWindow("Camera", cv::WINDOW_NORMAL);
+//   cv::namedWindow("Camera - Thresholded", cv::WINDOW_NORMAL);
+//   cv::namedWindow("Camera - Morphology", cv::WINDOW_NORMAL);
+// #ifdef USE_FLAT_IMAGE
+//   cv::namedWindow("Camera - Flattend", cv::WINDOW_NORMAL);
+// #endif
+
+  if (program_mode != MODE_HEADLESS) {
+    cv::setMouseCallback("Camera", onMouse, &mouse_click_data);
+  }
 
   auto next = clk::now();
   while(true) {
