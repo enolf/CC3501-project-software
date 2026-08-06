@@ -15,12 +15,9 @@ RP2040_VID = 0x2E8A
 def parse_args():
     parser = argparse.ArgumentParser()
     mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--debug", action="store_true",
-                             help="Run PiCapture in headless debug mode")
-    mode_group.add_argument("--debug-camera", action="store_true",
-                             help="Show camera debug window")
-    mode_group.add_argument("--debug-all", action="store_true",
-                             help="Show all debug windows")
+    mode_group.add_argument("--headless", action="store_true", help="No debug windows")
+    mode_group.add_argument("--debug-camera", action="store_true", help="Show camera debug window")
+    mode_group.add_argument("--debug-all", action="store_true", help="Show all debug windows")
     return parser.parse_args()
 
 

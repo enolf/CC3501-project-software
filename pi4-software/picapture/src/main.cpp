@@ -404,26 +404,40 @@ void process_contours(int color_idx, Pipeline_Frames *pf, Trackbar_State *tb, cv
   cv::waitKey(1);
 };
 
+void print_usage(const char* prog_name) {
+    fprintf(stderr, "Usage: %s <mode>\n", prog_name);
+    fprintf(stderr, "  --headless       No debug windows\n");
+    fprintf(stderr, "  --debug-camera   Show camera window only\n");
+    fprintf(stderr, "  --debug-all      Show all debug windows\n");
+}
+
 using clk = std::chrono::steady_clock;
 constexpr auto kPeriod = std::chrono::milliseconds(250);
 
 int main(int argc, char* argv[])
 {
-  int program_mode = 0;
+  int program_mode = -1;
 
   for (int i = 1; i < argc; ++i) {
-    if (strcmp(argv[i], "--debug") == 0) {
+    if (strcmp(argv[i], "--headless") == 0) {
       program_mode = MODE_HEADLESS;
-    }
-    if (strcmp(argv[i], "--debug-camera") == 0){
+    } else if (strcmp(argv[i], "--debug-camera") == 0) {
       program_mode = MODE_DEBUG_CAMERA;
-    }
-    if (strcmp(argv[i], "--headless") == 0){
+    } else if (strcmp(argv[i], "--debug-all") == 0) {
       program_mode = MODE_DEBUG_ALL;
+    } else {
+      fprintf(stderr, "Unrecognized argument: %s\n", argv[i]);
+      print_usage(argv[0]);
+      return 1;
     }
   }
 
-  printf("debug_mode = %d\n", program_mode);
+  if (program_mode == -1) {
+    print_usage(argv[0]);
+    return 1;
+  }
+
+  printf("program_mode = %d\n", program_mode);
 
   // Measure the frame rate - initialise variables
   int frame_id = 0;
