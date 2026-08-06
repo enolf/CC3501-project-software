@@ -2454,7 +2454,7 @@
       ],
       "fieldConfig": {
         "defaults": {
-          "unit": "currencyAUD",
+          "unit": "currencyUSD",
           "decimals": 2,
           "color": {
             "mode": "palette-classic"
@@ -2527,7 +2527,7 @@
             "properties": [
               {
                 "id": "unit",
-                "value": "currencyAUD"
+                "value": "currencyUSD"
               },
               {
                 "id": "decimals",
