@@ -31,10 +31,16 @@ THE INTERFACE
     payload()         answer a CMD SCAN, or None if it cannot be answered.
     close()
 
-`payload()` returning None is load-bearing rather than an error path nobody
-takes. It is how a camera says "I do not know", and the board's response — no
-INV, `Recount` times out, out of service — is the correct one for a fridge that
-cannot see what it is selling.
+`payload()` has THREE answers, and keeping them apart is the point:
+
+    (payload, counts)   here it is
+    PENDING             ask me again in a moment; I am still settling
+    None                I cannot answer, and will not guess
+
+None is load-bearing rather than an error path nobody takes: the board's
+response — no INV, `Recount` times out, out of service — is the correct one for
+a fridge that cannot see what it is selling. PENDING is what lets a scan be
+answered *well* instead of *fast*, and it is why `_on_scan` can defer.
 """
 
 import logging
@@ -74,6 +80,32 @@ SHELF_CAPACITY = 6
 #: notices it is getting empty and refills it, which is the event that makes
 #: the camera's self-correction visible on the dashboard.
 RESTOCK_AT = 0.3
+
+
+class _Pending:
+    """The camera needs more time. Not an answer, and not a failure.
+
+    A distinct value rather than another None, because the caller's response to
+    the two is opposite: PENDING means hold the reply open and ask again;
+    None means send nothing and let the board fault. Collapsing them would
+    either make every unsettled scan take the fridge out of service, or make a
+    dead camera look like a slow one.
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return "PENDING"
+
+
+#: The single instance. Compared with `is`, never `==`.
+PENDING = _Pending()
+
+#: What a `PiCapture` is currently being asked for. The door drives these:
+#: nothing else does, because nothing else knows when the scene changed.
+_IDLE = "idle"           # free-running; no door event is in flight
+_BASELINE = "baseline"   # door open, answer from the frozen pre-open reading
+_SETTLING = "settling"   # door shut, wait for the picture to hold still
 
 
 def build_payload(counts, confidence):
@@ -228,12 +260,15 @@ class SimCamera:
         confidence = max(60, min(100, int(self.rng.gauss(95, 6))))
         return dict(self.shelf), confidence
 
-    def payload(self):
+    def payload(self, force=False):
         """The `EVT INV` payload and the counts behind it.
 
-        Never None: a simulated shelf always knows what is on it. The real
-        backend does not have that luxury, which is why the interface allows
-        the answer to be "I do not know".
+        Never None and never PENDING: a simulated shelf always knows what is on
+        it, immediately. The real backend has neither luxury, which is why the
+        interface allows both "not yet" and "I do not know".
+
+        `force` is accepted and ignored, so the service's deferred-scan path can
+        call this without asking which backend it holds.
         """
         counts, confidence = self.scan()
         return build_payload(counts, confidence), counts
@@ -296,6 +331,27 @@ class PiCapture:
         #: (counts, confidence, arrival) or None. One value, never a queue.
         self._latest = None
 
+        #: The newest reading that had `SETTLE_FRAMES` agreeing frames behind
+        #: it. What a *stable* shelf looked like, as opposed to what the last
+        #: frame happened to catch.
+        self._stable = None
+
+        #: How many consecutive frames have now agreed on the same counts.
+        self._agreeing = 0
+
+        #: What the camera is currently being asked for. See `payload()`.
+        self._mode = _IDLE
+
+        #: The pre-open reading, frozen at the moment the door moved.
+        self._latched = None
+
+        #: When the baseline was frozen. The baseline's age is measured up to
+        #: THIS moment, not up to now — see `scan()`.
+        self._latched_at = None
+
+        #: When settling began, for the give-up deadline.
+        self._settling_since = None
+
         self._process = None
         self._running = False
         self._threads = []
@@ -343,15 +399,54 @@ class PiCapture:
     # --- The door ------------------------------------------------------------
 
     def door_opened(self, ts=None):
-        """Stage 4 freezes the pre-open reading here. Nothing to do yet."""
+        """Freeze the pre-open reading. The baseline scan answers from it.
+
+        WHY NOT JUST USE THE NEWEST FRAME
+        ---------------------------------
+        The baseline scan arrives while the door is *swinging*: light is
+        flooding in, the white balance is chasing it, and a hand may already be
+        reaching past the shelf. It is the single worst frame of the whole
+        cycle, and the board charges for the difference between it and the
+        recount — so a baseline that reads one can short invents a purchase, and
+        one that reads a hand as a can hides one.
+
+        The reading wanted here is what the shelf looked like *before any of
+        that started*, which is the last one that held still while the door was
+        shut. It is already known; this just stops it being overwritten.
+
+        This runs before `CMD SCAN` arrives, and that ordering is guaranteed
+        rather than lucky — see the note in `ingest._on_door`.
+        """
+        with self._lock:
+            self._latched = self._stable or self._latest
+            self._latched_at = self._clock()
+            self._mode = _BASELINE
+        if self._latched is None:
+            log.warning("the door opened before the camera ever produced a "
+                        "count; the baseline scan cannot be answered")
 
     def door_closed(self, ts=None):
-        """Stage 4 begins settling here. Nothing to do yet.
+        """Begin settling. The recount waits for the scene to hold still.
+
+        The shelf is right by now but the *picture* is not: the door has just
+        moved, the light is changing back, and cans may still be rocking. So the
+        agreement run is reset and the recount is answered only once
+        `SETTLE_FRAMES` frames in a row say the same thing — frames from after
+        the door shut, never from before it.
 
         Emphatically NOT the place to move a shelf: this camera observes a world
         it does not control. That `SimCamera` does move one here is the
         simulation's business and no part of the interface's meaning.
         """
+        with self._lock:
+            self._latched = None
+            self._mode = _SETTLING
+            self._settling_since = self._clock()
+            # Reset rather than keep: a run that began before the door shut
+            # would let a stale agreement satisfy the recount instantly, which
+            # is exactly the frame this is meant to avoid.
+            self._agreeing = 0
+            self._stable = None
 
     # --- Answering a scan ----------------------------------------------------
 
@@ -363,33 +458,100 @@ class PiCapture:
                 return None
             return self._clock() - self._latest[2]
 
-    def payload(self):
-        """The `EVT INV` payload and counts, or None if it cannot be answered."""
-        answer = self.scan()
-        if answer is None:
-            return None
+    def payload(self, force=False):
+        """The `EVT INV` payload and counts, PENDING, or None.
+
+        `force` abandons settling and answers with whatever is available. It is
+        the caller's backstop, not a normal path: `_on_scan` uses it when its own
+        budget inside the board's `RECOUNT_TIMEOUT_MS` has run out. A forced
+        answer is marked down, because "I ran out of time" is a different thing
+        from "the shelf held still".
+        """
+        answer = self.scan(force=force)
+        if answer is None or answer is PENDING:
+            return answer
         counts, confidence = answer
         return build_payload(counts, confidence), counts
 
-    def scan(self):
-        """`(counts, confidence)` from the newest reading, or None."""
+    def scan(self, force=False):
+        """`(counts, confidence)`, PENDING, or None. See `payload()`."""
         with self._lock:
+            mode = self._mode
+            latched = self._latched
+            latched_at = self._latched_at
+            stable = self._stable
             latest = self._latest
-            age = None if latest is None else self._clock() - latest[2]
+            settling_since = self._settling_since
+            now = self._clock()
 
         if latest is None:
             log.error("the camera has not produced a single count yet - "
                       "not answering, rather than guessing")
             return None
 
-        counts, confidence, _ = latest
-
-        if age >= config.CAMERA_DEAD_S:
+        # Staleness first, and before settling: there is nothing to wait for if
+        # the reading everything would be built on is already dead. Waiting the
+        # full settle timeout to then refuse would spend the board's budget to
+        # reach the same answer.
+        if now - latest[2] >= config.CAMERA_DEAD_S:
             log.error("the newest count is %.1fs old (dead above %.1fs) - "
                       "not answering. The board will fault, which is correct: "
                       "we cannot see the shelf.",
-                      age, config.CAMERA_DEAD_S)
+                      now - latest[2], config.CAMERA_DEAD_S)
             return None
+
+        if mode == _BASELINE:
+            # Answered from the frozen pre-open reading, NOT from now. A scan
+            # arriving mid-swing must not be allowed to overwrite it.
+            reading = latched or latest
+            settled = latched is not None and latched is not latest
+
+            # AGED AS AT THE MOMENT IT WAS FROZEN, not as at now. A baseline is
+            # SUPPOSED to be old — that is the entire point of latching it — and
+            # nothing could have changed the shelf between that reading and the
+            # door opening. Measuring its age up to the present instead punished
+            # the customer for thinking: a perfectly healthy camera and someone
+            # deliberating for fifteen seconds, which is half the board's own
+            # SELECT_TIMEOUT_MS, drove the baseline's confidence to zero.
+            #
+            # What this still catches is a reading that was already stale when
+            # it was frozen — a camera that had stopped producing before the
+            # door was touched.
+            return self._grade(reading, latched_at if latched is not None
+                               else now, settled=settled, why="baseline")
+
+        if mode == _SETTLING:
+            if stable is not None:
+                with self._lock:
+                    # Answered. Back to free-running, or the next scan would
+                    # keep being served this same settled reading.
+                    self._mode = _IDLE
+                return self._grade(stable, now, settled=True, why="recount")
+
+            waited = now - (settling_since or now)
+            if not force and waited < config.SETTLE_TIMEOUT_S:
+                return PENDING
+
+            log.warning("the shelf did not hold still within %.1fs%s; "
+                        "answering from the newest frame at reduced confidence",
+                        waited, " (forced)" if force else "")
+            with self._lock:
+                self._mode = _IDLE
+            return self._grade(latest, now, settled=False, why="recount")
+
+        # Free-running: no door event is driving this scan.
+        return self._grade(latest, now, settled=stable is not None,
+                           why="untriggered")
+
+    def _grade(self, reading, now, settled, why):
+        """Apply the age and settling penalties to one reading's confidence.
+
+        Both are reductions and neither can ever raise the figure. Confidence is
+        picapture's statement about the picture; everything here is this side's
+        statement about how much of it still applies, and that can only subtract.
+        """
+        counts, confidence, arrived = reading
+        age = now - arrived
 
         # Ramped rather than a cliff, and downward only. There is no age at
         # which a count abruptly stops being informative; it decays, and the
@@ -399,8 +561,13 @@ class PiCapture:
             scale = max(0.0, 1.0 - (age - config.CAMERA_STALE_S) / span)
             was = confidence
             confidence = int(confidence * scale)
-            log.warning("answering from a %.1fs old count; confidence %d -> %d",
-                        age, was, confidence)
+            log.warning("%s answered from a %.1fs old count; "
+                        "confidence %d -> %d", why, age, was, confidence)
+
+        if not settled:
+            confidence = int(confidence * config.UNSETTLED_CONFIDENCE_SCALE)
+            log.info("%s answered from an unsettled picture; confidence %d",
+                     why, confidence)
 
         return counts, confidence
 
@@ -496,7 +663,17 @@ class PiCapture:
 
         counts, confidence = parsed
         with self._lock:
+            # A run of frames that agree is the whole settling test. Compared on
+            # the COUNTS alone: confidence drifts a point or two every frame, so
+            # comparing the readings whole would mean nothing ever agreed with
+            # anything and the shelf would never be judged still.
+            if self._latest is not None and self._latest[0] == counts:
+                self._agreeing += 1
+            else:
+                self._agreeing = 1
             self._latest = (counts, confidence, self._clock())
+            if self._agreeing >= config.SETTLE_FRAMES:
+                self._stable = self._latest
         self.packets += 1
         # A packet arrived, so whatever was wrong is over. Reset the backoff
         # here rather than at spawn: a process that starts and immediately dies

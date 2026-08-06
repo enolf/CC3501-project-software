@@ -17,6 +17,7 @@ import time
 import protocol  # tools/protocol.py; see the sys.path note in __init__.py
 
 from . import config
+from .camera import PENDING
 
 log = logging.getLogger("fridged.ingest")
 
@@ -24,9 +25,13 @@ log = logging.getLogger("fridged.ingest")
 class Ingest:
     """Turns link events into database rows."""
 
-    def __init__(self, store, link, camera=None, payments=None):
+    def __init__(self, store, link, camera=None, payments=None,
+                 clock=time.monotonic):
         self.store = store
         self.link = link
+        #: Injectable so the deferred-scan deadline can be driven by a test
+        #: rather than by waiting six real seconds for it.
+        self._clock = clock
         #: Answers CMD SCAN. None means stock is not wired up, which
         #: is a warning rather than a failure - every other metric
         #: still works without a camera.
@@ -52,6 +57,10 @@ class Ingest:
         #: TXN_START, cleared by TXN_END. Needed because `EVT COIN` carries
         #: no id of its own.
         self.open_txn_id = None
+
+        #: A `CMD SCAN` that has arrived and not yet been answered, as
+        #: `(frame_ts, deadline)`. See `_on_scan`.
+        self.scan_owed = None
 
         #: An approved card that has tapped but whose owner has not opened the
         #: door yet, as `(uid, ts)`. See `_on_rfid` for why this is a separate
@@ -207,24 +216,79 @@ class Ingest:
             log.warning("CMD SCAN arrived but no camera is configured")
             return
 
-        # None means the camera cannot answer — it has never produced a count,
-        # or its newest one is too old to stand behind. DELIBERATELY NOT
-        # ANSWERED (decision D1): the board's Recount times out and it goes out
-        # of service, which is the honest outcome for a fridge that cannot see
-        # what it is selling. The alternative — repeating a stale count as
-        # though it were current — moves money on a number nobody measured, and
-        # nothing in the data would ever show it.
+        # THREE ANSWERS, AND THE MIDDLE ONE IS WHY THIS IS NOT A ONE-LINER.
+        #
+        #   a reading  send it
+        #   PENDING    the picture has not settled. Hold the reply open and
+        #              send it from tick() when it does.
+        #   None       the camera cannot answer. Send NOTHING (decision D1):
+        #              the board's Recount times out and it goes out of
+        #              service, which is the honest outcome for a fridge that
+        #              cannot see what it is selling. Repeating a stale count as
+        #              though it were current moves money on a number nobody
+        #              measured, and nothing in the data would ever show it.
+        #
+        # Deferring rather than blocking, because this same loop drains the
+        # serial link and flushes the database — sleeping here would stall the
+        # link we are trying to answer on.
         answer = self.camera.payload()
+
+        if answer is PENDING:
+            deadline = self._clock() + config.SCAN_ANSWER_BUDGET_S
+            if self.scan_owed is None:
+                log.debug("scan deferred while the picture settles")
+            self.scan_owed = (ts, deadline)
+            return
+
+        self.scan_owed = None
         if answer is None:
             log.error("CMD SCAN cannot be answered; letting the board fault "
                       "rather than guessing what is on the shelf")
             return
 
+        self._send_inventory(answer, ts)
+
+    def _send_inventory(self, answer, ts):
         payload, counts = answer
         if not self.link.send("EVT", "INV", payload):
             log.error("could not send the INV reply: %s", payload)
             return
         self.store.stock_snapshot(ts, counts)
+
+    def _answer_owed_scan(self):
+        """Finish a scan that was deferred. Called every service pass.
+
+        NOT on the self-metric timer that guards the rest of `tick()`. The board
+        is sitting in `Recount` with a stopwatch running; a reply that waits for
+        a ten-second telemetry tick would arrive after it had already faulted.
+        """
+        if self.scan_owed is None or self.camera is None:
+            return
+
+        ts, deadline = self.scan_owed
+        expired = self._clock() >= deadline
+
+        answer = self.camera.payload(force=expired)
+        if answer is PENDING:
+            if not expired:
+                return
+            # force=True should have produced something. A camera that still
+            # says PENDING is not honouring the contract, and holding the reply
+            # open would mean holding it forever.
+            log.error("the camera would not answer even when forced; "
+                      "dropping the scan")
+            answer = None
+
+        self.scan_owed = None
+        if answer is None:
+            log.error("the deferred CMD SCAN cannot be answered; letting the "
+                      "board fault rather than guessing")
+            return
+
+        if expired:
+            log.warning("answering CMD SCAN on the deadline (%.0fs), before "
+                        "the picture settled", config.SCAN_ANSWER_BUDGET_S)
+        self._send_inventory(answer, ts)
 
     def _on_door(self, frame, ts):
         """`EVT DOOR state=open|closed`.
@@ -589,6 +653,10 @@ class Ingest:
         adding a metric is never a schema change, and the health row is exactly
         the case it was meant for.
         """
+        # First, and outside the timer below: a board waiting in Recount cannot
+        # afford to wait for a telemetry tick.
+        self._answer_owed_scan()
+
         now = time.monotonic()
         if now < self._next_self_metric:
             return

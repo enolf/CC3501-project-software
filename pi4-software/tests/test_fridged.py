@@ -934,9 +934,19 @@ def test_camera_staleness():
     check("a camera that has never counted refuses to answer",
           camera.payload() is None)
 
+    # One frame is not a settled shelf, and saying so is the point of stage 4:
+    # a lone frame is exactly what a hand halfway into the fridge produces.
     camera._accept("coke:5,fanta:4,mtndew:3,solo:2;conf=90;")
     payload, counts = camera.payload()
-    check(f"a fresh count answers at full confidence ({payload})",
+    lone = int(payload.split("conf=")[1])
+    check(f"a single unagreed frame answers, but marked down ({lone} of 90)",
+          0 < lone < 90 and counts["coke"] == 5)
+
+    # ...and once the frames agree, the mark-down goes away.
+    for _ in range(cfg.SETTLE_FRAMES):
+        camera._accept("coke:5,fanta:4,mtndew:3,solo:2;conf=90;")
+    payload, counts = camera.payload()
+    check(f"a settled shelf answers at full confidence ({payload})",
           "conf=90" in payload and counts["coke"] == 5)
 
     # Wobbling: still running, just behind. Answer anyway — this is the common
@@ -1071,6 +1081,360 @@ def test_camera_in_the_loop():
           ).fetchall() == [(6,)])
     check("every message type still has a handler", ingest.unhandled == {})
     store.close()
+
+
+def _settled(camera, counts_line, frames=None):
+    """Feed enough identical frames that the shelf counts as holding still."""
+    from fridged import config as cfg
+    for _ in range(frames or cfg.SETTLE_FRAMES):
+        camera._accept(counts_line)
+
+
+def test_baseline_latch():
+    print("\n--- the baseline is frozen before the door swings ---")
+    from fridged import config as cfg
+    from fridged.camera import PENDING, PiCapture
+
+    now = [1000.0]
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+
+    # A full shelf, held still, with the door shut.
+    _settled(camera, "coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+
+    camera.door_opened(now[0])
+
+    # THE FRAME THIS STAGE EXISTS TO IGNORE. The door is swinging, the light is
+    # changing and a hand is across the shelf, so the camera reports two Cokes
+    # missing that are still there. Before stage 4 this became the baseline, and
+    # the recount would then have shown a shelf that had GAINED two cans.
+    camera._accept("coke:3,fanta:5,mtndew:5,solo:5;conf=60;")
+
+    payload, counts = camera.payload()
+    check(f"the baseline scan answers from before the door moved ({payload})",
+          counts["coke"] == 5)
+    check("...at the confidence of that settled reading, not the bad frame",
+          "conf=95" in payload)
+
+    # Repeated scans while the door is open keep getting the frozen value: the
+    # board can legitimately rescan, and the answer must not drift.
+    camera._accept("coke:2,fanta:4,mtndew:5,solo:5;conf=55;")
+    check("a second scan while the door is open gets the same baseline",
+          camera.payload()[1]["coke"] == 5)
+
+    # A BASELINE IS SUPPOSED TO BE OLD. Somebody standing at an open fridge
+    # deciding is normal — the board allows thirty seconds of it — and the
+    # baseline describes a moment when nothing could have changed the shelf, so
+    # the time since then is not evidence against it.
+    #
+    # Measuring its age up to the present instead of up to the moment it was
+    # frozen took a healthy camera and a deliberating customer to conf=0.
+    patient = PiCapture(autostart=False, clock=lambda: now[0])
+    _settled(patient, "coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    patient.door_opened(now[0])
+    for _ in range(60):                    # 15 s of an open door, camera fine
+        now[0] += 0.25
+        patient._accept("coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    check("a long deliberation does not decay the baseline's confidence",
+          "conf=95" in patient.payload()[0])
+
+    # ...but a baseline that was ALREADY stale when it was frozen still is.
+    now[0] += 100.0
+    stale = PiCapture(autostart=False, clock=lambda: now[0])
+    _settled(stale, "coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    now[0] += cfg.CAMERA_STALE_S * 2
+    stale.door_opened(now[0])
+    stale._accept("coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    check("a baseline frozen from an already-stale reading is marked down",
+          int(stale.payload()[0].split("conf=")[1]) < 95)
+    patient.close()
+    stale.close()
+
+    # A door that opens before the camera has ever counted cannot be answered —
+    # inventing a full shelf would be the worst possible guess.
+    fresh = PiCapture(autostart=False, clock=lambda: now[0])
+    fresh.door_opened(now[0])
+    check("a door opening before the first count cannot be answered",
+          fresh.payload() is None)
+    fresh.close()
+    camera.close()
+
+
+def test_settling():
+    print("\n--- the recount waits for the picture to hold still ---")
+    from fridged import config as cfg
+    from fridged.camera import PENDING, PiCapture
+
+    now = [2000.0]
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+    _settled(camera, "coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    camera.door_opened(now[0])
+    camera.payload()                       # the baseline
+    camera.door_closed(now[0])
+
+    # One can genuinely taken, but the scene has not settled: the door has just
+    # moved and the light is still changing back.
+    camera._accept("coke:4,fanta:5,mtndew:5,solo:5;conf=80;")
+    check("one frame after the door shuts is not an answer yet",
+          camera.payload() is PENDING)
+
+    # A frame that disagrees restarts the run — this is the hand still in shot.
+    camera._accept("coke:3,fanta:5,mtndew:5,solo:5;conf=70;")
+    check("a disagreeing frame keeps it waiting",
+          camera.payload() is PENDING)
+
+    _settled(camera, "coke:4,fanta:5,mtndew:5,solo:5;conf=88;")
+    payload, counts = camera.payload()
+    check(f"once the frames agree, the recount is answered ({payload})",
+          counts["coke"] == 4 and "conf=88" in payload)
+
+    # The agreement run must be reset at door_closed, or a run that began BEFORE
+    # the door shut would satisfy the recount instantly — with exactly the
+    # pre-door frames this is meant to exclude.
+    camera.door_opened(now[0])
+    camera.payload()
+    camera.door_closed(now[0])
+    check("a run of agreement from before the door shut does not count",
+          camera.payload() is PENDING)
+    camera.close()
+
+
+def test_settling_deadline():
+    print("\n--- settling gives up rather than letting the board fault ---")
+    from fridged import config as cfg
+    from fridged.camera import PENDING, PiCapture
+
+    now = [3000.0]
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+    _settled(camera, "coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    camera.door_closed(now[0])
+
+    # A shelf that never holds still: every frame disagrees with the last.
+    for i in range(6):
+        camera._accept(f"coke:{i % 3},fanta:5,mtndew:5,solo:5;conf=90;")
+    check("a shelf that will not hold still keeps the reply open",
+          camera.payload() is PENDING)
+
+    now[0] += cfg.SETTLE_TIMEOUT_S
+    answer = camera.payload()
+    check("past SETTLE_TIMEOUT_S it answers anyway rather than faulting",
+          answer is not None and answer is not PENDING)
+    forced = int(answer[0].split("conf=")[1])
+    check(f"...marked down, because it never settled ({forced} of 90)",
+          0 < forced < 90)
+
+    # The whole point of the mark-down: a dashboard has to be able to tell this
+    # apart from a clean read, because the counts themselves look identical.
+    check("an unsettled answer scores below a settled one",
+          forced < 90 * cfg.UNSETTLED_CONFIDENCE_SCALE + 1)
+
+    # A camera that has gone dead during settling must still refuse, not wait
+    # out the timeout to then answer from a corpse.
+    camera.door_closed(now[0])
+    now[0] += cfg.CAMERA_DEAD_S
+    check("a camera that dies while settling refuses instead of waiting",
+          camera.payload() is None)
+    camera.close()
+
+
+def test_deferred_scan():
+    print("\n--- the service holds a scan open and answers it later ---")
+    from fridged import config as cfg
+    from fridged.camera import PiCapture
+
+    now = [4000.0]
+    store = Store(temp_db()).open()
+    transport = StubTransport()
+    link = Link(transport)
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+    ingest = Ingest(store, link, camera, clock=lambda: now[0])
+
+    _settled(camera, "coke:5,fanta:5,mtndew:5,solo:5;conf=95;")
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=closed", ms=10))
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=11))
+
+    check("an unsettled scan is deferred, not answered",
+          ingest.scan_owed is not None and
+          b"INV" not in bytes(transport.written))
+    check("...and nothing is written to the database yet",
+          (store.flush(force=True),
+           store._conn.execute(
+               "SELECT COUNT(*) FROM stock_snapshot").fetchone()[0] == 0)[1])
+
+    # tick() is what finishes it. Deliberately NOT on the self-metric timer —
+    # a reply that waited ten seconds for telemetry would arrive after the
+    # board had already faulted.
+    ingest.tick()
+    check("tick() with nothing settled yet still does not answer",
+          b"INV" not in bytes(transport.written))
+
+    _settled(camera, "coke:4,fanta:5,mtndew:5,solo:5;conf=88;")
+    ingest.tick()
+    store.flush(force=True)
+    check("once it settles, tick() sends the deferred reply",
+          b"INV" in bytes(transport.written))
+    check("...the reply carries the settled counts",
+          b"coke=4" in bytes(transport.written))
+    check("...the snapshot is written with them",
+          store._conn.execute(
+              "SELECT count FROM stock_snapshot WHERE drink='coke'"
+          ).fetchone()[0] == 4)
+    check("and nothing is still owed", ingest.scan_owed is None)
+    store.close()
+    camera.close()
+
+
+def test_deferred_scan_deadline():
+    print("\n--- the deferred scan has a backstop ---")
+    from fridged import config as cfg
+    from fridged.camera import PENDING, PiCapture
+
+    now = [5000.0]
+    store = Store(temp_db()).open()
+    transport = StubTransport()
+    link = Link(transport)
+
+    # A camera that never settles and never gives up on its own, so the only
+    # thing that can end this is the service's own budget. Without the backstop
+    # the reply would be held forever and the board would fault every time.
+    class NeverSettles(PiCapture):
+        def payload(self, force=False):
+            return PENDING if not force else (
+                "coke=1 fanta=1 mtndew=1 solo=1 conf=10",
+                {"coke": 1, "fanta": 1, "mtndew": 1, "solo": 1})
+
+    camera = NeverSettles(autostart=False, clock=lambda: now[0])
+    ingest = Ingest(store, link, camera, clock=lambda: now[0])
+
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=10))
+    check("held open while inside the budget", ingest.scan_owed is not None)
+
+    for _ in range(5):
+        ingest.tick()
+    check("...and stays held while inside it",
+          b"INV" not in bytes(transport.written))
+
+    now[0] += cfg.SCAN_ANSWER_BUDGET_S
+    ingest.tick()
+    store.flush(force=True)
+    check("past SCAN_ANSWER_BUDGET_S a reply is forced out",
+          b"INV" in bytes(transport.written))
+    check("and the scan is no longer owed", ingest.scan_owed is None)
+
+    # The budget has to fit inside the board's own patience, or the backstop
+    # fires after the fault it exists to prevent.
+    check(f"the budget is inside the board's RECOUNT_TIMEOUT_MS "
+          f"({cfg.SCAN_ANSWER_BUDGET_S}s of 8s)",
+          cfg.SCAN_ANSWER_BUDGET_S < 8.0 and
+          cfg.SETTLE_TIMEOUT_S < cfg.SCAN_ANSWER_BUDGET_S)
+
+    # A camera that will not answer even when forced must not hold the reply
+    # open forever — that would be a permanent silent stall.
+    class NeverAnswers(PiCapture):
+        def payload(self, force=False):
+            return PENDING
+
+    stubborn = NeverAnswers(autostart=False, clock=lambda: now[0])
+    ingest2 = Ingest(store, link, stubborn, clock=lambda: now[0])
+    feed(ingest2, link, protocol.build("CMD", "SCAN", "", ms=20))
+    now[0] += cfg.SCAN_ANSWER_BUDGET_S
+    ingest2.tick()
+    check("a camera that ignores force does not stall the service forever",
+          ingest2.scan_owed is None)
+    store.close()
+    camera.close()
+    stubborn.close()
+
+
+def test_simcamera_never_defers():
+    print("\n--- the simulated shelf still answers immediately ---")
+    import random
+
+    from fridged.camera import PENDING, SimCamera
+
+    # Every existing test depends on this, and so does every demo: the sim path
+    # must not have acquired stage 4's latency.
+    camera = SimCamera(random.Random(4))
+    camera.door_opened(1.0)
+    check("a simulated baseline answers at once",
+          camera.payload() is not PENDING)
+    camera.door_closed(1.0)
+    answer = camera.payload()
+    check("a simulated recount answers at once",
+          answer is not PENDING and answer is not None)
+    check("and it accepts force= like the real one does",
+          camera.payload(force=True) is not None)
+    camera.close()
+
+
+def test_full_door_cycle():
+    print("\n--- a whole door cycle, end to end ---")
+    from fridged.camera import PENDING, PiCapture
+
+    # The thing the entire project is for: door opens, a can leaves, door
+    # shuts, and the difference between the two answers is what gets charged.
+    # Driven through Ingest and Link with a fake clock, so the timing is exact
+    # rather than hoped for.
+    now = [6000.0]
+    store = Store(temp_db()).open()
+    transport = StubTransport()
+    link = Link(transport)
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+    ingest = Ingest(store, link, camera, clock=lambda: now[0])
+
+    def frames(line, count=4, step=0.25):
+        for _ in range(count):
+            now[0] += step
+            camera._accept(line)
+
+    full = "coke:5,fanta:5,mtndew:5,solo:5;conf=94;"
+    minus_one = "coke:4,fanta:5,mtndew:5,solo:5;conf=94;"
+
+    frames(full, count=8)                          # a settled, shut fridge
+
+    # --- the door opens ---
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=100))
+    # ...and the very next frames are rubbish: light flooding in, a hand across
+    # the shelf. These are exactly what the latch exists to exclude.
+    camera._accept("coke:2,fanta:3,mtndew:5,solo:5;conf=40;")
+    now[0] += 0.25
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=200))
+
+    baseline = bytes(transport.written)
+    check("the baseline answers a full shelf, not the hand in the way",
+          b"coke=5" in baseline)
+
+    # --- the customer takes one Coke and shuts the door ---
+    now[0] += 6.0                                  # deliberating
+    camera._accept(minus_one)
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=closed", ms=8000))
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=8100))
+
+    check("the recount is deferred while the picture settles",
+          ingest.scan_owed is not None)
+
+    before = len(bytes(transport.written))
+    frames(minus_one, count=4)
+    ingest.tick()
+    store.flush(force=True)
+
+    recount = bytes(transport.written)[before:]
+    check(f"the recount answers one Coke short ({recount.decode().strip()})",
+          b"coke=4" in recount)
+    check("and it is not owed any more", ingest.scan_owed is None)
+
+    counts = dict(store._conn.execute(
+        "SELECT count, COUNT(*) FROM stock_snapshot WHERE drink='coke' "
+        "GROUP BY count"))
+    check(f"both scans are on record, and they differ by exactly one can "
+          f"({counts})", counts == {5: 1, 4: 1})
+
+    # The whole cycle has to fit the board's budget, or the fault fires before
+    # the answer does. Measured, not assumed.
+    check("the reply came inside the board's 8 s recount window",
+          config.SETTLE_TIMEOUT_S < 8.0 and
+          config.SCAN_ANSWER_BUDGET_S < 8.0)
+    store.close()
+    camera.close()
 
 
 def test_camera_selection():
@@ -1463,6 +1827,13 @@ if __name__ == "__main__":
     test_camera_subprocess()
     test_camera_in_the_loop()
     test_camera_selection()
+    test_baseline_latch()
+    test_settling()
+    test_settling_deadline()
+    test_deferred_scan()
+    test_deferred_scan_deadline()
+    test_simcamera_never_defers()
+    test_full_door_cycle()
     test_camera_cannot_answer()
     test_payments()
     test_dashboards()

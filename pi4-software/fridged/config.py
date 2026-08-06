@@ -104,6 +104,62 @@ CAMERA_RESTART_MAX_S = 30.0
 #: orphaned picapture keeps the camera open and the NEXT start then fails.
 CAMERA_STOP_TIMEOUT_S = 3.0
 
+# --- Settling: deciding when the picture is worth believing ------------------
+#
+# EVERY NUMBER IN THIS BLOCK IS A PLACEHOLDER UNTIL IT IS MEASURED.
+#
+# They are named constants precisely so that tuning them is an edit rather than
+# a rewrite. The measurements that should set them are in `TEST.md`:
+#
+#   T3.6  how much do counts wander on a shelf nobody is touching?
+#         -> SETTLE_FRAMES. If a still shelf already produces a run of three
+#            identical frames in well under a second, three is enough. If it
+#            never produces three in a row, the problem is the tuning, not this.
+#   T5.4  when a real purchase is miscounted, how is it wrong, and how long
+#         after the door shuts does the picture actually stabilise?
+#         -> SETTLE_TIMEOUT_S.
+#
+# Guessing them is what this block exists to avoid, so treat the values below
+# as "somewhere to start", exactly as picapture's colour defaults are.
+
+#: How many consecutive frames must report the same counts before the shelf is
+#: judged to be holding still.
+#:
+#: Compared on counts alone, not on whole readings — confidence moves every
+#: frame, so anything else would never agree with anything.
+#:
+#: Three at picapture's 250 ms period is 750 ms of agreement, which is short
+#: enough to fit the budget several times over and long enough to reject a
+#: single frame caught mid-movement. Two would be satisfied by any two
+#: consecutive bad frames that happened to be bad the same way, which a hand
+#: held still for half a second produces easily.
+SETTLE_FRAMES = 3
+
+#: How long to wait for that agreement before answering anyway.
+#:
+#: Must leave room inside `SCAN_ANSWER_BUDGET_S` below, which in turn sits
+#: inside the board's `RECOUNT_TIMEOUT_MS` (8 s). A shelf that has not settled
+#: in four seconds is not going to, and an answer marked down is worth more than
+#: a fault.
+SETTLE_TIMEOUT_S = 4.0
+
+#: How long `_on_scan` may hold a reply open before forcing one out.
+#:
+#: THE BACKSTOP, NOT THE NORMAL PATH. Settling resolves itself at
+#: SETTLE_TIMEOUT_S; this catches the case where it somehow does not, so that an
+#: owed reply can never be held forever. Two seconds of margin inside the
+#: board's 8 s, because the fault should be our verdict rather than a timeout
+#: nobody decided on.
+SCAN_ANSWER_BUDGET_S = 6.0
+
+#: What an unsettled answer's confidence is multiplied by.
+#:
+#: "I ran out of time" is a materially different claim from "the shelf held
+#: still", and the dashboard is the only place that difference will ever be
+#: visible — the counts themselves look identical. Halved rather than nudged so
+#: that a threshold can actually be set on it later.
+UNSETTLED_CONFIDENCE_SCALE = 0.5
+
 #: How many unparseable stdout lines to log before going quiet about them. The
 #: debug modes print tuning readouts to stdout as well as counts, so a few are
 #: normal; a flood is a version mismatch and the count is what shows it.
