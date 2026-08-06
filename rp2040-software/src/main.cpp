@@ -278,21 +278,21 @@ int main()
 struct Drink_Count {
     int coke = 0;
     int fanta = 0;
-    int pasito = 0;
+    int mountain_dew = 0;
     int solo = 0;
 };
 
 // Parses a packet of the form "C:1,F:2,P:0,S:3;"
 // Returns true on successful parse, false if malformed.
 bool parse_packet(const char* packet, Drink_Count& out) {
-    int c, f, p, s;
-    int matched = sscanf(packet, "C:%d,F:%d,P:%d,S:%d;", &c, &f, &p, &s);
+    int c, f, m, s;
+    int matched = sscanf(packet, "C:%d,F:%d,M:%d,S:%d;", &c, &f, &m, &s);
     if (matched != 4) {
         return false;
     }
     out.coke = c;
     out.fanta = f;
-    out.pasito = p;
+    out.mountain_dew = m;
     out.solo = s;
     return true;
 }
@@ -314,10 +314,6 @@ int main()
             continue; // nothing available right now
         }
 
-        if (ch == 'h'){
-            printf("RECIEVED SOMETHING\n");
-        }
-
         if (ch == '\n' || ch == '\r') {
             // Ignore stray newlines between packets, if any
             continue;
@@ -333,8 +329,8 @@ int main()
 
             Drink_Count counts;
             if (parse_packet(buffer, counts)) {
-                printf("Parsed: Coke=%d Fanta=%d Passito=%d Solo=%d\n",
-                       counts.coke, counts.fanta, counts.pasito, counts.solo);
+                printf("Parsed: Coke=%d Fanta=%d Mountain Dew=%d Solo=%d\n",
+                       counts.coke, counts.fanta, counts.mountain_dew, counts.solo);
                 // TODO: use counts to update display / drinks_shop_cart
             } else {
                 printf("Malformed packet: %s\n", buffer);
