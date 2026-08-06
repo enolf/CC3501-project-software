@@ -151,7 +151,8 @@ void enter(State next)
                                                                owed_cents);  break;
         case State::PayOnlineLink: Display::show_online_waiting(); break;
         case State::PayOnlineQr:   Display::show_qr(square_url, owed_cents); break;
-        case State::ThankYou:      Display::show_thanks(paid_cents);   break;
+        case State::ThankYou:      Display::show_thanks(paid_cents,
+                                                        owed_cents);   break;
         case State::Abandoned:     Display::show_cancelled();      break;
         case State::Fault:         Display::show_fault(fault_code); break;
     }

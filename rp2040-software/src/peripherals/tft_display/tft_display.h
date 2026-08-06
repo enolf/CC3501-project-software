@@ -65,7 +65,12 @@ public:
     static void show_qr(const char *url, uint32_t owed_cents);
 
     /// Paid. Brief confirmation.
-    static void show_thanks(uint32_t paid_cents);
+    ///
+    /// Takes `owed_cents` as well so it can name the tip when somebody
+    /// overpays. The difference is not derivable from `paid_cents` alone, and
+    /// working it out at the call site would put the decision about what the
+    /// screen says in the state machine rather than in the display.
+    static void show_thanks(uint32_t paid_cents, uint32_t owed_cents);
 
     /// The transaction ended without payment.
     static void show_cancelled();

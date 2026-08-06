@@ -504,7 +504,7 @@ void Display::show_qr(const char *url, uint32_t owed_cents)
                 8, 198, 304, 34);
 }
 
-void Display::show_thanks(uint32_t paid_cents)
+void Display::show_thanks(uint32_t paid_cents, uint32_t owed_cents)
 {
     lv_obj_t *scr = begin_screen(Screen::Thanks);
 
@@ -513,10 +513,42 @@ void Display::show_thanks(uint32_t paid_cents)
     char line[40];
     snprintf(line, sizeof(line), "Paid %s", paid);
 
-    make_label(scr, "Thank you!", &lv_font_montserrat_28, COLOUR_GOOD,
-               LV_ALIGN_CENTER, 0, -20);
+    // Only cash can overpay. The card path sets paid_cents = owed_cents because
+    // Square confirms the exact amount, so this branch is unreachable for an
+    // online sale — but it is written as a comparison rather than a check on
+    // the payment method, because what makes it a tip is the arithmetic.
+    //
+    // The subtraction is guarded rather than assumed. These are unsigned, and
+    // complete_payment() is only reached when the mass check says the money is
+    // there, so paid < owed should be impossible — but "should be impossible"
+    // and unsigned underflow together would put a $42 million tip on the
+    // screen, which is a poor way to find out the assumption was wrong.
+    const uint32_t tip_cents = paid_cents > owed_cents
+                             ? paid_cents - owed_cents : 0;
+
+    if (tip_cents == 0) {
+        make_label(scr, "Thank you!", &lv_font_montserrat_28, COLOUR_GOOD,
+                   LV_ALIGN_CENTER, 0, -20);
+        make_label(scr, line, &lv_font_montserrat_20, COLOUR_TEXT,
+                   LV_ALIGN_CENTER, 0, 20);
+        return;
+    }
+
+    // Three lines, laid out like the access-denied screen. The tip amount gets
+    // the large font rather than "Thank you", because the amount is the part
+    // that is different from every other sale — and at 28 pt the whole sentence
+    // on one line would run off a 320 px panel.
+    char tip[16];
+    format_money(tip, sizeof(tip), tip_cents);
+    char tip_line[40];
+    snprintf(tip_line, sizeof(tip_line), "%s tip!", tip);
+
+    make_label(scr, "Thank you for the", &lv_font_montserrat_20, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, -45);
+    make_label(scr, tip_line, &lv_font_montserrat_28, COLOUR_GOOD,
+               LV_ALIGN_CENTER, 0, -8);
     make_label(scr, line, &lv_font_montserrat_20, COLOUR_TEXT,
-               LV_ALIGN_CENTER, 0, 20);
+               LV_ALIGN_CENTER, 0, 38);
 }
 
 void Display::show_cancelled()
