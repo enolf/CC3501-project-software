@@ -1,0 +1,10 @@
+[project]
+name = "picapture"
+version = "0.1.0"
+description = "Serial interface between pi-side and rp2040-side program."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pyserial>=3.5",
+    "serial>=0.0.97",
+]

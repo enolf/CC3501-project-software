@@ -22,6 +22,12 @@
 // Board-specific configuration
 #include "board.h"
 
+// Headers for serial communication
+// #include "pico/stdlib.h"
+// #include <cstdio>
+#include <cstring>
+#include <cstdlib>
+
 
 // Code example for testing the TFT display.
 // --------------------------------------------------------------
@@ -167,79 +173,79 @@
 // Code example for testing piicodev RFID board
 // --------------------------------------------------------------
 
-int main()
-{
-    // Open the debug log channel (USB CDC by default; flip to UART in
-    // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
-    // instant it has power, and the serial log is purely an optional debugging
-    // window. Anything printed before a monitor connects is simply missed,
-    // which is fine for a debug aid.
-    stdio_init_all();
+// int main()
+// {
+//     // Open the debug log channel (USB CDC by default; flip to UART in
+//     // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
+//     // instant it has power, and the serial log is purely an optional debugging
+//     // window. Anything printed before a monitor connects is simply missed,
+//     // which is fine for a debug aid.
+//     stdio_init_all();
 
-    // Bring up the RFID reader. We keep retrying rather than giving up: a slow
-    // power-up or a momentary loose connector at boot then recovers on its own,
-    // and re-logging each attempt means a debugger attached at any time still
-    // sees why it is stuck (check wiring, the ASW address switch, and the pin
-    // defines in board.h).
-    while (!mfrc522_init()) {
-        log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
-        sleep_ms(2000);
-    }
-    log(LogLevel::INFORMATION, "MFRC522 initialised");
+//     // Bring up the RFID reader. We keep retrying rather than giving up: a slow
+//     // power-up or a momentary loose connector at boot then recovers on its own,
+//     // and re-logging each attempt means a debugger attached at any time still
+//     // sees why it is stuck (check wiring, the ASW address switch, and the pin
+//     // defines in board.h).
+//     while (!mfrc522_init()) {
+//         log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
+//         sleep_ms(2000);
+//     }
+//     log(LogLevel::INFORMATION, "MFRC522 initialised");
 
-    // remember_uid: cards keep answering REQA while they sit on the pad,
-    // so without this we'd print the same UID dozens of times per second.
-    // Static-local style state, same as the run_* tasks use.
-    static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
-    static uint8_t last_uid_len = 0;
-    static bool card_was_present = false;
+//     // remember_uid: cards keep answering REQA while they sit on the pad,
+//     // so without this we'd print the same UID dozens of times per second.
+//     // Static-local style state, same as the run_* tasks use.
+//     static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
+//     static uint8_t last_uid_len = 0;
+//     static bool card_was_present = false;
 
-    for (;;) {
-        uint8_t uid[MFRC522_UID_MAX_LEN];
-        uint8_t uid_len;
+//     for (;;) {
+//         uint8_t uid[MFRC522_UID_MAX_LEN];
+//         uint8_t uid_len;
 
-        if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
-            // Only report when it's a new presentation (card removed and
-            // re-presented, or a different card).
-            bool same_card = card_was_present && uid_len == last_uid_len &&
-                             memcmp(uid, last_uid, uid_len) == 0;
-            if (!same_card) {
-                // Raw UID line — handy while building the approved list in
-                // access_control.cpp (copy these bytes into a new row).
-                printf("Card detected, UID:");
-                for (uint8_t i = 0; i < uid_len; i++) {
-                    printf(" %02X", uid[i]);
-                }
-                printf("\n");
+//         if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
+//             // Only report when it's a new presentation (card removed and
+//             // re-presented, or a different card).
+//             bool same_card = card_was_present && uid_len == last_uid_len &&
+//                              memcmp(uid, last_uid, uid_len) == 0;
+//             if (!same_card) {
+//                 // Raw UID line — handy while building the approved list in
+//                 // access_control.cpp (copy these bytes into a new row).
+//                 printf("Card detected, UID:");
+//                 for (uint8_t i = 0; i < uid_len; i++) {
+//                     printf(" %02X", uid[i]);
+//                 }
+//                 printf("\n");
 
-                // Access decision. An approved card comes back with the
-                // holder's name; an unknown card comes back as nullptr.
-                const char *name = access_lookup(uid, uid_len);
-                if (name != nullptr) {
-                    printf("Access granted: %s\n", name);
-                    log(LogLevel::INFORMATION, "Access granted");
-                    // TFT (handled elsewhere): show the holder's name `name`.
-                } else {
-                    printf("Access denied\n");
-                    log(LogLevel::WARNING, "Access denied");
-                    // TFT (handled elsewhere): show "Access Denied".
-                }
+//                 // Access decision. An approved card comes back with the
+//                 // holder's name; an unknown card comes back as nullptr.
+//                 const char *name = access_lookup(uid, uid_len);
+//                 if (name != nullptr) {
+//                     printf("Access granted: %s\n", name);
+//                     log(LogLevel::INFORMATION, "Access granted");
+//                     // TFT (handled elsewhere): show the holder's name `name`.
+//                 } else {
+//                     printf("Access denied\n");
+//                     log(LogLevel::WARNING, "Access denied");
+//                     // TFT (handled elsewhere): show "Access Denied".
+//                 }
 
-                memcpy(last_uid, uid, uid_len);
-                last_uid_len = uid_len;
-            }
-            card_was_present = true;
-        } else {
-            card_was_present = false;
-        }
+//                 memcpy(last_uid, uid, uid_len);
+//                 last_uid_len = uid_len;
+//             }
+//             card_was_present = true;
+//         } else {
+//             card_was_present = false;
+//         }
 
-        // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
-        // scan is responsive without hammering the I2C bus.
-        sleep_ms(100);
-    }
+//         // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
+//         // scan is responsive without hammering the I2C bus.
+//         sleep_ms(100);
+//     }
 
-    return 0;
-}
+//     return 0;
+// }
 
 
 // --------------------------------------------------------------
@@ -264,3 +270,80 @@ int main()
 
 
 -------------------------------------------------------------- **/
+
+
+// Code example for interfacing rp2040 with raspi-pi running serial app
+// --------------------------------------------------------------
+
+struct Drink_Count {
+    int coke = 0;
+    int fanta = 0;
+    int pasito = 0;
+    int solo = 0;
+};
+
+// Parses a packet of the form "C:1,F:2,P:0,S:3;"
+// Returns true on successful parse, false if malformed.
+bool parse_packet(const char* packet, Drink_Count& out) {
+    int c, f, p, s;
+    int matched = sscanf(packet, "C:%d,F:%d,P:%d,S:%d;", &c, &f, &p, &s);
+    if (matched != 4) {
+        return false;
+    }
+    out.coke = c;
+    out.fanta = f;
+    out.pasito = p;
+    out.solo = s;
+    return true;
+}
+
+int main()
+{
+    stdio_init_all();
+
+    char buffer[64];
+    size_t buf_len = 0;
+    bool polling_serial = true;
+
+    printf("Begining Poll:\n");
+    while (polling_serial) {
+        int ch = getchar_timeout_us(0); // non-blocking read
+
+
+        if (ch == PICO_ERROR_TIMEOUT) {
+            continue; // nothing available right now
+        }
+
+        if (ch == 'h'){
+            printf("RECIEVED SOMETHING\n");
+        }
+
+        if (ch == '\n' || ch == '\r') {
+            // Ignore stray newlines between packets, if any
+            continue;
+        }
+
+        if (buf_len < sizeof(buffer) - 1) {
+            buffer[buf_len++] = static_cast<char>(ch); //increase by a char each time
+        }
+
+        // Our packet deliminator
+        if (ch == ';') {
+            buffer[buf_len] = '\0';
+
+            Drink_Count counts;
+            if (parse_packet(buffer, counts)) {
+                printf("Parsed: Coke=%d Fanta=%d Passito=%d Solo=%d\n",
+                       counts.coke, counts.fanta, counts.pasito, counts.solo);
+                // TODO: use counts to update display / drinks_shop_cart
+            } else {
+                printf("Malformed packet: %s\n", buffer);
+            }
+
+            buf_len = 0; // reset for next packet
+        }
+    }
+    return 0;
+}
+
+// -------------------------------------------------------------- 
