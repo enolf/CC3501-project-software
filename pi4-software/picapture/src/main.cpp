@@ -460,7 +460,7 @@ int main()
 std::vector<Color_Config> colors_vec = {
   {"Coke",   'C', 0,   6,  240, 255, 209, 240},  // red
   {"Fanta",  'F', 3,  17,  236, 255, 130, 165},  // orange
-  {"Sprite", 'G', 41, 55,  133, 255, 66,  103},  // green — widened S ceiling to 255 for headroom
+  {"Mountain Dew", 'M', 41, 55,  133, 255, 66,  103},  // green — widened S ceiling to 255 for headroom
   {"Solo",   'S', 21, 34,  231, 255, 71,  103},  // yellow
 };
   // NEW: precompute the brand HSV centres once. These drive the per-pixel
@@ -539,17 +539,17 @@ std::vector<Color_Config> colors_vec = {
 
     std::string packet = serialize_image(img_info, colors_vec);
     std::cout << packet.c_str() << std::endl;
-    //print
-    //flush
+
     if (clk::now() > next) next = clk::now();  // fell behind: drop the beat, do not burst
     std::this_thread::sleep_until(next);
 
-    cv::putText(pf.original, "Sampling:  ", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
-    if (mouse_click_data.hsv_state.hsv_state == 0){
-      cv::putText(pf.original, "Sampling: 1", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
-    }else{
-      cv::putText(pf.original, "Sampling: 2", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
-    } 
+    // cv::putText(pf.original, "Sampling:  ", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+    // if (mouse_click_data.hsv_state.hsv_state == 0){
+    //   cv::putText(pf.original, "Sampling: 1", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+    // }else{
+    //   cv::putText(pf.original, "Sampling: 2", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+    // } 
+
     show_all(pf);
     cv::waitKey(1);
 
@@ -558,7 +558,7 @@ std::vector<Color_Config> colors_vec = {
     if (frame_id >= 30) {
       gettimeofday(&end, NULL);
       double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec)/1000000.0;
-      // printf("[FPS:%f] Packet for sending: \"%s\"\n", 30/diff ,packet.c_str());
+      printf("[FPS:%f] \n", 30/diff);
       frame_id = 0;
       gettimeofday(&start, NULL);
     }
