@@ -15,8 +15,8 @@ right expectations.
 | Firmware host tests (`fridge_tests`) | Passing, off hardware |
 | picapture config tests (`config_tests`) | Passing, off hardware |
 | `protocol.py`, `test_fridged.py` | Passing, off hardware |
-| `checkout.cpp` re-entrant basket, `RefundOwed` | **Never run on the board** |
-| Drink rename end to end (Coke/Fanta/Mountain Dew/Solo) | **Never run on the board** |
+| `checkout.cpp` re-entrant basket, `RefundOwed` | **PASSED on the board** — T2.1–T2.10, commit `79a07c2` |
+| Drink rename end to end (Coke/Fanta/Mountain Dew/Solo) | **PASSED on the board** — `items=coke:1`, `items=fanta:1` |
 | picapture patch sampling + colour-centre storage | **Never run on the Pi** |
 | Area-based can counting after the colour refactor | Merge case proved once, **before** the refactor |
 | `hue_weight` raised above 4.0 | Never tried |
@@ -109,8 +109,28 @@ python3 -m serial.tools.miniterm \
     /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 115200    # Ctrl-] to quit
 ```
 
-`screen /dev/ttyACM0 115200` also works if you have it (`Ctrl-A` then `K`), but
-`screen` is not installed by default on Raspberry Pi OS.
+> **Prefer `miniterm` over `screen`, and this is not a style preference.**
+> `screen` **detaches instead of exiting** — closing the terminal, dropping the
+> SSH connection, or a stray `Ctrl-A D` all leave it running and **still holding
+> the serial port**. Everything that then tries to open it fails with
+> `[Errno 16] Device or resource busy`, including `fridged`, which under
+> `Restart=always` retries every five seconds forever and looks like a crash
+> loop with an unrelated cause.
+>
+> This cost an hour once. When a port is unexpectedly busy, the first command
+> is not a reboot:
+>
+> ```bash
+> sudo fuser -v /dev/ttyACM0      # names the process holding it
+> screen -ls                      # detached sessions, with their names
+> screen -X -S <name-from-above> quit
+> ```
+>
+> `miniterm` has no detached state: `Ctrl-]` exits and releases the port.
+
+`screen /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 115200` works too
+(`Ctrl-A` then `K` to quit **properly**), but `screen` is not installed by
+default on Raspberry Pi OS.
 
 > **Use the `by-id` path, not `/dev/ttyACM0`.** The number changes between
 > replugs and reboots, and chasing it wastes more time than it sounds like it
@@ -149,6 +169,34 @@ before flashing.
 With the **sim** backend, keys take effect immediately — no Enter needed.
 Press `?` for the key list; a serial build ignores stdin entirely, which is a
 second independent check on which binary is running.
+
+## ...or run T2 without reflashing at all
+
+**If the board already has a `serial` build on it, you do not have to reflash.**
+Everything T2 tests can be driven through `fake_pi.py` over the real link:
+
+```bash
+sudo systemctl stop fridged
+cd ~/CC3501-project-software/pi4-software/tools
+python3 fake_pi.py /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00
+```
+
+The split of responsibilities changes, but nothing under test does:
+
+- `o c , . / 5 6` are forwarded raw as debug keys and handled locally by
+  `main.cpp`, exactly as they are under the sim backend.
+- `1 2 3 4` and `Q W E R` are handled by **`fake_pi` itself**, which owns the
+  shelf — with the serial backend compiled the board has no shelf of its own.
+  `fake_pi.py` says so in a comment, and calls it "the only way to exercise the
+  board's change-your-mind path against real firmware".
+- `CMD SQUARE_LINK` and `CMD SQUARE_CANCEL` are answered automatically, so T2.7
+  works unchanged.
+
+**Every command needs Enter**, because the board no longer owns the keyboard.
+
+This is arguably the better run: it exercises the real serial link and the real
+`EVT INV` path at the same time, folding T4.1 into T2. The checkout state
+machine — the actual subject of T2 — is identical either way.
 
 | Key | Does |
 | --- | --- |
@@ -273,6 +321,29 @@ r              (restock to 5)
 c
 ```
 **Expect:** `restocked, nobody is charged`, `-> Idle`.
+
+## Result — 2026-08-07, commit `79a07c2`: **10/10 passed**
+
+Run through `fake_pi.py` over the real serial link rather than the sim backend.
+Two timing constants landed on their nominal values, which is worth recording:
+
+- T2.5 `RefundOwed -> Idle` took **10.008 s** against `REFUND_OWED_MS = 10000`
+- T2.8 theft fired at **exactly 30 s** against `SELECT_TIMEOUT_MS`
+
+The late-payment race (`l`) was exercised as a bonus and behaved:
+`REFUND OWED - Square took 600c ... after the link was cancelled`.
+
+Observations that are not faults:
+
+- `loop: pass took 77-203 ms` accompanies every state change. It is the TFT
+  repaint; the 203 ms case is rendering the QR. Idle sits at 17 ms, and nothing
+  here threatens the 8 s recount budget.
+- `box_g` drifts to about -0.2 g when empty. The mass gate tolerance is 1.00 g
+  and coins are 6.60/9.80 g, so this is comfortably inside it.
+- `fake_pi.py` dies with `[Errno 5] Input/output error` if the board resets
+  under it. A **manual** `fridged` run will do the same; under systemd
+  `Restart=always` covers it. Worth knowing before T5 and T6, where resetting
+  the board mid-run is a normal thing to do.
 
 > **Prompt to send me:**
 > `Results from TEST.md T2 (firmware simulator — re-entrant basket + refund). Commit: <hash>`
