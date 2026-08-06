@@ -458,7 +458,8 @@ int main()
 //   {"Solo",   'S', 23, 35, 190, 255, 150, 255},  // yellow
 // };
 std::vector<Color_Config> colors_vec = {
-  {"Coke",   'C', 0,   6,  240, 255, 209, 240},  // red
+  // {"Coke",   'C', 0,   6,  240, 255, 209, 240},  // red
+  {"Coke",   'C', 0,   6,  220, 255, 160, 220},  // red
   {"Fanta",  'F', 3,  17,  236, 255, 130, 165},  // orange
   {"Mountain Dew", 'M', 41, 55,  133, 255, 66,  103},  // green — widened S ceiling to 255 for headroom
   {"Solo",   'S', 21, 34,  231, 255, 71,  103},  // yellow
