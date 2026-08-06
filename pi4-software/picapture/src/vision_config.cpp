@@ -79,7 +79,8 @@ bool parse_bool(const std::string &text, bool &out)
     return false;
 }
 
-/// `name | wire_key | lowH,highH,lowS,highS,lowV,highV [| can_area]`
+/// `name | wire_key | hue,saturation,value [| can_area]`
+/// or the older `name | wire_key | lowH,highH,lowS,highS,lowV,highV [| can_area]`
 ///
 /// The fourth field is optional so that a config written before per-brand can
 /// areas existed still loads, with the area defaulting to "not calibrated".
@@ -96,22 +97,44 @@ bool parse_brand(const std::string &value, Brand &out, std::string *error)
         return false;
     }
 
+    // Three numbers is the colour itself. Six is a low/high band written before
+    // the format changed, and is converted rather than refused — the old files
+    // hold real tuning that somebody stood at a fridge to produce, and the
+    // information needed is in them.
     const std::vector<std::string> hsv = split(fields[2], ',');
-    if (hsv.size() != 6) {
-        if (error) *error = "a brand needs exactly six HSV numbers";
+    if (hsv.size() != 3 && hsv.size() != 6) {
+        if (error) {
+            *error = "a brand needs three HSV numbers (its colour), or six "
+                     "(an old low/high band)";
+        }
         return false;
+    }
+
+    std::vector<int> numbers(hsv.size(), 0);
+    for (size_t i = 0; i < hsv.size(); i++) {
+        if (!parse_int(hsv[i], numbers[i])) {
+            if (error) *error = "'" + hsv[i] + "' is not a whole number";
+            return false;
+        }
     }
 
     Brand brand;
     brand.name = fields[0];
     brand.wire_key = fields[1];
-    int *targets[6] = {&brand.lowH, &brand.highH, &brand.lowS,
-                       &brand.highS, &brand.lowV, &brand.highV};
-    for (size_t i = 0; i < 6; i++) {
-        if (!parse_int(hsv[i], *targets[i])) {
-            if (error) *error = "'" + hsv[i] + "' is not a whole number";
-            return false;
-        }
+
+    if (numbers.size() == 3) {
+        brand.hue = numbers[0];
+        brand.saturation = numbers[1];
+        brand.value = numbers[2];
+    } else {
+        // The midpoint is what the classifier always used, so converting loses
+        // nothing that was ever read. Circular for hue, because a legacy band
+        // could not represent a colour at hue 0 and clamped instead — the
+        // conversion cannot recover what that clamping already threw away, but
+        // it must not add more.
+        brand.hue = (int)std::lround(circular_hue_mean(numbers[0], numbers[1]));
+        brand.saturation = (numbers[2] + numbers[3]) / 2;
+        brand.value = (numbers[4] + numbers[5]) / 2;
     }
 
     if (fields.size() == 4 && !fields[3].empty()) {
@@ -139,12 +162,18 @@ Config defaults()
     // Sampled from cans_test/ under one set of lights. The order is
     // catalogue::Can's order and must stay that way; the wire keys are
     // catalogue::wire_key() and must match it character for character.
+    // ORDER IS catalogue::Can's ORDER and must stay that way — counts are
+    // reported positionally. Note it is NOT hue order: Solo sits between Fanta
+    // and Mountain Dew on the colour wheel but last but one in the catalogue.
+    //
+    // Values measured off the fridge camera with the exposure settled. Coke at
+    // hue 0 is exactly the case the old low/high band could not store.
     config.brands = {
-        // name            wire_key    H low/high   S low/high   V low/high
-        {"Coke",           "coke",      0,   6,     220, 255,    160, 220},
-        {"Fanta",          "fanta",     3,  17,     236, 255,    130, 165},
-        {"Mountain Dew",   "mtndew",   41,  55,     133, 255,     66, 103},
-        {"Solo",           "solo",     21,  34,     231, 255,     71, 103},
+        // name            wire_key      H    S    V   can area
+        {"Coke",           "coke",       0, 247, 190,  0},
+        {"Fanta",          "fanta",      9, 247, 220,  0},
+        {"Mountain Dew",   "mtndew",    44, 220, 150,  0},
+        {"Solo",           "solo",      27, 247, 200,  0},
     };
 
     return config;
@@ -279,7 +308,11 @@ bool save(const std::string &path, const Config &config, std::string *error)
             "# have to appear together. Their order is the order counts are\n"
             "# reported in, and it must match catalogue::Can on the RP2040.\n"
             "#\n"
-            "#   name | wire key | lowH,highH,lowS,highS,lowV,highV | can area\n"
+            "#   name | wire key | hue,saturation,value | can area\n"
+            "#\n"
+            "# The colour is a single point, not a range: a pixel goes to\n"
+            "# whichever drink's colour it is nearest. Hue is 0-179, not\n"
+            "# 0-359 - OpenCV halves it to fit a byte.\n"
             "#\n"
             "# The can area is the size of ONE can in pixels, and is what lets\n"
             "# two touching cans be counted as two rather than as one blob.\n"
@@ -288,10 +321,8 @@ bool save(const std::string &path, const Config &config, std::string *error)
 
     for (const Brand &brand : config.brands) {
         file << "brand = " << brand.name << " | " << brand.wire_key << " | "
-             << brand.lowH << "," << brand.highH << ","
-             << brand.lowS << "," << brand.highS << ","
-             << brand.lowV << "," << brand.highV << " | "
-             << brand.can_area << "\n";
+             << brand.hue << "," << brand.saturation << "," << brand.value
+             << " | " << brand.can_area << "\n";
     }
 
     file << "\n# Classification. Hue identifies the drink; saturation and value\n"
@@ -346,34 +377,127 @@ bool samples_agree(int hue_a, int hue_b)
     return hue_distance(hue_a, hue_b) <= Config::MAX_SAMPLE_HUE_SPREAD;
 }
 
-void apply_sample(Brand &brand, int h1, int s1, int v1,
-                  int h2, int s2, int v2)
+void SampleSet::add(int hue, int saturation, int value)
 {
-    // Hue barely moves between the lit and shadowed side of one can, so two
-    // samples under-report its true spread and it is padded proportionally
-    // harder. Saturation and value move a great deal more on their own, so
-    // their padding is there to absorb noise rather than to widen the band.
-    constexpr int HUE_PAD = 6;
-    constexpr int SAT_PAD = 15;
-    constexpr int VAL_PAD = 15;
+    hues_.push_back(hue);
+    saturations_.push_back(saturation);
+    values_.push_back(value);
+}
 
-    // Built from the circular midpoint outwards, NOT from min to max. A
-    // min/max band cannot represent a colour straddling the wrap point:
-    // samples of 178 and 2 would give lowH=172, highH=8, which is not a band
-    // at all and which validate() then rejects on save. Only the midpoint is
-    // read by the classifier, so building outwards from it is both correct and
-    // sufficient.
-    const double mean = circular_hue_mean(h1, h2);
-    const double half_spread = hue_distance(h1, h2) / 2.0;
-    const int pad = HUE_PAD + (int)std::ceil(half_spread);
+void SampleSet::clear()
+{
+    hues_.clear();
+    saturations_.clear();
+    values_.clear();
+}
 
-    brand.lowH = std::max(0, (int)std::lround(mean) - pad);
-    brand.highH = std::min(179, (int)std::lround(mean) + pad);
+namespace {
 
-    brand.lowS = std::max(0, std::min(s1, s2) - SAT_PAD);
-    brand.highS = std::min(255, std::max(s1, s2) + SAT_PAD);
-    brand.lowV = std::max(0, std::min(v1, v2) - VAL_PAD);
-    brand.highV = std::min(255, std::max(v1, v2) + VAL_PAD);
+constexpr double PI = 3.14159265358979323846;
+
+/// Where `hue` sits relative to `origin`, as a signed offset in [-90, 90].
+double signed_hue_offset(double hue, double origin)
+{
+    double offset = hue - origin;
+    while (offset > 90.0) offset -= 180.0;
+    while (offset < -90.0) offset += 180.0;
+    return offset;
+}
+
+} // namespace
+
+double SampleSet::centre_hue() const
+{
+    if (hues_.empty()) return 0.0;
+
+    // FIRST PASS: the circular mean, computed as ANGLES rather than numbers.
+    // Hue is a circle that OpenCV represents as 0-179, so red sits at both
+    // ends of the range and the arithmetic mean of 178 and 2 is 90 — cyan.
+    // Summing unit vectors and taking the direction of the total has no such
+    // seam. The doubling is because 0-179 covers a full turn, so one step of
+    // hue is two degrees.
+    double sum_sin = 0.0;
+    double sum_cos = 0.0;
+    for (int hue : hues_) {
+        const double angle = hue * 2.0 * PI / 180.0;
+        sum_sin += std::sin(angle);
+        sum_cos += std::cos(angle);
+    }
+    double rough = std::atan2(sum_sin, sum_cos) * 180.0 / (2.0 * PI);
+    if (rough < 0.0) rough += 180.0;
+
+    // SECOND PASS: the median offset from that estimate.
+    //
+    // A mean is not enough on its own. One glare speck reading as a completely
+    // different hue drags a mean of forty pixels by a whole point, and the
+    // entire reason for sampling a patch is that one bad pixel should count
+    // for nothing. Taking the median of the offsets — rather than of the hues
+    // themselves — keeps the wrap handled by the first pass while making the
+    // answer indifferent to outliers.
+    std::vector<double> offsets;
+    offsets.reserve(hues_.size());
+    for (int hue : hues_) {
+        offsets.push_back(signed_hue_offset(hue, rough));
+    }
+    std::sort(offsets.begin(), offsets.end());
+
+    double centre = rough + offsets[offsets.size() / 2];
+    if (centre < 0.0) centre += 180.0;
+    if (centre >= 180.0) centre -= 180.0;
+    return centre;
+}
+
+double SampleSet::hue_spread() const
+{
+    if (hues_.empty()) return 0.0;
+
+    const double centre = centre_hue();
+    std::vector<double> distances;
+    distances.reserve(hues_.size());
+    for (int hue : hues_) {
+        distances.push_back(hue_distance(hue, centre));
+    }
+    std::sort(distances.begin(), distances.end());
+
+    // The 90th percentile rather than the maximum. A patch clicked near the
+    // edge of a can catches a few background pixels however carefully it is
+    // placed, and letting the single worst of them define the spread would
+    // make every sample look like two drinks.
+    const size_t index = (size_t)((distances.size() - 1) * 0.9);
+    return distances[index];
+}
+
+bool SampleSet::to_brand(Brand &brand, std::string *error) const
+{
+    if (hues_.empty()) {
+        if (error) *error = "no pixels were sampled";
+        return false;
+    }
+
+    const double spread = hue_spread();
+    if (spread > Config::MAX_SAMPLE_HUE_SPREAD) {
+        if (error) {
+            *error = "the sampled pixels span " + std::to_string((int)spread) +
+                     " hue, which is too much for one can - check the drink "
+                     "named on the camera window and click on ONE can";
+        }
+        return false;
+    }
+
+    // Medians, not means, for saturation and value: a glare speck is a genuine
+    // outlier at the top of the range and a shadowed crevice at the bottom,
+    // and neither should move the answer.
+    std::vector<int> saturations = saturations_;
+    std::vector<int> values = values_;
+    std::sort(saturations.begin(), saturations.end());
+    std::sort(values.begin(), values.end());
+
+    brand.hue = (int)std::lround(centre_hue());
+    if (brand.hue > 179) brand.hue = 179;
+    if (brand.hue < 0) brand.hue = 0;
+    brand.saturation = saturations[saturations.size() / 2];
+    brand.value = values[values.size() / 2];
+    return true;
 }
 
 bool normalise(Config &config, std::string *note)
@@ -438,15 +562,27 @@ bool validate(const Config &config, std::string *error)
         // OpenCV's hue is 0-179, not 0-359: it halves the angle to fit a byte.
         // Copying a value out of a colour picker without halving it is the
         // single easiest mistake to make here, and 0-179 catches it.
-        if (brand.lowH < 0 || brand.highH > 179 || brand.lowH > brand.highH) {
-            return fail(where + ": hue must be 0-179 with low <= high "
-                                "(OpenCV halves the angle to fit a byte)");
+        if (brand.hue < 0 || brand.hue > 179) {
+            return fail(where + ": hue must be 0-179 (OpenCV halves the angle "
+                                "to fit a byte, so a value from a normal "
+                                "colour picker needs dividing by two)");
         }
-        if (brand.lowS < 0 || brand.highS > 255 || brand.lowS > brand.highS) {
-            return fail(where + ": saturation must be 0-255 with low <= high");
+        if (brand.saturation < 0 || brand.saturation > 255) {
+            return fail(where + ": saturation must be 0-255");
         }
-        if (brand.lowV < 0 || brand.highV > 255 || brand.lowV > brand.highV) {
-            return fail(where + ": value must be 0-255 with low <= high");
+        if (brand.value < 0 || brand.value > 255) {
+            return fail(where + ": value must be 0-255");
+        }
+
+        // A colour the floors would reject can never be matched: every pixel
+        // near it is background before any brand is considered, so this drink
+        // would silently never be detected.
+        if (brand.saturation < config.min_saturation ||
+            brand.value < config.min_value) {
+            return fail(where + ": its colour is below min_saturation (" +
+                        std::to_string(config.min_saturation) +
+                        ") or min_value (" + std::to_string(config.min_value) +
+                        "), so no pixel could ever be matched to it");
         }
 
         if (brand.can_area < 0) {

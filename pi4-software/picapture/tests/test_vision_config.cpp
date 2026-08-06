@@ -133,9 +133,11 @@ void test_round_trip()
     // A GStreamer fragment: spaces, equals signs and all. It has to survive
     // verbatim or locking the camera's exposure silently stops working.
     original.libcamerasrc_extra = "auto-focus-mode=manual ae-enable=false";
-    original.brands[2].lowH = 44;
-    original.brands[2].highH = 52;
+    original.brands[2].hue = 44;
     original.brands[1].can_area = 5400;
+    // Hue 0 is the case the old low/high band could not store at all, so it is
+    // the one worth pinning through a round trip.
+    original.brands[0].hue = 0;
 
     std::string error;
     check("saving succeeds", vision::save(file.path, original, &error));
@@ -169,12 +171,15 @@ void test_round_trip()
         const vision::Brand &a = original.brands[i];
         const vision::Brand &b = reloaded.brands[i];
         brands_ok = a.name == b.name && a.wire_key == b.wire_key &&
-                    a.lowH == b.lowH && a.highH == b.highH &&
-                    a.lowS == b.lowS && a.highS == b.highS &&
-                    a.lowV == b.lowV && a.highV == b.highV &&
-                    a.can_area == b.can_area;
+                    a.hue == b.hue && a.saturation == b.saturation &&
+                    a.value == b.value && a.can_area == b.can_area;
     }
-    check("every brand survives, name, band and can area intact", brands_ok);
+    check("every brand survives, name, colour and can area intact", brands_ok);
+
+    // The failure the band format made unavoidable: a drink at hue 0 came back
+    // as hue 3, three points nearer the drink it was hardest to separate from.
+    check("a drink at hue 0 comes back at hue 0, not shifted off the wrap",
+          reloaded.brands[0].hue == 0);
 
     // "Mountain Dew" has a space in it. The name is separated by '|' rather
     // than whitespace for exactly this reason, and a round trip is the only
@@ -228,6 +233,32 @@ void test_partial_and_missing()
     check("a brand line with a can area loads",
           vision::load(with_area.path, config, &error) &&
           config.brands.size() == 1 && config.brands[0].can_area == 5400);
+
+    // --- The old six-number band converts to a colour ---
+    //
+    // Those files hold real tuning that somebody stood at a fridge to produce.
+    // Refusing them would mean redoing the colour work to gain a change that
+    // was made FOR the colour work.
+    TempFile legacy("legacy_band.conf");
+    legacy.write("brand = Fanta | fanta | 4,16,240,255,190,220\n");
+    error.clear();
+    check("an old low/high band still loads",
+          vision::load(legacy.path, config, &error));
+    check("...converted to the midpoint the classifier always used",
+          config.brands.size() == 1 && config.brands[0].hue == 10 &&
+          config.brands[0].saturation == 247 &&
+          config.brands[0].value == 205);
+
+    // A three-number line is the new form and must not be mistaken for a
+    // truncated old one.
+    TempFile modern("modern_colour.conf");
+    modern.write("brand = Coke | coke | 0,247,190\n");
+    error.clear();
+    check("a three-number colour loads as a colour, not a broken band",
+          vision::load(modern.path, config, &error) &&
+          config.brands.size() == 1 && config.brands[0].hue == 0 &&
+          config.brands[0].saturation == 247 &&
+          config.brands[0].value == 190);
 }
 
 void test_refusals()
@@ -291,9 +322,13 @@ void test_validation()
 
     const Case cases[] = {
         {"hue above 179 is rejected (OpenCV halves the angle)",
-         [](vision::Config &c) { c.brands[0].highH = 200; }},
-        {"an inverted band is rejected",
-         [](vision::Config &c) { c.brands[0].lowS = 200; c.brands[0].highS = 100; }},
+         [](vision::Config &c) { c.brands[0].hue = 200; }},
+        {"a saturation outside 0-255 is rejected",
+         [](vision::Config &c) { c.brands[0].saturation = 300; }},
+        // A colour the global floors would reject can never be matched, so
+        // this drink would silently never be detected at all.
+        {"a colour below the candidate floors is rejected",
+         [](vision::Config &c) { c.brands[0].value = c.min_value - 1; }},
         {"a min area above the max is rejected",
          [](vision::Config &c) { c.contour_min_area = c.contour_max_area + 1; }},
         {"an even morphology kernel is rejected",
@@ -413,35 +448,6 @@ void test_hue_arithmetic()
     check("the mean across the wrap is symmetric",
           vision::circular_hue_mean(2, 178) == vision::circular_hue_mean(178, 2));
 
-    // --- Two clicks becoming a band ---
-    vision::Brand brand;
-    vision::apply_sample(brand, 10, 240, 200, 12, 250, 180);
-    check("an ordinary pair produces a band containing both hues",
-          brand.lowH <= 10 && brand.highH >= 12);
-    check("the band is the right way round",
-          brand.lowH <= brand.highH && brand.lowS <= brand.highS &&
-          brand.lowV <= brand.highV);
-    check("saturation and value span both samples",
-          brand.lowS <= 240 && brand.highS >= 250 &&
-          brand.lowV <= 180 && brand.highV >= 200);
-
-    // The wrap case has to produce a VALID band, not lowH=172/highH=8. That
-    // is not merely wrong, it is a band validate() refuses - so the symptom
-    // was a save that failed for a reason nowhere near the actual click.
-    vision::Brand wrapping;
-    vision::apply_sample(wrapping, 178, 250, 190, 2, 250, 170);
-    check("a pair straddling the wrap still produces a valid band",
-          wrapping.lowH <= wrapping.highH);
-    check("...and it stays inside OpenCV's 0-179 hue range",
-          wrapping.lowH >= 0 && wrapping.highH <= 179);
-
-    vision::Config config = vision::defaults();
-    config.brands[0] = wrapping;
-    std::string error;
-    check("...and a config built from it validates",
-          vision::validate(config, &error));
-    if (!error.empty()) printf("        %s\n", error.c_str());
-
     // --- The guard that would have prevented the wrecked Solo band ---
     check("two clicks on one can agree", vision::samples_agree(27, 30));
     check("the lit and shadowed sides of one can still agree",
@@ -453,6 +459,73 @@ void test_hue_arithmetic()
           vision::samples_agree(178, 3));
 }
 
+void test_sample_set()
+{
+    suite("sampling a can");
+
+    std::string error;
+
+    // --- An ordinary patch off one can ---
+    vision::SampleSet set;
+    for (int i = 0; i < 20; i++) {
+        set.add(9 + (i % 3), 240 + (i % 10), 200 + (i % 20));
+    }
+    vision::Brand brand;
+    check("a patch produces a colour", set.to_brand(brand, &error));
+    check("the hue lands inside the sampled range",
+          brand.hue >= 9 && brand.hue <= 11);
+    check("saturation and value land inside their sampled ranges",
+          brand.saturation >= 240 && brand.saturation <= 249 &&
+          brand.value >= 200 && brand.value <= 219);
+
+    // --- One bad pixel must not move the answer ---
+    //
+    // The whole reason a patch beats a click. A glare speck reads as a
+    // completely different hue, and under the old two-pixel scheme it WAS the
+    // measurement if you happened to click on it.
+    vision::SampleSet with_outlier;
+    for (int i = 0; i < 40; i++) with_outlier.add(9, 245, 210);
+    with_outlier.add(150, 40, 250);
+    vision::Brand robust;
+    check("a single outlying pixel does not move the colour",
+          with_outlier.to_brand(robust, &error) && robust.hue == 9);
+
+    // --- Hue 0, which the band format could never store ---
+    vision::SampleSet red;
+    for (int i = 0; i < 10; i++) red.add(0, 250, 190);
+    red.add(179, 250, 190);
+    red.add(1, 250, 190);
+    vision::Brand coke;
+    check("a can sitting on the hue wrap averages to the wrap, not away "
+          "from it",
+          red.to_brand(coke, &error) && (coke.hue <= 1 || coke.hue >= 178));
+
+    // --- Two different drinks in one sample set ---
+    //
+    // What clicking on a Coke and then a Mountain Dew looks like from in here.
+    // Refused, because the average of two drinks is a colour that then claims
+    // both of them.
+    vision::SampleSet two_drinks;
+    for (int i = 0; i < 20; i++) two_drinks.add(0, 250, 190);
+    for (int i = 0; i < 20; i++) two_drinks.add(45, 220, 150);
+    vision::Brand nonsense;
+    error.clear();
+    check("samples spanning two drinks are refused",
+          !two_drinks.to_brand(nonsense, &error) && !error.empty());
+
+    vision::SampleSet nothing;
+    error.clear();
+    check("an empty sample set is refused",
+          !nothing.to_brand(nonsense, &error) && !error.empty());
+
+    // --- The spread figure people are asked to read ---
+    vision::SampleSet tight;
+    for (int i = 0; i < 30; i++) tight.add(27 + (i % 2), 250, 200);
+    check("a tight patch reports a small spread", tight.hue_spread() <= 2.0);
+    check("clearing empties it",
+          (tight.clear(), tight.empty() && tight.size() == 0));
+}
+
 } // namespace
 
 int main()
@@ -461,6 +534,7 @@ int main()
 
     test_defaults();
     test_hue_arithmetic();
+    test_sample_set();
     test_round_trip();
     test_partial_and_missing();
     test_refusals();

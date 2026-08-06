@@ -38,22 +38,23 @@ struct Brand {
     std::string name;      ///< For the debug overlay and for a human reading a log
     std::string wire_key;  ///< What goes on the wire. Lower case, no spaces.
 
-    // The HSV box this drink occupies, in OpenCV's ranges: H is 0-179 (not
-    // 0-359 — OpenCV halves it to fit a byte), S and V are 0-255.
+    // This drink's colour, in OpenCV's ranges: H is 0-179 (not 0-359 — OpenCV
+    // halves it to fit a byte), S and V are 0-255.
     //
-    // NOT a threshold. Only the MIDPOINT of each box is used: it is the brand's
-    // centre, and a pixel is assigned to whichever centre is nearest. The
-    // width of the box affects nothing on its own.
+    // A SINGLE POINT, not a range, because a single point is all the
+    // classifier has ever used: a pixel is assigned to whichever brand centre
+    // it is nearest.
     //
-    // These were per-brand hard floors as well, and that was actively harmful.
-    // Coke's box floored value at 160 and Fanta's at 130, so a Coke can in
-    // shadow at V=150 was not merely rejected as Coke — it was refused by Coke
-    // and accepted by Fanta, and dimming the light turned one drink into
-    // another. The floors are now global (see min_saturation / min_value) and
-    // decide only whether a pixel is a drink at all, never which drink.
-    int lowH = 0, highH = 179;
-    int lowS = 0, highS = 255;
-    int lowV = 0, highV = 255;
+    // It was stored as a low/high band, and that was not merely redundant — it
+    // was lossy in a way that cost real accuracy. The centre was recovered as
+    // the band's midpoint, and the band was clamped to 0-179, so a drink
+    // sitting at hue 0 could not be represented at all: sampling Coke at hue 0
+    // produced the band 0-6 and therefore the centre 3. Three hue of Coke's
+    // separation from Fanta was thrown away by the storage format, in the
+    // direction of the drink it was already hardest to tell apart.
+    int hue = 0;
+    int saturation = 128;
+    int value = 128;
 
     /// Area of ONE can of this drink, in pixels at the processing resolution.
     /// Zero means "not calibrated", and counting falls back to one can per
@@ -246,6 +247,13 @@ struct Config {
     /// what a pair is supposed to be. Anything wider is two different drinks.
     static constexpr int MAX_SAMPLE_HUE_SPREAD = 15;
 
+    /// Half-width of the square of pixels each click contributes, in pixels.
+    ///
+    /// Large enough to average away one bad pixel and to span a real piece of
+    /// the can; small enough that a click near the edge does not swallow the
+    /// background behind it.
+    static constexpr int SAMPLE_PATCH_RADIUS = 6;
+
     /// How close two brand centres may sit before the pair is too alike to
     /// separate reliably, as a fraction of `max_brand_dist`.
     ///
@@ -353,12 +361,54 @@ double circular_hue_mean(double a, double b);
 /// The guard on the tuning UI's easiest mistake. See MAX_SAMPLE_HUE_SPREAD.
 bool samples_agree(int hue_a, int hue_b);
 
-/// Set a brand's HSV box from two sampled pixels, with padding.
+/// A collection of pixels sampled off one can, and the colour they average to.
 ///
-/// Takes plain integers rather than an OpenCV type so this file stays
-/// camera-free and the wrap-around behaviour above can be tested directly.
-void apply_sample(Brand &brand, int h1, int s1, int v1,
-                  int h2, int s2, int v2);
+/// WHY A SET AND NOT TWO PIXELS
+/// ----------------------------
+/// Tuning used to take exactly two clicked pixels and treat them as the whole
+/// truth about a drink. Two pixels is not a measurement of a can, and the
+/// failures were not subtle:
+///
+///   * Clicking twice on nearly the same spot pinned the colour to that spot.
+///     Mountain Dew spans about ten hue across one can; two clicks that both
+///     landed at hue 39 put its centre at 39, and the hue-29 half of the can
+///     then sat outside `max_brand_dist` and stopped being detected at all.
+///   * A single unlucky pixel — a glare speck, a JPEG artefact, the dark line
+///     between two cans — carried the same weight as a representative one.
+///
+/// Each click now contributes a patch of pixels and the centre is their
+/// median, so one bad pixel changes nothing and the centre lands in the middle
+/// of the colour the can actually is.
+class SampleSet {
+public:
+    void add(int hue, int saturation, int value);
+    void clear();
+    size_t size() const { return hues_.size(); }
+    bool empty() const { return hues_.empty(); }
+
+    /// The hue these samples represent: a circular median, robust to the
+    /// stray bright or dark pixel that any patch off a curved can will catch.
+    /// Zero if empty.
+    double centre_hue() const;
+
+    /// How far the outlying samples sit from that mean, in hue. The figure
+    /// worth looking at when a drink will not hold still: a spread wider than
+    /// the gap to the next drink cannot be tuned away.
+    double hue_spread() const;
+
+    /// Write the sampled colour into `brand`, leaving its name, wire key and
+    /// can area alone.
+    ///
+    /// False if there is nothing to write, or if the samples are too spread out
+    /// in hue to be one can — which is what clicking on two different drinks
+    /// looks like from in here.
+    bool to_brand(Brand &brand, std::string *error) const;
+
+private:
+    std::vector<int> hues_;
+    std::vector<int> saturations_;
+    std::vector<int> values_;
+};
 
 /// Snap the values that have to take a particular shape, and say what changed.
 ///

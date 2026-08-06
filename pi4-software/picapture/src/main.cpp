@@ -102,13 +102,16 @@ struct BrandCentre {
     double h, s, v;
 };
 
-/// Click-to-sample: two clicks on a can set that drink's colour band.
+/// Click-to-sample: two clicks on a can set that drink's colour.
+///
+/// Each click contributes a PATCH of pixels, not one. See vision::SampleSet
+/// for why — two lone pixels were not enough to describe a can, and the
+/// failures were silent.
 struct SampleState {
     const cv::Mat *frame = nullptr;  ///< The image clicks are read from
     int brand_index = 0;             ///< Which brand the clicks tune
     int clicks = 0;
-    cv::Vec3b first{};
-    cv::Vec3b second{};
+    vision::SampleSet samples;
     bool pair_ready = false;
 
     // For the per-click diagnostic. Pointers rather than copies so the readout
@@ -126,11 +129,8 @@ std::vector<BrandCentre> build_centres(const vision::Config &config)
     std::vector<BrandCentre> centres;
     centres.reserve(config.brands.size());
     for (const vision::Brand &brand : config.brands) {
-        centres.push_back({
-            (brand.lowH + brand.highH) / 2.0,
-            (brand.lowS + brand.highS) / 2.0,
-            (brand.lowV + brand.highV) / 2.0,
-        });
+        centres.push_back({(double)brand.hue, (double)brand.saturation,
+                           (double)brand.value});
     }
     return centres;
 }
@@ -394,21 +394,41 @@ void on_mouse(int event, int x, int y, int /*flags*/, void *userdata)
         return;
     }
 
-    const cv::Vec3b bgr = state->frame->at<cv::Vec3b>(y, x);   // row=y, col=x
-    cv::Mat one_pixel(1, 1, CV_8UC3, cv::Scalar(bgr[0], bgr[1], bgr[2]));
-    cv::Mat converted;
-    cv::cvtColor(one_pixel, converted, cv::COLOR_BGR2HSV);
-    const cv::Vec3b hsv = converted.at<cv::Vec3b>(0, 0);
+    // A PATCH, not the pixel under the cursor. One pixel is a sample of size
+    // one: a glare speck or the dark line between two cans carries the same
+    // weight as a representative pixel, and the answer moves depending on
+    // exactly where the mouse landed.
+    const int radius = vision::Config::SAMPLE_PATCH_RADIUS;
+    const int x0 = std::max(0, x - radius);
+    const int y0 = std::max(0, y - radius);
+    const int x1 = std::min(state->frame->cols - 1, x + radius);
+    const int y1 = std::min(state->frame->rows - 1, y + radius);
 
-    if (state->clicks == 0) {
-        state->first = hsv;
-        state->clicks = 1;
-        printf("  sample 1 of 2: H=%d S=%d V=%d\n", hsv[0], hsv[1], hsv[2]);
-    } else {
-        state->second = hsv;
+    cv::Mat patch = (*state->frame)(cv::Range(y0, y1 + 1),
+                                    cv::Range(x0, x1 + 1));
+    cv::Mat patch_hsv;
+    cv::cvtColor(patch, patch_hsv, cv::COLOR_BGR2HSV);
+
+    for (int py = 0; py < patch_hsv.rows; py++) {
+        const cv::Vec3b *row = patch_hsv.ptr<cv::Vec3b>(py);
+        for (int px = 0; px < patch_hsv.cols; px++) {
+            state->samples.add(row[px][0], row[px][1], row[px][2]);
+        }
+    }
+
+    // Reported from the whole set so far, so the second click shows what the
+    // pair actually amounts to rather than just what was under the cursor.
+    const cv::Vec3b hsv = patch_hsv.at<cv::Vec3b>(patch_hsv.rows / 2,
+                                                  patch_hsv.cols / 2);
+    state->clicks++;
+    printf("  sample %d of 2: centre pixel H=%d S=%d V=%d, %zu pixels so far, "
+           "hue spread %.0f\n",
+           state->clicks, hsv[0], hsv[1], hsv[2], state->samples.size(),
+           state->samples.hue_spread());
+
+    if (state->clicks >= 2) {
         state->clicks = 0;
         state->pair_ready = true;
-        printf("  sample 2 of 2: H=%d S=%d V=%d\n", hsv[0], hsv[1], hsv[2]);
     }
 
     // --- Why this pixel classified the way it did ---
@@ -464,20 +484,6 @@ void on_mouse(int event, int x, int y, int /*flags*/, void *userdata)
     fflush(stdout);
 }
 
-/// Set the selected brand's band from the two clicked pixels.
-///
-/// A thin adapter: the arithmetic lives in vision_config so that the hue
-/// wrap-around it has to get right can be tested without a camera.
-void apply_sample(vision::Brand &brand, const cv::Vec3b &a, const cv::Vec3b &b)
-{
-    vision::apply_sample(brand, a[0], a[1], a[2], b[0], b[1], b[2]);
-}
-
-/// Could these two samples plausibly have come from the same can?
-bool sample_pair_is_consistent(const cv::Vec3b &a, const cv::Vec3b &b)
-{
-    return vision::samples_agree(a[0], b[0]);
-}
 
 void create_windows(Mode mode, vision::Config &config, SampleState &sampling)
 {
@@ -562,10 +568,9 @@ void print_config(const vision::Config &config, int selected)
     printf("  tuning:\n");
     for (size_t i = 0; i < config.brands.size(); i++) {
         const vision::Brand &brand = config.brands[i];
-        printf("    %s %zu %-14s H %3d-%3d  S %3d-%3d  V %3d-%3d  can=%s\n",
+        printf("    %s %zu %-14s H %3d  S %3d  V %3d   can=%s\n",
                (int)i == selected ? "->" : "  ", i + 1, brand.name.c_str(),
-               brand.lowH, brand.highH, brand.lowS, brand.highS,
-               brand.lowV, brand.highV,
+               brand.hue, brand.saturation, brand.value,
                brand.can_area > 0 ? std::to_string(brand.can_area).c_str()
                                   : "not set");
     }
@@ -683,10 +688,18 @@ void warn_about_close_centres(const vision::Config &config,
             const double too_close = config.max_brand_dist *
                                      vision::Config::MIN_CENTRE_SEPARATION_FRACTION;
             if (dist < too_close) {
-                printf("  WARNING: %s and %s are only %.1f apart - expect one "
-                       "to be counted as the other\n",
+                const double hue_gap = hue_distance(centres[i].h, centres[j].h);
+                printf("  NOTE: %s and %s are %.1f apart (only %.0f hue).\n"
+                       "        Their colours really are that similar, so this "
+                       "may be as good as it gets.\n"
+                       "        What matters is the margin on a real pixel: "
+                       "click a can and check the\n"
+                       "        winner is comfortably ahead. If it is not, "
+                       "raise hue_weight (now %.1f)\n"
+                       "        so hue counts for more than brightness.\n",
                        config.brands[i].name.c_str(),
-                       config.brands[j].name.c_str(), dist);
+                       config.brands[j].name.c_str(), dist, hue_gap,
+                       config.hue_weight);
             }
         }
     }
@@ -1006,30 +1019,25 @@ int main(int argc, char *argv[])
             if (sampling.pair_ready) {
                 sampling.pair_ready = false;
 
-                // Two clicks are meant to be the lit and shadowed sides of ONE
-                // can. Hues this far apart are two different drinks, and
-                // applying them would drag this brand's centre to a colour
-                // halfway between two others — where it starts claiming both.
-                // Refused rather than warned about: the pair carries no usable
-                // information either way, and a warning in a scrolling console
-                // is what failed last time.
-                if (!sample_pair_is_consistent(sampling.first,
-                                               sampling.second)) {
-                    printf("  IGNORED: those two clicks are %.0f apart in hue, "
-                           "so they are not the same can.\n"
-                           "  %s was left alone. Check the drink named on the "
-                           "camera window, then click twice on ONE can.\n",
-                           hue_distance(sampling.first[0], sampling.second[0]),
+                // to_brand() refuses a set whose hues are spread too wide to
+                // be one can — which is what clicking on two different drinks
+                // looks like from in there. Refused rather than warned about:
+                // the samples carry no usable information either way, and a
+                // warning in a scrolling console is what failed before.
+                vision::Brand candidate = config.brands[sampling.brand_index];
+                std::string why;
+                if (!sampling.samples.to_brand(candidate, &why)) {
+                    printf("  IGNORED: %s\n  %s was left alone.\n", why.c_str(),
                            config.brands[sampling.brand_index].name.c_str());
                     fflush(stdout);
                 } else {
                     undo_brand = config.brands[sampling.brand_index];
                     undo_index = sampling.brand_index;
-                    apply_sample(config.brands[sampling.brand_index],
-                                 sampling.first, sampling.second);
+                    config.brands[sampling.brand_index] = candidate;
                     centres = build_centres(config);
                     print_config(config, sampling.brand_index);
                 }
+                sampling.samples.clear();
             }
 
             // Sliders write straight into the config, so an even kernel can

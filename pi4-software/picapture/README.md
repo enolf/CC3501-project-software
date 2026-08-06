@@ -82,15 +82,23 @@ Retuning does not need a compiler:
 **The drink you are tuning is shown on the camera window.** Check it before
 every pair of clicks. The selection persists until you change it, so it is
 entirely possible to press `4` for Solo, tune it, then keep clicking on other
-cans and quietly retune Solo onto all of them — which drags its centre to a
-colour between two drinks, where it starts claiming both.
+cans and quietly retune Solo onto all of them — which drags its colour to
+somewhere between two drinks, where it starts claiming both.
 
 Two guards exist because that is exactly what happened once:
 
-- Two clicks more than 15 apart in hue **are rejected**, because they cannot be
-  the same can. The brand is left alone and the console says so.
+- Samples spread more than 15 hue apart **are rejected**, because they cannot
+  be one can. The drink is left alone and the console says so.
 - `u` undoes the last sample, one level deep. `r` puts one drink back to its
   built-in colour if it has drifted badly.
+
+**Each click samples a patch of pixels, not the one under the cursor**, and the
+drink's colour is their circular median. One pixel is a sample of size one: a
+glare speck or the dark line between two cans would carry the same weight as a
+representative pixel, and the answer would move depending on exactly where the
+mouse landed. Two clicks on nearly the same spot used to pin a drink to that
+spot — which is how Mountain Dew ended up centred on hue 39 when its can spans
+roughly 29–45, leaving half of every can undetected.
 
 In the debug modes, **counts print only when they change** — a steady shelf is
 silent, and a wandering one is obvious. Headless still emits every period,
@@ -265,10 +273,29 @@ get *through* the filter to be divided up.
 can at the back of a deep shelf projects to fewer pixels than one at the front,
 so a deep shelf will eventually need per-row calibration or a top-down view.
 
-**Two drinks with adjacent hues stay the hard case.** Coke and Fanta sit about
-7–10 hue apart. Saving warns when any two brand centres come closer than 75% of
-`max_brand_dist`, which is the signal that one has drifted — it caught Mountain
-Dew's centre sliding to within 9 hue of Solo's after a bad sampling session.
+**Two drinks with adjacent hues stay the hard case.** Coke measures around hue
+0 and Fanta around hue 9 — genuinely close, and no amount of clicking will
+separate them further, because that is what the camera sees.
+
+What can be adjusted is how much that gap counts for. `hue_weight` multiplies
+the hue difference against saturation and value, so raising it makes the one
+channel that identifies a drink dominate the two that mostly describe the
+lighting:
+
+| `hue_weight` | Coke↔Fanta separation |
+| --- | --- |
+| 4 (default) | 36.8 |
+| 6 | 54.5 |
+| 8 | 72.4 |
+
+The cost is that a can whose own hue varies — Mountain Dew spans about ten —
+starts losing its edge pixels past `max_brand_dist`, and blobs fragment. If you
+raise `hue_weight`, check afterwards that every drink still forms one solid blob
+in the *after cleanup* view.
+
+Saving reports any two drinks closer than 75% of `max_brand_dist`. Treat it as
+information rather than an error: the number that actually matters is the margin
+on a real pixel, which the click readout gives you.
 
 **Lighting differs between the two scans.** The baseline is taken as the door
 opens and the recount after it shuts, with the fridge light and the room light
