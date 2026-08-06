@@ -1,314 +1,663 @@
-/* 
-Requires OpenCV 4.x - OpenCV 5.0.0 (Homebrew) doesn't work as of July 2026 missing moments class
-OpenCV 4.x Homebrew or windows equivelant.
-*/
-
-/*TODO
-update README
-Can distance thresholding
-report multiple distinct colors of cans
-*/
-
-// #define TEST
+// picapture: what is on the shelf, worked out from a camera.
+//
+// Reads the Pi camera, decides how many of each drink it can see, and prints
+// one line per look:
+//
+//     coke:5,fanta:4,mtndew:5,solo:3;
+//
+// It talks to nobody. `fridged` runs this as a subprocess and reads its
+// standard output, which is what keeps the serial link owned by exactly one
+// process. Anything printed here that is not a count line goes to stderr and is
+// diagnostic; stdout carries counts and nothing else.
+//
+// REQUIRES OPENCV 4.x. OpenCV 5.0.0 dropped the Moments class this depends on.
+//
+// HOW A FRAME BECOMES A COUNT
+// ---------------------------
+//   1. capture, downsample
+//   2. flat-field correct   divide out large-scale lighting, so a shadowed can
+//                           and a lit can are still the same colour
+//   3. convert to HSV
+//   4. classify             assign every pixel to its NEAREST brand, once
+//   5. per brand            clean up the mask, find contours, count them
+//
+// Step 4 is the one worth understanding. The obvious approach — one inRange()
+// per brand — is what this did first, and it does not work here: Coke, Fanta,
+// Mountain Dew and Solo occupy adjacent hue bands, so glare, JPEG blocking and
+// anti-aliased edges routinely satisfy two or three brands at once, and a
+// single can picks up several labels simultaneously. Nearest-centre gives every
+// pixel exactly one owner, so two brands can no longer claim the same region.
+//
+// EVERY THRESHOLD LIVES IN vision_config.h. There are no bare numbers below.
 
 #include <opencv2/opencv.hpp>
-#include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <opencv2/imgproc.hpp>
 
-#include <sys/time.h>
-#include <string>
+#include <algorithm>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
+#include <iostream>
+#include <limits>
 #include <sstream>
+#include <string>
+#include <thread>
+#include <vector>
 
-#include "trackbar.h"
+#include "vision_config.h"
 
-enum visualise_contours_mode {
-    NONE = 0,
-    BBOX = 1 << 0,
-    CENTROIDS = 1 << 1,
-    CONTOURS = 1 << 2,
-    ALL = BBOX | CENTROIDS | CONTOURS
+namespace {
+
+// --- How much of a window this run puts up ---------------------------------
+
+enum class Mode {
+    Headless,    ///< No GUI at all. What the deployed service runs.
+    DebugCamera, ///< The annotated camera view.
+    DebugAll,    ///< ...plus the intermediate stages and the tuning sliders.
 };
 
-struct Contour_Info {
+/// Where tuning is read from and written back to, relative to the working
+/// directory. The service runs with its working directory set to the picapture
+/// folder, so this sits beside the binary's parent, not inside build/.
+constexpr const char *CONFIG_PATH = "picapture.conf";
+
+/// A pixel belonging to no brand.
+constexpr signed char BACKGROUND_LABEL = -1;
+
+/// Window titles. Named constants because a typo in one of these produces a
+/// second, empty window rather than a compile error.
+constexpr const char *WIN_CAMERA = "picapture - camera";
+constexpr const char *WIN_MASK = "picapture - classified";
+constexpr const char *WIN_MORPH = "picapture - after cleanup";
+constexpr const char *WIN_FLAT = "picapture - flat-field corrected";
+constexpr const char *WIN_CONTROL = "picapture - tuning";
+
+// --- The pipeline's working images -----------------------------------------
+
+struct Frames {
+    cv::Mat original;       ///< As captured, then drawn on for the debug view
+    cv::Mat flattened;      ///< After flat-field correction
+    cv::Mat hsv;
+    cv::Mat classification; ///< Per-pixel brand index, or BACKGROUND_LABEL
+    cv::Mat mask;           ///< The current brand's pixels
+    cv::Mat morphology;     ///< ...after opening and closing
+};
+
+struct Detection {
     cv::Rect bbox;
     cv::Point2f centroid;
     double area;
-    cv::Vec3b hsv;
-    std::string color;
 };
 
-struct onMouse_UserData{
-    bool just_clicked = false;
-    cv::Mat* p_frame;
-    cv::Vec3b hsv;
+/// A brand's HSV centre, precomputed from its configured box.
+struct BrandCentre {
+    double h, s, v;
+    int min_s, min_v;   ///< Below these a pixel is too grey or dark to be this
 };
 
-struct Trackbar_State{
-    int* iLowH;
-    int* iHighH;
-    int* iLowS;
-    int* iHighS;
-    int* iLowV;
-    int* iHighV;
+/// Click-to-sample: two clicks on a can set that drink's colour band.
+struct SampleState {
+    const cv::Mat *frame = nullptr;  ///< The image clicks are read from
+    int brand_index = 0;             ///< Which brand the clicks tune
+    int clicks = 0;
+    cv::Vec3b first{};
+    cv::Vec3b second{};
+    bool pair_ready = false;
 };
 
+// ---------------------------------------------------------------------------
+// Classification
+// ---------------------------------------------------------------------------
 
+std::vector<BrandCentre> build_centres(const vision::Config &config)
+{
+    std::vector<BrandCentre> centres;
+    centres.reserve(config.brands.size());
+    for (const vision::Brand &brand : config.brands) {
+        centres.push_back({
+            (brand.lowH + brand.highH) / 2.0,
+            (brand.lowS + brand.highS) / 2.0,
+            (brand.lowV + brand.highV) / 2.0,
+            brand.lowS,
+            brand.lowV,
+        });
+    }
+    return centres;
+}
 
-#ifdef TEST
-int load_test_image(cv::Mat &bgr_out) {
-    // Load the image
-    bgr_out = cv::imread("../cans_test/cans_multi_test_1.jpg");
-    if (!bgr_out.data) {
-        bgr_out = cv::imread("cans_test/cans_multi_test_1.jpg");
-        if (!bgr_out.data) {
-            std::cerr << "Failed to load image\n";
+/// Distance between two hues, the short way round.
+///
+/// OpenCV's hue wraps at 180, not 360. Red sits at both ends of that range, so
+/// a plain subtraction makes hue 2 and hue 178 look 176 apart when they are 4
+/// apart and both Coke.
+inline double hue_distance(double a, double b)
+{
+    const double d = std::fabs(a - b);
+    return std::min(d, 180.0 - d);
+}
+
+/// Assign every pixel to its nearest brand, or to the background.
+///
+/// One pass covering all brands rather than one pass per brand: cheaper, and —
+/// the reason it was written this way — it is what guarantees a pixel has a
+/// single owner.
+cv::Mat classify(const cv::Mat &hsv, const std::vector<BrandCentre> &centres,
+                 double hue_weight, double max_dist)
+{
+    cv::Mat labels(hsv.size(), CV_8SC1, cv::Scalar(BACKGROUND_LABEL));
+
+    for (int y = 0; y < hsv.rows; ++y) {
+        const cv::Vec3b *row = hsv.ptr<cv::Vec3b>(y);
+        signed char *out = labels.ptr<signed char>(y);
+
+        for (int x = 0; x < hsv.cols; ++x) {
+            const cv::Vec3b &px = row[x];
+            double best = std::numeric_limits<double>::max();
+            int best_label = BACKGROUND_LABEL;
+
+            for (size_t i = 0; i < centres.size(); ++i) {
+                const BrandCentre &centre = centres[i];
+                if (px[1] < centre.min_s || px[2] < centre.min_v) {
+                    continue;   // too washed out or too dark to be this drink
+                }
+
+                const double dh = hue_distance(px[0], centre.h) * hue_weight;
+                const double ds = (double)px[1] - centre.s;
+                const double dv = (double)px[2] - centre.v;
+                const double dist = std::sqrt(dh * dh + ds * ds + dv * dv);
+
+                if (dist < best) {
+                    best = dist;
+                    best_label = (int)i;
+                }
+            }
+
+            if (best <= max_dist) out[x] = (signed char)best_label;
+        }
+    }
+    return labels;
+}
+
+/// Divide out large-scale variation in the lighting.
+///
+/// Estimates the illumination as a heavily blurred greyscale copy of the frame
+/// and divides the image by it. Hue survives, which is all the classifier reads
+/// — so the lit and shadowed sides of one can end up the same colour instead of
+/// two different drinks.
+cv::Mat flat_field(const cv::Mat &bgr, int blur_radius)
+{
+    cv::Mat as_float;
+    bgr.convertTo(as_float, CV_32F, 1.0 / 255.0);
+
+    cv::Mat grey;
+    cv::cvtColor(bgr, grey, cv::COLOR_BGR2GRAY);
+
+    const int k = blur_radius | 1;      // GaussianBlur demands an odd kernel
+    cv::Mat illumination;
+    cv::GaussianBlur(grey, illumination, cv::Size(k, k), 0);
+    illumination.convertTo(illumination, CV_32F, 1.0 / 255.0);
+    illumination += 0.05f;              // no divide-by-zero in near-black areas
+
+    std::vector<cv::Mat> channels;
+    cv::split(as_float, channels);
+    for (cv::Mat &channel : channels) {
+        cv::divide(channel, illumination, channel);
+    }
+
+    cv::Mat merged;
+    cv::merge(channels, merged);
+
+    // Dividing can push bright pixels past 1.0. Rescale rather than clip, so a
+    // highlight keeps its colour instead of saturating to white — white is
+    // exactly what the classifier is meant to reject as background.
+    double max_value = 0.0;
+    cv::minMaxLoc(merged, nullptr, &max_value);
+    if (max_value > 1.0) merged /= max_value;
+
+    cv::Mat out;
+    merged.convertTo(out, CV_8U, 255.0);
+    return out;
+}
+
+/// Isolate one brand's pixels and tidy the mask.
+void build_mask(int brand_index, Frames &frames, const vision::Config &config)
+{
+    frames.mask = (frames.classification == brand_index);
+    frames.morphology = frames.mask.clone();
+
+    if (config.open_kernel > 0) {
+        cv::morphologyEx(
+            frames.morphology, frames.morphology, cv::MORPH_OPEN,
+            cv::getStructuringElement(
+                cv::MORPH_ELLIPSE,
+                cv::Size(config.open_kernel, config.open_kernel)));
+    }
+
+    if (config.close_kernel > 0) {
+        // Tall, not square, and that asymmetry is deliberate: a can is a tall
+        // thin blob, and a band of glare across the middle splits it in two.
+        // Closing vertically rejoins it without bridging two cans standing
+        // side by side, which a square kernel of the same reach would.
+        cv::morphologyEx(
+            frames.morphology, frames.morphology, cv::MORPH_CLOSE,
+            cv::getStructuringElement(
+                cv::MORPH_ELLIPSE,
+                cv::Size(config.close_kernel,
+                         config.close_kernel * vision::Config::CLOSE_ASPECT)));
+    }
+}
+
+/// Count the blobs in the current mask, and optionally draw them.
+///
+/// COUNTING AND DRAWING ARE ONE PASS BUT NOT ONE DECISION. The previous version
+/// took a "what to draw" flag and returned early when it was NONE — so a
+/// headless run found contours, drew none of them, and reported every count as
+/// zero. Nothing said so; the packets were well-formed and entirely wrong.
+/// `annotate` now suppresses the drawing alone.
+std::vector<Detection> find_cans(Frames &frames, const vision::Config &config,
+                                 const vision::Brand &brand, bool annotate)
+{
+    std::vector<Detection> found;
+    std::vector<std::vector<cv::Point>> contours;
+    cv::findContours(frames.morphology, contours, cv::RETR_EXTERNAL,
+                     cv::CHAIN_APPROX_SIMPLE);
+
+    for (const std::vector<cv::Point> &contour : contours) {
+        // Simplify before measuring: a mask edge is jagged at the pixel level
+        // and the raw perimeter is dominated by that noise.
+        std::vector<cv::Point> simplified;
+        const double epsilon = vision::Config::APPROX_EPSILON_FRACTION *
+                               cv::arcLength(contour, true);
+        cv::approxPolyDP(contour, simplified, epsilon, true);
+
+        const double area = cv::contourArea(simplified);
+        if (area < config.contour_min_area) continue;
+        if (area > config.contour_max_area) continue;
+
+        const cv::Moments moments = cv::moments(simplified);
+        if (moments.m00 <= 0) continue;
+
+        Detection detection;
+        detection.area = area;
+        detection.centroid = cv::Point2f((float)(moments.m10 / moments.m00),
+                                         (float)(moments.m01 / moments.m00));
+        detection.bbox = cv::boundingRect(simplified);
+        found.push_back(detection);
+
+        if (annotate) {
+            cv::rectangle(frames.original, detection.bbox,
+                          cv::Scalar(0, 255, 0), 2);
+            cv::circle(frames.original, detection.centroid, 5,
+                       cv::Scalar(0, 0, 255), -1);
+            cv::putText(frames.original, brand.name, detection.centroid,
+                        cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
+        }
+    }
+    return found;
+}
+
+/// `coke:5,fanta:4,mtndew:5,solo:3;`
+///
+/// Wire keys rather than initials, so the reader needs no letter-to-drink table
+/// of its own to keep in step with catalogue.h.
+std::string serialise(const std::vector<std::vector<Detection>> &per_brand,
+                      const vision::Config &config)
+{
+    std::ostringstream out;
+    for (size_t i = 0; i < per_brand.size(); i++) {
+        if (i != 0) out << ",";
+        out << config.brands[i].wire_key << ":" << per_brand[i].size();
+    }
+    out << ";";
+    return out.str();
+}
+
+// ---------------------------------------------------------------------------
+// The debug UI. None of this runs headless.
+// ---------------------------------------------------------------------------
+
+void on_mouse(int event, int x, int y, int /*flags*/, void *userdata)
+{
+    SampleState *state = static_cast<SampleState *>(userdata);
+    if (event != cv::EVENT_LBUTTONDOWN || state->frame == nullptr) return;
+    if (state->frame->empty()) return;
+    if (x < 0 || y < 0 || x >= state->frame->cols || y >= state->frame->rows) {
+        return;
+    }
+
+    const cv::Vec3b bgr = state->frame->at<cv::Vec3b>(y, x);   // row=y, col=x
+    cv::Mat one_pixel(1, 1, CV_8UC3, cv::Scalar(bgr[0], bgr[1], bgr[2]));
+    cv::Mat converted;
+    cv::cvtColor(one_pixel, converted, cv::COLOR_BGR2HSV);
+    const cv::Vec3b hsv = converted.at<cv::Vec3b>(0, 0);
+
+    if (state->clicks == 0) {
+        state->first = hsv;
+        state->clicks = 1;
+        printf("  sample 1 of 2: H=%d S=%d V=%d\n", hsv[0], hsv[1], hsv[2]);
+    } else {
+        state->second = hsv;
+        state->clicks = 0;
+        state->pair_ready = true;
+        printf("  sample 2 of 2: H=%d S=%d V=%d\n", hsv[0], hsv[1], hsv[2]);
+    }
+    fflush(stdout);
+}
+
+/// Widen a brand's HSV box to cover two sampled pixels, with padding.
+///
+/// Sample the brightest and dullest part of the same can: two clicks bracket
+/// the range the classifier has to tolerate, and the padding covers the rest.
+void apply_sample(vision::Brand &brand, const cv::Vec3b &a, const cv::Vec3b &b)
+{
+    // Hue barely moves between the lit and shadowed side of one can, so two
+    // samples under-report its true spread and it is padded proportionally
+    // harder. Saturation and value move a great deal more on their own, so
+    // their padding is there to absorb noise rather than to widen the band.
+    constexpr int HUE_PAD = 6;
+    constexpr int SAT_PAD = 15;
+    constexpr int VAL_PAD = 15;
+
+    brand.lowH = std::max(0, std::min(a[0], b[0]) - HUE_PAD);
+    brand.highH = std::min(179, std::max(a[0], b[0]) + HUE_PAD);
+    brand.lowS = std::max(0, std::min(a[1], b[1]) - SAT_PAD);
+    brand.highS = std::min(255, std::max(a[1], b[1]) + SAT_PAD);
+    brand.lowV = std::max(0, std::min(a[2], b[2]) - VAL_PAD);
+    brand.highV = std::min(255, std::max(a[2], b[2]) + VAL_PAD);
+}
+
+void create_windows(Mode mode, vision::Config &config, SampleState &sampling)
+{
+    if (mode == Mode::Headless) return;
+
+    cv::namedWindow(WIN_CAMERA, cv::WINDOW_NORMAL);
+    cv::setMouseCallback(WIN_CAMERA, on_mouse, &sampling);
+
+    if (mode != Mode::DebugAll) return;
+
+    cv::namedWindow(WIN_MASK, cv::WINDOW_NORMAL);
+    cv::namedWindow(WIN_MORPH, cv::WINDOW_NORMAL);
+    cv::namedWindow(WIN_FLAT, cv::WINDOW_NORMAL);
+    cv::namedWindow(WIN_CONTROL, cv::WINDOW_AUTOSIZE);
+
+    // Bound straight to the config's own fields, so a slider and the file can
+    // never disagree about what is currently in force and saving writes exactly
+    // what the sliders show. Even kernel values are snapped to odd each pass —
+    // see the call to vision::normalise() in the loop.
+    cv::createTrackbar("open", WIN_CONTROL, &config.open_kernel,
+                       vision::Config::MAX_KERNEL);
+    cv::createTrackbar("close", WIN_CONTROL, &config.close_kernel,
+                       vision::Config::MAX_KERNEL);
+    cv::createTrackbar("min area", WIN_CONTROL, &config.contour_min_area,
+                       vision::Config::MAX_AREA);
+    cv::createTrackbar("max area", WIN_CONTROL, &config.contour_max_area,
+                       vision::Config::MAX_AREA);
+}
+
+void show_windows(Mode mode, const Frames &frames)
+{
+    if (mode == Mode::Headless) return;
+
+    cv::imshow(WIN_CAMERA, frames.original);
+    if (mode != Mode::DebugAll) return;
+
+    // The mask and morphology views show the LAST brand of the frame, which is
+    // the one the loop left behind. Worth knowing when reading them: to inspect
+    // a particular drink, put it last in the config, or read the labels on the
+    // camera view instead.
+    if (!frames.mask.empty()) cv::imshow(WIN_MASK, frames.mask);
+    if (!frames.morphology.empty()) cv::imshow(WIN_MORPH, frames.morphology);
+    if (!frames.flattened.empty()) cv::imshow(WIN_FLAT, frames.flattened);
+}
+
+void print_config(const vision::Config &config, int selected)
+{
+    printf("  tuning:\n");
+    for (size_t i = 0; i < config.brands.size(); i++) {
+        const vision::Brand &brand = config.brands[i];
+        printf("    %s %zu %-14s H %3d-%3d  S %3d-%3d  V %3d-%3d\n",
+               (int)i == selected ? "->" : "  ", i + 1, brand.name.c_str(),
+               brand.lowH, brand.highH, brand.lowS, brand.highS,
+               brand.lowV, brand.highV);
+    }
+    printf("    open=%d close=%d area=%d-%d hue_weight=%.1f max_dist=%.1f\n",
+           config.open_kernel, config.close_kernel, config.contour_min_area,
+           config.contour_max_area, config.hue_weight, config.max_brand_dist);
+    fflush(stdout);
+}
+
+void print_debug_keys(const vision::Config &config)
+{
+    printf("\n--- tuning keys (the camera window must have focus) ---\n");
+    printf("  1-%zu   choose which drink the next two clicks tune\n",
+           config.brands.size());
+    printf("  click  twice on one can - its brightest part, then its dullest\n");
+    printf("  s      save the current tuning to %s\n", CONFIG_PATH);
+    printf("  p      print the current tuning\n");
+    printf("  q      quit\n\n");
+    fflush(stdout);
+}
+
+// ---------------------------------------------------------------------------
+
+void print_usage(const char *program)
+{
+    fprintf(stderr,
+            "Usage: %s <mode>\n"
+            "  --headless       no windows; what the service runs\n"
+            "  --debug-camera   the annotated camera view\n"
+            "  --debug-all      every stage, plus the tuning sliders\n"
+            "\n"
+            "Tuning is read from %s if it exists, and from the compiled-in\n"
+            "defaults otherwise. The 's' key writes it back.\n",
+            program, CONFIG_PATH);
+}
+
+/// The GStreamer pipeline, built from the configured resolutions.
+std::string build_pipeline(const vision::Config &config)
+{
+    std::ostringstream out;
+    // Captured high and processed low on purpose: the sensor gives a better
+    // image downsampled than it does asked for a small one directly, and every
+    // stage after this is per-pixel work.
+    out << "libcamerasrc"
+        << " ! video/x-raw, width=" << config.capture_width
+        << ", height=" << config.capture_height
+        << " ! videoconvert"
+        << " ! videoscale"
+        << " ! video/x-raw, width=" << config.process_width
+        << ", height=" << config.process_height;
+    if (config.rotate_180) {
+        out << " ! videoflip method=rotate-180";
+    }
+    // drop=true with a shallow queue: when the pipeline falls behind we want
+    // the NEWEST frame, not a backlog of stale ones. A count is only worth
+    // anything if it describes the shelf as it is now.
+    out << " ! appsink drop=true max_buffers=2";
+    return out.str();
+}
+
+} // namespace
+
+int main(int argc, char *argv[])
+{
+    Mode mode = Mode::Headless;
+    bool mode_given = false;
+
+    for (int i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--headless") == 0) {
+            mode = Mode::Headless;
+        } else if (strcmp(argv[i], "--debug-camera") == 0) {
+            mode = Mode::DebugCamera;
+        } else if (strcmp(argv[i], "--debug-all") == 0) {
+            mode = Mode::DebugAll;
+        } else {
+            fprintf(stderr, "Unrecognised argument: %s\n", argv[i]);
+            print_usage(argv[0]);
             return 1;
         }
+        mode_given = true;
     }
-    return 0;
-};
-#endif
 
-std::string serialize_image(const std::vector<std::vector<Contour_Info>>& image_info, const std::vector<std::string>& can_color_names){
-    std::ostringstream oss;
-    if (can_color_names.size() != image_info.size() && ""){
-        printf("length of can_color_name and image_info don't match");
-        return "error in serialize_image";
-    }
-    for (int i = 0; i < image_info.size(); i++){
-        oss << can_color_names[i] << ": " << image_info[i].size();
-        oss << "; ";
-    }
-    oss << "\n";
-    return oss.str();
-};
-
-//Claude wrote the base of this function:
-void onMouse(int event, int x, int y, int flags, void* userdata) {
-    onMouse_UserData* data = reinterpret_cast<onMouse_UserData*>(userdata);
-
-
-    if (event == cv::EVENT_LBUTTONDOWN) {
-        cv::Vec3b bgr = data->p_frame->at<cv::Vec3b>(y, x); // note: row=y, col=x
-        printf("Clicked (%d, %d) -> BGR: (%d, %d, %d)\n", x, y, bgr[0], bgr[1], bgr[2]);
-
-        // If you also want HSV at that point:
-        cv::Mat hsvPixel;
-        cv::cvtColor(cv::Mat(1, 1, CV_8UC3, bgr), hsvPixel, cv::COLOR_BGR2HSV);
-        data->hsv = hsvPixel.at<cv::Vec3b>(0, 0);
-        printf("HSV: (%d, %d, %d)\n", data->hsv[0], data->hsv[1], data->hsv[2]);
-    }
-};
-
-// some testing stuff
-
-void set_hsv_trackbars(const onMouse_UserData& data, Trackbar_State& tb){
-    cv::Vec3b hsv = data.hsv;
-    int tolerance = 10;
-    int bigger_tolerance = 20;
-
-    *tb.iLowH  = std::max(0, hsv[0] - tolerance);
-    *tb.iHighH = std::min(179, hsv[0] + tolerance);
-    *tb.iLowS  = std::max(0, hsv[1] - bigger_tolerance);
-    *tb.iHighS = std::min(255, hsv[1] + bigger_tolerance);
-    *tb.iLowV  = std::max(0, hsv[2] - bigger_tolerance);
-    *tb.iHighV = std::min(255, hsv[2] + bigger_tolerance);
-
-    cv::setTrackbarPos("LowH", "Control", *tb.iLowH);
-    cv::setTrackbarPos("HighH", "Control", *tb.iHighH);
-    cv::setTrackbarPos("LowS",  "Control", *tb.iLowS);
-    cv::setTrackbarPos("HighS", "Control", *tb.iHighS);
-    cv::setTrackbarPos("LowV",  "Control", *tb.iLowV);
-    cv::setTrackbarPos("HighV", "Control", *tb.iHighV);
-}
-
-std::vector<Contour_Info> visualise_contours(const cv::Mat& src_frame, cv::Mat& draw_frame, int ContourMinSize,int ContourMaxSize, visualise_contours_mode mode){
-    std::vector<Contour_Info> output;
-    std::vector<std::vector<cv::Point>> contours;
-    cv::findContours(src_frame, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
-
-    if (mode == NONE) return output;
-
-    for (const auto& contour : contours) {
-        double area = cv::contourArea(contour);
-        if (area < ContourMinSize) continue;
-        if (area > ContourMaxSize) continue;
-
-        cv::Moments m = cv::moments(contour);
-        if (m.m00 <= 0) continue;
-
-        Contour_Info info;
-        info.area = area;
-        info.centroid = cv::Point2f((float)(m.m10 / m.m00), (float)(m.m01 / m.m00));
-        info.bbox = cv::boundingRect(contour);
-        output.emplace_back(info);
-
-        if (mode & BBOX){
-            cv::rectangle(draw_frame, info.bbox, cv::Scalar(0, 255, 0), 2);
-        }
-        if (mode & CENTROIDS){
-            cv::circle(draw_frame, info.centroid, 5, cv::Scalar(0, 0, 255), -1);
-        }
-        if (mode & CONTOURS){
-            std::vector<std::vector<cv::Point>> single = {contour};
-            cv::drawContours(draw_frame, single, -1, cv::Scalar(255, 0, 0), 2);
-        }
-    }
-    return output;
-};
-
-
-int main()
-{
-    #ifndef TEST
-    // Open the video camera.
-    std::string pipeline = "libcamerasrc"
-        " ! video/x-raw, width=800, height=600" // camera needs to capture at a higher resolution
-        " ! videoconvert"
-        " ! videoscale"
-        " ! video/x-raw, width=400, height=300" // can downsample the image after capturing
-        " ! videoflip method=rotate-180" // remove this line if the image is upside-down
-        " ! appsink drop=true max_buffers=2";
-    cv::VideoCapture cap(pipeline, cv::CAP_GSTREAMER);
-    if(!cap.isOpened()) {
-        printf("Could not open camera.\n");
+    if (!mode_given) {
+        print_usage(argv[0]);
         return 1;
     }
-    #endif
-    
 
-    // Create a control window
-    cv::namedWindow("Control", cv::WINDOW_AUTOSIZE);
-    int iLowH = Trackbar::LowH.default_val;
-    int iHighH = Trackbar::HighH.default_val;
-    int iLowS = Trackbar::LowS.default_val;
-    int iHighS = Trackbar::HighS.default_val;
-    int iLowV = Trackbar::LowV.default_val;
-    int iHighV = Trackbar::HighV.default_val;
-    int iOpen = Trackbar::Open.default_val;
-    int iClose = Trackbar::Close.default_val;
-    int ContourMinSize = Trackbar::ContourMinArea.default_val;
-    int ContourMaxSize = Trackbar::ContourMaxArea.default_val;
-
-    Trackbar_State tb;
-    tb.iLowH = &iLowH;
-    tb.iHighH = &iHighH;
-    tb.iLowS = &iLowS;
-    tb.iHighS = &iHighS;
-    tb.iLowV = &iLowV;
-    tb.iHighV = &iHighV;
-
-    cv::createTrackbar("LowH",  "Control", &iLowH,  Trackbar::LowH.max_val);
-    cv::createTrackbar("HighH", "Control", &iHighH, Trackbar::HighH.max_val);
-    cv::createTrackbar("LowS",  "Control", &iLowS,  Trackbar::LowS.max_val);
-    cv::createTrackbar("HighS", "Control", &iHighS, Trackbar::HighS.max_val);
-    cv::createTrackbar("LowV",  "Control", &iLowV,  Trackbar::LowV.max_val);
-    cv::createTrackbar("HighV", "Control", &iHighV, Trackbar::HighV.max_val);
-    cv::createTrackbar("Open",  "Control", &iOpen,  Trackbar::Open.max_val);
-    cv::createTrackbar("Close", "Control", &iClose, Trackbar::Close.max_val);
-    cv::createTrackbar("ContourMinArea", "Control", &ContourMinSize, Trackbar::ContourMinArea.max_val);
-    cv::createTrackbar("ContourMaxArea", "Control", &ContourMaxSize, Trackbar::ContourMaxArea.max_val);
-
-    // Measure the frame rate - initialise variables
-    int frame_id = 0;
-    timeval start, end;
-    gettimeofday(&start, NULL);
-
-    cv::Mat frame;
-    cv::Mat hsv_frame;
-    cv::Mat thresh_frame;
-    cv::Mat morph_frame;
-    cv::Moments Moment;
-
-#ifdef TEST
-    cv::Mat bgr_img;
-    load_test_image(bgr_img);
-    frame = bgr_img.clone();
-#endif
-
-    onMouse_UserData mouse_click_data;
-    mouse_click_data.p_frame = &frame;
-
-    // Create the OpenCV window
-    cv::namedWindow("Camera", cv::WINDOW_NORMAL);
-    cv::setMouseCallback("Camera", onMouse, &mouse_click_data);
-    cv::namedWindow("Camera - Thresholded", cv::WINDOW_NORMAL);
-    cv::namedWindow("Camera - Morphology", cv::WINDOW_NORMAL);
-
-    while(true) {
-#ifndef TEST
-        if (!cap.read(frame)) {
-            printf("Could not read a frame.\n");
-            break;
-        }
-#else
-    frame = bgr_img.clone();
-#endif
-
-        
-        set_hsv_trackbars(mouse_click_data, tb);
-
-        cv::cvtColor(frame, hsv_frame, cv::COLOR_BGR2HSV);
-
-        // hsv_frame =	thresh_frame.clone();
-
-        // Threshold the image
-        // might need to cvtColor this frame first
-        inRange(hsv_frame, cv::Scalar(iLowH, iLowS, iLowV), cv::Scalar(iHighH, iHighS, iHighV), thresh_frame);
-        morph_frame = thresh_frame.clone();
-        if (iOpen){
-            cv::morphologyEx(morph_frame, morph_frame, cv::MORPH_OPEN, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(iOpen, iOpen)));
-        }
-        if (iClose){
-            cv::morphologyEx(morph_frame, morph_frame, cv::MORPH_CLOSE, cv::getStructuringElement(cv::MORPH_RECT, cv::Size(iClose, iClose)));
-        }
-
-
-        //need to add can propoties. the region is taller than it is wide.
-
-        std::vector<std::vector<Contour_Info>> img_info;
-        std::vector<Contour_Info> can_info;
-        // std::vector<std::string> can_color_names = {"Coke", "Pepsi", "Fanta"};
-        std::vector<std::string> can_color_names = {"COKE"};
-
-        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
-        //red
-        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
-        //blue
-        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
-        // purple
-        can_info = visualise_contours(morph_frame, frame, ContourMinSize, ContourMaxSize, ALL);
-
-        img_info.push_back(can_info);
-
-        std::string packet = serialize_image(img_info, can_color_names);
-        //print
-        //flush
-
-        //show frame
-        cv::imshow("Camera", frame);
-        cv::imshow("Camera - Thresholded", thresh_frame);
-        cv::imshow("Camera - Morphology", morph_frame);
-        cv::waitKey(1);
-
-        // Measure the frame rate
-        frame_id++;
-        if (frame_id >= 30) {
-            printf("Packet for sending \"%s\"", packet.c_str());
-            gettimeofday(&end, NULL);
-            double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec)/1000000.0;
-            printf("[FPS: %f] Number of Cans: %zu\n", 30/diff, can_info.size());
-            // printf("30 frames in %f seconds = %f FPS\n", diff, 30/diff);
-            frame_id = 0;
-            gettimeofday(&start, NULL);
-        }
+    // --- Tuning ---
+    vision::Config config = vision::defaults();
+    std::string error;
+    if (vision::load(CONFIG_PATH, config, &error)) {
+        fprintf(stderr, "picapture: tuning loaded from %s\n", CONFIG_PATH);
+    } else if (!error.empty()) {
+        // The file exists but is wrong. Refused rather than ignored: carrying
+        // on with the defaults would run with tuning nobody chose, and would
+        // look exactly like a file that had been applied.
+        fprintf(stderr, "picapture: %s\n", error.c_str());
+        return 1;
+    } else {
+        fprintf(stderr, "picapture: no %s, using built-in defaults\n",
+                CONFIG_PATH);
     }
 
-    #ifndef TEST
-    // Free the camera 
-    cap.release();
-    #endif
+    std::string note;
+    if (vision::normalise(config, &note)) {
+        fprintf(stderr, "picapture: %s\n", note.c_str());
+    }
+    if (!vision::validate(config, &error)) {
+        fprintf(stderr, "picapture: %s\n", error.c_str());
+        return 1;
+    }
+
+    std::vector<BrandCentre> centres = build_centres(config);
+
+    // --- Camera ---
+    const std::string pipeline = build_pipeline(config);
+    cv::VideoCapture camera;
+    camera.open(pipeline, cv::CAP_GSTREAMER);
+    if (!camera.isOpened()) {
+        fprintf(stderr,
+                "picapture: could not open the camera.\n"
+                "  pipeline: %s\n"
+                "  Check that gstreamer1.0-libcamera is installed and that\n"
+                "  this user is in the 'video' group.\n",
+                pipeline.c_str());
+        return 1;
+    }
+
+    Frames frames;
+    SampleState sampling;
+    sampling.frame = &frames.original;
+
+    create_windows(mode, config, sampling);
+    if (mode != Mode::Headless) {
+        print_debug_keys(config);
+        print_config(config, sampling.brand_index);
+    }
+
+    using clock = std::chrono::steady_clock;
+    auto next_due = clock::now();
+    const auto period = std::chrono::milliseconds(config.period_ms);
+
+    bool running = true;
+    while (running) {
+        next_due += period;
+
+        if (!camera.read(frames.original) || frames.original.empty()) {
+            fprintf(stderr, "picapture: the camera stopped returning frames\n");
+            return 1;
+        }
+
+        if (config.flat_field_blur > 0) {
+            frames.flattened = flat_field(frames.original,
+                                          config.flat_field_blur);
+            cv::cvtColor(frames.flattened, frames.hsv, cv::COLOR_BGR2HSV);
+        } else {
+            cv::cvtColor(frames.original, frames.hsv, cv::COLOR_BGR2HSV);
+        }
+
+        frames.classification = classify(frames.hsv, centres, config.hue_weight,
+                                         config.max_brand_dist);
+
+        // Drawing is the largest per-frame cost after classification, and
+        // headless has nobody to show it to.
+        const bool annotate = (mode != Mode::Headless);
+
+        std::vector<std::vector<Detection>> per_brand;
+        per_brand.reserve(config.brands.size());
+        for (size_t i = 0; i < config.brands.size(); i++) {
+            build_mask((int)i, frames, config);
+            per_brand.push_back(
+                find_cans(frames, config, config.brands[i], annotate));
+        }
+
+        // The one line anybody downstream reads. std::endl rather than '\n'
+        // because stdout is a PIPE here, not a terminal: a block-buffered pipe
+        // would hold counts back until the buffer filled, which at one short
+        // line per period is minutes.
+        std::cout << serialise(per_brand, config) << std::endl;
+
+        show_windows(mode, frames);
+
+        if (mode != Mode::Headless) {
+            // waitKey is what pumps the window event loop, so it has to be
+            // called every frame whether or not a key is wanted — and must NOT
+            // be called headless, where there is no HighGUI display to pump.
+            const int key = cv::waitKey(1);
+
+            if (key == 'q') {
+                running = false;
+            } else if (key == 's') {
+                vision::normalise(config, nullptr);
+                if (vision::validate(config, &error) &&
+                    vision::save(CONFIG_PATH, config, &error)) {
+                    printf("  saved to %s\n", CONFIG_PATH);
+                } else {
+                    printf("  NOT saved: %s\n", error.c_str());
+                }
+                fflush(stdout);
+            } else if (key == 'p') {
+                print_config(config, sampling.brand_index);
+            } else if (key >= '1' && key <= '9') {
+                const size_t chosen = (size_t)(key - '1');
+                if (chosen < config.brands.size()) {
+                    sampling.brand_index = (int)chosen;
+                    sampling.clicks = 0;
+                    printf("  now tuning %s\n",
+                           config.brands[chosen].name.c_str());
+                    fflush(stdout);
+                }
+            }
+
+            // A completed pair of clicks retunes the selected brand, and the
+            // centres are rebuilt so the NEXT frame already shows the effect.
+            // Seeing the change immediately is the whole reason to tune from a
+            // window rather than by editing the file.
+            if (sampling.pair_ready) {
+                sampling.pair_ready = false;
+                apply_sample(config.brands[sampling.brand_index],
+                             sampling.first, sampling.second);
+                centres = build_centres(config);
+                print_config(config, sampling.brand_index);
+            }
+
+            // Sliders write straight into the config, so an even kernel can
+            // appear between frames. Snapped here rather than at the point of
+            // use, so what the next frame does and what a save would write are
+            // the same number.
+            vision::normalise(config, nullptr);
+        }
+
+        // Fell behind: drop the beat rather than bursting to catch up.
+        // Bursting would spend the recovery running the most expensive stage
+        // back to back on a Pi that is evidently already struggling.
+        if (clock::now() > next_due) next_due = clock::now();
+        std::this_thread::sleep_until(next_due);
+    }
+
+    camera.release();
+    if (mode != Mode::Headless) cv::destroyAllWindows();
     return 0;
 }
-

@@ -74,9 +74,10 @@ CC3501-project-software/
 └── pi4-software/
     ├── picapture/              OpenCV can recognition
     │   ├── CMakeLists.txt
-    │   ├── src/main.cpp        the real program
-    │   ├── src/main2.cpp       stale copy, NOT in the build
-    │   ├── src/trackbar.h      tuning slider defaults
+    │   ├── src/main.cpp        the pipeline: capture, classify, count, print
+    │   ├── src/vision_config.h  EVERY threshold. No bare numbers in main.cpp
+    │   ├── src/vision_config.cpp  load/save picapture.conf; no OpenCV
+    │   ├── tests/              off-camera tests for the tuning file
     │   └── cans_test/          sample images for offline testing
     └── online-payment/
         └── square.py           Square payment link + QR + polling
@@ -530,29 +531,50 @@ broken (§7). The ARM/firmware target is the only build that matters.
 Classical colour-blob vision, no machine learning. Per frame:
 
 1. Capture through a GStreamer pipeline — `libcamerasrc` at 800×600, downscaled
-   to 400×300, rotated 180°.
-2. Convert BGR → HSV.
-3. `inRange` threshold against six trackbar-controlled bounds.
-4. Morphological open (remove speckle) then close (fill holes), both optional
-   and sized by trackbar.
-5. `findContours`, filtered by area between min and max trackbars.
-6. Per contour: area, centroid from image moments, bounding box.
-7. Draw overlays, show three windows (raw, thresholded, morphology).
-8. Every 30 frames, print FPS and can count.
+   to 400×300, rotated 180°. Captured high and processed low because the sensor
+   gives a better image downsampled than asked for a small one directly.
+2. **Flat-field correct**: estimate the illumination as a heavily blurred
+   greyscale copy and divide it out, so the lit and shadowed sides of one can
+   are still the same colour.
+3. Convert BGR → HSV.
+4. **Classify every pixel to its nearest brand**, once, for all four drinks.
+5. Per brand: mask, morphological open (speckle) then close (glare bands),
+   `findContours`, filter by area, count.
+6. Print one line: `coke:5,fanta:4,mtndew:5,solo:3;`
 
-**Tuning aids.** All parameters are live trackbars with defaults in
-`trackbar.h`. Clicking a pixel in the camera window prints its BGR and HSV and
-**auto-sets the six threshold sliders** around that colour (±10 hue,
-±20 saturation/value) — the fastest way to lock onto a new can.
+**Why nearest-centre and not `inRange` per brand.** The original ran an
+independent threshold per drink against the full frame. Coke, Fanta, Mountain
+Dew and Solo occupy adjacent hue bands, so glare, JPEG blocking and anti-aliased
+edges routinely satisfy two or three at once and a single can picks up several
+labels simultaneously. Assigning each pixel to whichever brand centre it is
+nearest gives every pixel exactly one owner, so two brands cannot claim the same
+region. Hue is weighted above saturation and value because it is the only one of
+the three that does not move with lighting across a single can.
 
-Defining `TEST` swaps the camera for a still image from `cans_test/`, so the
-pipeline can be developed without a Pi.
+**Closing is deliberately asymmetric** — the kernel is seven times taller than
+it is wide. A can is a tall thin blob and a band of glare across its middle
+splits it in two; closing vertically rejoins it without bridging two cans
+standing side by side.
 
-**Current limitation.** Only one colour is detected. Lines 275-281 call
-`visualise_contours` four times with identical arguments, each overwriting the
-previous result; the `//red //blue //purple` comments show the intent, but there
-is one shared HSV mask, so `can_color_names` is `{"COKE"}` to match. Per-colour
-masking is the work remaining.
+**Tuning.** Every threshold lives in `src/vision_config.h` and loads from
+`picapture.conf` if present. `--debug-all` gives live sliders and click-to-
+sample: pick a drink with `1`-`4`, click its brightest then dullest part, and
+`s` writes the result back to the file. Tuning therefore survives a rebuild and
+never needs a compiler. A malformed or unknown key in the file is refused at
+startup rather than ignored — running with tuning nobody chose looks identical
+to running with tuning that was applied.
+
+`vision_config` has no OpenCV dependency, so `tests/test_vision_config.cpp`
+builds and runs on any laptop.
+
+**Current limitation: a contour is not a can.** The count is the number of
+blobs of a drink's colour, so two cans of the same drink touching each other
+merge into one blob and report as one; `contour_max_area` only rejects the
+merged blob, making it report as none. Since the firmware charges for the
+*difference* between two counts, a merge appearing or disappearing between the
+baseline and the recount invents or hides a purchase. Separating the cans on the
+shelf is the current mitigation; dividing blob area by a calibrated single-can
+area is the fix.
 
 ### 5.2 `online-payment/square.py` — card payments
 
@@ -624,12 +646,12 @@ Ordered by how much they will hurt.
 | 3 | `DEFAULT_PRICE_CENTS = 2000` is **$20**, not the intended $2 | `inventory.hpp:24` | Wrong prices once wired up |
 | 4 | `fetch_price()` returns a default-constructed value, so `sync_dashboard()` resets every can to the default on every call | `inventory.cpp:24-28` | Price overrides silently do nothing |
 | 5 | `simulate_dashboard_get()` is a **non-inline function defined in a header** | `inventory.hpp:13` | Multiple-definition link error the moment a second file includes it |
-| 6 | Four identical `visualise_contours()` calls, each overwriting the last | `picapture/main.cpp:275-281` | Only one can colour is ever detected |
+| 6 | ~~Four identical `visualise_contours()` calls, each overwriting the last~~ | `picapture/main.cpp` | **FIXED.** Each brand now gets its own mask and its own result vector, and per-pixel nearest-brand classification means two drinks can no longer claim the same region |
 | 7 | Display pins live in `ili9341.h`; superseded HX711 pins (GP14/15) live in `load_cell.h` | both | Violates the `board.h` rule; two sets of HX711 pins now exist |
-| 8 | `main2.cpp` is a stale copy of `main.cpp` with `TEST` enabled, not in the build | `picapture/src/` | Confusing; will drift further |
-| 9 | Guard reads `if (a.size() != b.size() && "")` — a string literal is always truthy, so the `&& ""` does nothing | `picapture/main.cpp:75` | Looks like a failed attempt to disable the check |
+| 8 | ~~`main2.cpp` is a stale copy of `main.cpp` with `TEST` enabled, not in the build~~ | `picapture/src/` | **FIXED.** Deleted. It had drifted, as predicted, and depended on `trackbar.h`, which `vision_config.h` replaced |
+| 9 | ~~Guard reads `if (a.size() != b.size() && "")` — a string literal is always truthy, so the `&& ""` does nothing~~ | `picapture/main.cpp` | **FIXED.** Gone with the rewrite |
 | 10 | `hx711_reader.pio.h` **defines** its init functions and has no `extern "C"` guard | submodule | Including it from a second C++ file causes duplicate symbols. Already hit and worked around in `mass_sensor.cpp` — do not include it there |
-| 11 | Signed/unsigned comparisons in `for` loops over `.size()` | `inventory.cpp:17`, `picapture/main.cpp:79` | Warnings only |
+| 11 | Signed/unsigned comparisons in `for` loops over `.size()` | `inventory.cpp:17` | Warnings only. The `picapture` half is fixed; that file now builds `-Wall -Wextra` clean |
 | 12 | `tokens.py` is gitignored, so `square.py` cannot run from a fresh clone without manual setup | `online-payment/` | Documented in §3.4 |
 | 13 | **Square sandbox credentials were committed and pushed to a public repo** inside `__pycache__/tokens.cpython-313.pyc` — the `.pyc` embeds the token as a plain-text string even though `tokens.py` itself was correctly ignored | `online-payment/__pycache__/`, commit `c8cd1b6` on `all_together` | Untracked and now ignored, **but still present in history**. Sandbox only, so play money — **rotate the token**. See §3.5 |
 

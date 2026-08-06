@@ -1,40 +1,126 @@
-# Introduction
+# picapture
 
-This is a minimal example of how to read images from the Raspberry Pi camera into OpenCV.
-
-
-# Prerequisites
-
-You must install:
- - `libopencv-dev`
- - `gstreamer1.0-tools` 
- - `gstreamer1.0-plugins-base-apps`
- - `gstreamer1.0-libcamera`
-
-Run this command on your Raspberry Pi:
+Counts the drinks on the shelf from the Pi camera, and prints what it sees.
 
 ```
-$ sudo apt install libopencv-dev gstreamer1.0-tools gstreamer1.0-plugins-base-apps gstreamer1.0-libcamera
+coke:5,fanta:4,mtndew:5,solo:3;
 ```
 
-## Test the camera and gstreamer installation
+One line per look, on stdout, forever. It opens no serial port and talks to
+nobody — `fridged` runs it as a subprocess and reads its output, which is what
+keeps the serial link owned by exactly one process. Diagnostics go to stderr, so
+stdout carries counts and nothing else.
 
-Run this command:
+**Requires OpenCV 4.x.** OpenCV 5.0.0 removed the `Moments` class this depends
+on. `CMakeLists.txt` pins the major version so the failure says so instead of
+producing a wall of template errors.
+
+## Prerequisites
 
 ```
-$ gst-launch-1.0 libcamerasrc ! video/x-raw, width=800, height=600, framerate=15/1 ! videoconvert ! ximagesink
+sudo apt install libopencv-dev gstreamer1.0-tools \
+                 gstreamer1.0-plugins-base-apps gstreamer1.0-libcamera
 ```
 
-# Build and run
-
-Make a `build` directory, and run `cmake` and then `make`.
+Check the camera and GStreamer independently of this program before blaming it:
 
 ```
-$ mkdir build
-$ cd build
-$ cmake ..
-$ make 
-$ ./PiCapture
+gst-launch-1.0 libcamerasrc ! video/x-raw, width=800, height=600, framerate=15/1 \
+    ! videoconvert ! ximagesink
 ```
 
-A direct HDMI video output is recommended. Remote access over VNC or X forwarding will be a bit slow and laggy.
+The user running picapture must be in the `video` group.
+
+## Build and run
+
+```
+cmake -S . -B build
+cmake --build build
+./build/PiCapture --headless
+```
+
+Three modes, and one of them must be given:
+
+| Mode | What it puts on screen |
+| --- | --- |
+| `--headless` | Nothing. **No GUI calls at all** — the deployed configuration. |
+| `--debug-camera` | The camera view with detections drawn on it. |
+| `--debug-all` | ...plus the classified mask, the cleaned mask, the flat-field corrected frame, and the tuning sliders. |
+
+`--headless` genuinely opens no window and never calls `waitKey`, so it runs
+under systemd with no display attached. The debug modes need a real display; a
+direct HDMI output is much better than VNC or X forwarding.
+
+## Tuning
+
+Every threshold lives in `src/vision_config.h`, and is loaded at startup from
+`picapture.conf` in the working directory if that file exists. **There are no
+bare numbers in `main.cpp`.**
+
+The compiled-in defaults came off one set of test images under one set of
+lights. They are somewhere to start, not something correct. Expect to retune
+against the real fridge, and expect to do it again when the lighting changes.
+
+Retuning does not need a compiler:
+
+```
+./build/PiCapture --debug-all
+```
+
+| Key | What it does |
+| --- | --- |
+| `1`–`4` | Choose which drink the next two clicks tune |
+| click ×2 | Sample one can twice — its brightest part, then its dullest |
+| `s` | Save the current tuning to `picapture.conf` |
+| `p` | Print the current tuning |
+| `q` | Quit |
+
+The sliders and the clicks write straight into the live config, so the effect
+shows on the very next frame. `s` writes exactly what you are looking at.
+
+A missing `picapture.conf` is not an error — it just means this machine has
+never been tuned. A file that exists but cannot be parsed **is** an error and
+the program refuses to start, because running with tuning nobody chose looks
+identical to running with tuning that was applied. An unknown key is an error
+for the same reason: a silently skipped typo costs an afternoon.
+
+Two settings deserve a note:
+
+- **`open_kernel` and `close_kernel` default to non-zero.** They used to
+  default to zero, which meant a headless run did no morphological cleanup at
+  all and fed ragged, text-shaped noise to the contour finder. It reported
+  counts perfectly happily. Set them to `0` deliberately if you want to see the
+  raw mask.
+- **`brand` lines replace the built-in list rather than adding to it**, so all
+  four have to appear together. Their order is the order counts are reported in
+  and it must match `catalogue::Can` in the firmware; each `wire_key` must match
+  `catalogue::wire_key()` character for character.
+
+## Tests
+
+`vision_config` has no OpenCV dependency and no camera dependency, deliberately:
+the parsing and round-tripping are the parts most likely to be wrong and the
+parts least convenient to debug standing at a fridge.
+
+```
+cmake --build build --target config_tests
+./build/config_tests
+```
+
+Runs on any laptop, with or without OpenCV installed.
+
+## Known limits
+
+**A contour is not a can.** The count is the number of blobs of a drink's
+colour, so two cans of the same drink touching each other merge into one blob
+and report as one. `contour_max_area` only rejects the merged blob, which makes
+it report as none instead. Because the firmware charges for the *difference*
+between two counts, a merge that appears or disappears between the baseline and
+the recount invents or hides a purchase. Separate the cans on the shelf, and
+test a full shelf before trusting any of this.
+
+**Lighting differs between the two scans.** The baseline is taken as the door
+opens and the recount after it shuts, with the fridge light and the room light
+in between. Flat-field correction absorbs some of that. Tune with the door in
+the state it will be in when the scan happens, and check that a door cycle with
+nothing taken reliably reports no change.
