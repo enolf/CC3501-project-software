@@ -1,3 +1,4 @@
+
 import argparse
 import subprocess
 import sys
@@ -14,10 +15,13 @@ RP2040_VID = 0x2E8A
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument("--headless", action="store_true", help="No debug windows")
-    mode_group.add_argument("--debug-camera", action="store_true", help="Show camera debug window")
-    mode_group.add_argument("--debug-all", action="store_true", help="Show all debug windows")
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument("--headless", action="store_true",
+                             help="No debug windows")
+    mode_group.add_argument("--debug-camera", action="store_true",
+                             help="Show camera debug window")
+    mode_group.add_argument("--debug-all", action="store_true",
+                             help="Show all debug windows")
     return parser.parse_args()
 
 
@@ -67,8 +71,8 @@ def main():
     reader_thread.start()
 
     cmd = ["./build/PiCapture"]
-    if args.debug:
-        cmd.append("--debug")
+    if args.headless:
+        cmd.append("--headless")
     elif args.debug_camera:
         cmd.append("--debug-camera")
     elif args.debug_all:
