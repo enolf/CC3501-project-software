@@ -600,6 +600,130 @@ def test_transaction_ingest():
     store.close()
 
 
+# --- Who bought it -----------------------------------------------------------
+
+def test_member_attribution():
+    print("\n--- member attribution ---")
+
+    UID = "04404C22C06780"
+    OTHER_UID = "DEADBEEF"
+
+    store = Store(temp_db()).open()
+    link = Link(StubTransport())
+    ingest = Ingest(store, link)
+    feed(ingest, link, protocol.build("EVT", "BOOT", "fw=0.2", ms=0))
+
+    def sale(txn_id, ms):
+        """One complete cash sale, in the firmware's real order."""
+        feed(ingest, link, protocol.build(
+            "EVT", "TXN_START",
+            f"id={txn_id} items=Coke:1 owed=200 method=cash", ms=ms))
+        feed(ingest, link, protocol.build(
+            "EVT", "TXN_END",
+            f"id={txn_id} outcome=paid owed=200 paid=200", ms=ms))
+
+    def member_of(txn_id):
+        return store._conn.execute(
+            "SELECT member_uid FROM txn WHERE txn_id = ?", (txn_id,)).fetchone()[0]
+
+    # --- The normal path: tap, open the door, buy something ---
+    feed(ingest, link, protocol.build("EVT", "RFID", f"uid={UID} granted=1", ms=1))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=2))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=closed", ms=3))
+    sale(1, 4)
+    store.flush(force=True)
+
+    check("an approved tap is recorded", store._conn.execute(
+        "SELECT COUNT(*) FROM rfid_event WHERE uid = ? AND granted = 1",
+        (UID,)).fetchone()[0] == 1)
+    check("a card seen for the first time gets a member row with NO name",
+          store._conn.execute("SELECT label FROM member WHERE uid = ?",
+                              (UID,)).fetchone() == (None,))
+    check("the sale is attributed to the card that tapped",
+          member_of(1) == UID)
+
+    # --- TXN_END clears it: the next person is not charged to the last one ---
+    sale(2, 5)
+    store.flush(force=True)
+    check("a sale with no tap behind it is 'other' (NULL member_uid)",
+          member_of(2) is None)
+
+    # --- A denied card is history, never an attribution ---
+    feed(ingest, link, protocol.build(
+        "EVT", "RFID", f"uid={OTHER_UID} granted=0", ms=6))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=7))
+    sale(3, 8)
+    store.flush(force=True)
+    check("a DENIED tap is still recorded", store._conn.execute(
+        "SELECT COUNT(*) FROM rfid_event WHERE uid = ? AND granted = 0",
+        (OTHER_UID,)).fetchone()[0] == 1)
+    check("a denied card is never attributed a purchase",
+          member_of(3) is None)
+
+    # --- Tapping and walking away must not charge the next customer ---
+    # The board gives up after GREETING_TIMEOUT_MS and forgets them; the age is
+    # forced here because wall-clock deltas inside one test are ~0.
+    feed(ingest, link, protocol.build("EVT", "RFID", f"uid={UID} granted=1", ms=9))
+    uid_only, tapped_at = ingest.pending_tap
+    ingest.pending_tap = (uid_only, tapped_at - ingest.TAP_WINDOW_S - 1)
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=10))
+    sale(4, 11)
+    store.flush(force=True)
+    check("a tap that expired before the door opened is not attributed",
+          member_of(4) is None)
+
+    # --- One tap covers look, shut, look again — the board treats it as one
+    # visit, so dropping it at the second door open would be wrong ---
+    feed(ingest, link, protocol.build("EVT", "RFID", f"uid={UID} granted=1", ms=12))
+    for ms in (13, 14, 15, 16):
+        state = "open" if ms % 2 else "closed"
+        feed(ingest, link, protocol.build("EVT", "DOOR", f"state={state}", ms=ms))
+    sale(5, 17)
+    store.flush(force=True)
+    check("one tap survives several door cycles in the same visit",
+          member_of(5) == UID)
+
+    # --- An abandoned CARD sale sends only TXN_END. Theft is the outcome where
+    # knowing who walked off matters most, so it must still carry the uid ---
+    feed(ingest, link, protocol.build("EVT", "RFID", f"uid={UID} granted=1", ms=18))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=19))
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_END", "id=6 outcome=stolen owed=400 paid=0", ms=20))
+    store.flush(force=True)
+    check("an abandoned sale (TXN_END only) is still attributed",
+          member_of(6) == UID)
+
+    # --- An attribution older than the board could possibly hold is dropped ---
+    feed(ingest, link, protocol.build("EVT", "RFID", f"uid={UID} granted=1", ms=21))
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=22))
+    ingest.active_member_ts -= ingest.SESSION_WINDOW_S + 1
+    sale(7, 23)
+    store.flush(force=True)
+    check("an attribution past SESSION_WINDOW_S falls back to 'other'",
+          member_of(7) is None)
+
+    # --- Naming a card names its whole history, because the join is at read
+    # time. This is the sensor-naming pattern, and it is what the panel does ---
+    store._conn.execute("UPDATE member SET label = ? WHERE uid = ?",
+                        ("Damien Turner", UID))
+    check("label_for_uid reads the name back",
+          store.label_for_uid(UID) == "Damien Turner")
+    named = store._conn.execute(
+        "SELECT COALESCE(m.label, 'other'), COUNT(*) "
+        "FROM txn t LEFT JOIN member m ON m.uid = t.member_uid "
+        "GROUP BY 1 ORDER BY 2 DESC").fetchall()
+    check(f"naming the card names its whole history retrospectively ({named})",
+          dict(named).get("Damien Turner") == 3)
+
+    # A tap seen a second time must not have the name wiped back to NULL.
+    feed(ingest, link, protocol.build("EVT", "RFID", f"uid={UID} granted=1", ms=24))
+    store.flush(force=True)
+    check("re-tapping a named card does not erase its name",
+          store.label_for_uid(UID) == "Damien Turner")
+
+    store.close()
+
+
 # --- Stock -------------------------------------------------------------------
 
 def test_stock():
@@ -838,15 +962,29 @@ def test_dashboards():
     store.door_closed(now - 90)
 
     boot_id = store.open_boot(now - 600, "0.2")
+
+    # Two cards: one named, one never named. Both are needed — the members
+    # table sorts unnamed cards to the top, and a fixture with only named ones
+    # would leave that half of the panel unexercised.
+    NAMED_UID, UNNAMED_UID = "04404C22C06780", "DEADBEEF01"
+    store.rfid_event(now - 470, NAMED_UID, True)
+    store.rfid_event(now - 310, NAMED_UID, True)
+    store.rfid_event(now - 250, UNNAMED_UID, True)
+    store.rfid_event(now - 240, "BADCARD99", False)
+    store._conn.execute("UPDATE member SET label = ? WHERE uid = ?",
+                        ("Damien Turner", NAMED_UID))
+
     # One cash sale, one card sale, one walked away from — enough for every
-    # transaction panel to have something in each of its slices.
+    # transaction panel to have something in each of its slices. The third is
+    # left unattributed on purpose: 'other' is a real category, and a fixture
+    # where every sale has a name would never show it was rendered.
     store.upsert_txn(boot_id, 1001, ts_start=now - 460, ts_end=now - 430,
                      method="cash", owed_cents=400, paid_cents=400,
-                     outcome="paid")
+                     outcome="paid", member_uid=NAMED_UID)
     store.set_txn_items(boot_id, 1001, {"Coke": 1, "Fanta": 1}, 200)
     store.upsert_txn(boot_id, 1002, ts_start=now - 300, ts_end=now - 260,
                      method="card", owed_cents=200, paid_cents=200,
-                     outcome="paid")
+                     outcome="paid", member_uid=UNNAMED_UID)
     store.set_txn_items(boot_id, 1002, {"Sprite": 1}, 200)
     store.upsert_txn(boot_id, 1003, ts_start=now - 200, ts_end=now - 80,
                      owed_cents=200, paid_cents=0, outcome="stolen")
@@ -960,6 +1098,7 @@ if __name__ == "__main__":
     test_door_model()
     test_door_and_health_ingest()
     test_transaction_ingest()
+    test_member_attribution()
     test_stock()
     test_payments()
     test_dashboards()

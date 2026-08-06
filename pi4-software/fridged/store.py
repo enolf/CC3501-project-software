@@ -392,7 +392,8 @@ class Store:
         return duration
 
     def upsert_txn(self, boot_id, txn_id, ts_start=None, ts_end=None,
-                   method=None, owed_cents=None, paid_cents=None, outcome=None):
+                   method=None, owed_cents=None, paid_cents=None, outcome=None,
+                   member_uid=None):
         """Create or update one transaction. **Never a plain INSERT.**
 
         The firmware does not give us one clean "transaction begins" message
@@ -408,8 +409,8 @@ class Store:
         """
         self._conn.execute(
             "INSERT INTO txn (boot_id, txn_id, ts_start, ts_end, method, "
-            "                 owed_cents, paid_cents, outcome) "
-            "VALUES (?,?,?,?,?,?,?,?) "
+            "                 owed_cents, paid_cents, outcome, member_uid) "
+            "VALUES (?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(boot_id, txn_id) DO UPDATE SET "
             "  ts_start   = MIN(COALESCE(txn.ts_start, excluded.ts_start), "
             "                   COALESCE(excluded.ts_start, txn.ts_start)), "
@@ -417,9 +418,15 @@ class Store:
             "  method     = COALESCE(excluded.method, txn.method), "
             "  owed_cents = COALESCE(excluded.owed_cents, txn.owed_cents), "
             "  paid_cents = COALESCE(excluded.paid_cents, txn.paid_cents), "
-            "  outcome    = COALESCE(excluded.outcome, txn.outcome)",
+            "  outcome    = COALESCE(excluded.outcome, txn.outcome), "
+            # Same COALESCE rule as every other column, and it matters more here
+            # than it looks: a card sale sends TXN_START twice, and the second
+            # one arrives from a path that does not know who tapped. Preferring
+            # the newest NON-NULL value keeps the attribution the first one
+            # established instead of blanking it back to "other".
+            "  member_uid = COALESCE(excluded.member_uid, txn.member_uid)",
             (boot_id, txn_id, ts_start, ts_end, method,
-             owed_cents, paid_cents, outcome))
+             owed_cents, paid_cents, outcome, member_uid))
         self.rows_written += 1
 
     def set_txn_items(self, boot_id, txn_id, items, unit_price_cents=None):
@@ -477,6 +484,42 @@ class Store:
             "INSERT INTO sensor (rom_code, zone_label, kind, first_seen) "
             "VALUES (?, NULL, ?, ?) ON CONFLICT(rom_code) DO NOTHING",
             (rom_code, kind, ts))
+
+    def rfid_event(self, ts, uid, granted):
+        """Record one card tap, and make sure the card has a `member` row.
+
+        Two writes on purpose, and they answer different questions. `rfid_event`
+        is the history — every tap, approved or not, which is what a denied-card
+        problem is diagnosed from. `member` is the identity, and it exists so a
+        card can be given a NAME without a firmware rebuild.
+
+        THE NAME DOES NOT COME OFF THE WIRE. `EVT RFID` carries a UID and a
+        granted flag and nothing else; the holder's name lives in
+        `access_control.cpp`, compiled into the board. Duplicating that list in
+        Python would be a second copy to keep in step, and it would drift — so
+        instead an unknown card lands here with a NULL label and is named once,
+        from the dashboard. This is deliberately the same arrangement as
+        `note_sensor()`: unknown thing appears, you name it, its whole history
+        is named retrospectively because the join happens at read time.
+        """
+        self._conn.execute(
+            "INSERT INTO rfid_event (ts, uid, granted) VALUES (?,?,?)",
+            (ts, uid, 1 if granted else 0))
+
+        # ON CONFLICT DO NOTHING for the same reason note_sensor() uses it: a
+        # card tapped for the hundredth time must not have the name someone
+        # gave it overwritten with a NULL.
+        self._conn.execute(
+            "INSERT INTO member (uid, label, active) VALUES (?, NULL, 1) "
+            "ON CONFLICT(uid) DO NOTHING",
+            (uid,))
+        self.rows_written += 1
+
+    def label_for_uid(self, uid):
+        """The name given to a card, or None if it has not been named yet."""
+        row = self._conn.execute(
+            "SELECT label FROM member WHERE uid = ?", (uid,)).fetchone()
+        return row[0] if row else None
 
     def zone_for_rom(self, rom_code):
         """The zone label for a ROM code, or None if it has not been named yet."""

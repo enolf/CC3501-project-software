@@ -2367,6 +2367,185 @@
           "show": false
         }
       }
+    },
+    {
+      "id": 45,
+      "type": "barchart",
+      "title": "Purchases by person",
+      "description": "Who is actually using the fridge. A sale nobody tapped a card for is counted as 'other' — the card is what identifies a purchase, and the fridge does not require one.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(m.label, 'other') AS \"Person\",\n       COUNT(*)                   AS \"Purchases\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT COALESCE(m.label, 'other') AS \"Person\",\n       COUNT(*)                   AS \"Purchases\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 46,
+      "type": "barchart",
+      "title": "Spend by person",
+      "description": "The same split, in dollars rather than sales. Paid transactions only, so an abandoned basket does not appear as somebody's spending.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 92
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(m.label, 'other')   AS \"Person\",\n       SUM(t.paid_cents) / 100.0 AS \"Spent\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT COALESCE(m.label, 'other')   AS \"Person\",\n       SUM(t.paid_cents) / 100.0 AS \"Spent\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyAUD",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "type": "table",
+      "title": "Members — name a new one here",
+      "description": "Every card the reader has ever seen. A card appears here automatically the first time it is tapped, with no name, and its taps and purchases are counted straight away. Give it a name with\n\n  UPDATE member SET label='Damien Turner' WHERE uid='04404C22C06780';\n\nNaming a card names its ENTIRE history, not just purchases from that moment on, because the name is joined on at read time. The name lives here rather than in the firmware's approved list so that adding one is a row, not a rebuild and a reflash.\n\nDeliberately not filtered by the dashboard's time range: a card you are trying to name is usually one whose only tap was outside it.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 100
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(m.label, '(not named yet)') AS \"Name\",\n       m.uid                                    AS \"Card UID\",\n       (SELECT COUNT(*) FROM rfid_event r\n         WHERE r.uid = m.uid AND r.granted = 1)  AS \"Taps\",\n       (SELECT COUNT(*) FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Purchases\",\n       (SELECT COALESCE(SUM(t.paid_cents), 0) / 100.0 FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Spent\",\n       DATETIME((SELECT MAX(r.ts) FROM rfid_event r WHERE r.uid = m.uid),\n                'unixepoch', 'localtime')       AS \"Last tap\"\nFROM member m\nORDER BY (m.label IS NULL) DESC, m.label",
+          "rawQueryText": "SELECT COALESCE(m.label, '(not named yet)') AS \"Name\",\n       m.uid                                    AS \"Card UID\",\n       (SELECT COUNT(*) FROM rfid_event r\n         WHERE r.uid = m.uid AND r.granted = 1)  AS \"Taps\",\n       (SELECT COUNT(*) FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Purchases\",\n       (SELECT COALESCE(SUM(t.paid_cents), 0) / 100.0 FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Spent\",\n       DATETIME((SELECT MAX(r.ts) FROM rfid_event r WHERE r.uid = m.uid),\n                'unixepoch', 'localtime')       AS \"Last tap\"\nFROM member m\nORDER BY (m.label IS NULL) DESC, m.label",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Spent"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyAUD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Last tap",
+            "desc": true
+          }
+        ]
+      }
     }
   ]
 }

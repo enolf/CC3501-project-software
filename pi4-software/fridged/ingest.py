@@ -53,6 +53,21 @@ class Ingest:
         #: no id of its own.
         self.open_txn_id = None
 
+        #: An approved card that has tapped but whose owner has not opened the
+        #: door yet, as `(uid, ts)`. See `_on_rfid` for why this is a separate
+        #: thing from `active_member`.
+        self.pending_tap = None
+
+        #: The card the transaction in progress belongs to, or None for a sale
+        #: nobody identified themselves for — which the dashboard shows as
+        #: "other". Promoted from `pending_tap` when the door opens, cleared by
+        #: TXN_END.
+        self.active_member = None
+
+        #: When `active_member` was last known to still be at the fridge. Any
+        #: door event refreshes it; `SESSION_WINDOW_S` measures from it.
+        self.active_member_ts = 0.0
+
         self._next_self_metric = 0.0
 
     # --- Entry point --------------------------------------------------------
@@ -208,6 +223,15 @@ class Ingest:
         """
         state = protocol.field(frame.payload, "state")
         if state == "open":
+            # The moment a tap becomes an attribution. See `_on_rfid`: this
+            # mirrors the board's own Greeting -> Selecting transition, so both
+            # ends agree about whose purchase this is.
+            self._claim_tap(ts)
+            # Somebody is still at the fridge, so an attribution already running
+            # is still live. This is what lets one tap cover the look-shut-look
+            # -again cycle without being dropped halfway through.
+            if self.active_member is not None:
+                self.active_member_ts = ts
             self.store.door_opened(ts)
         elif state == "closed":
             # The shelf changes here, NOT when the door opened.
@@ -255,6 +279,103 @@ class Ingest:
             except ValueError:
                 log.warning("HEALTH %s is not a number: %r", key, raw)
 
+    # --- Who is buying ------------------------------------------------------
+
+    #: How long an approved tap stays valid without the door being opened.
+    #: Matched to the firmware's `GREETING_TIMEOUT_MS`, because that is exactly
+    #: how long the board holds the greeting before giving up and returning to
+    #: Idle. Two ends disagreeing about this would attribute a sale to somebody
+    #: the board had already forgotten.
+    TAP_WINDOW_S = 30.0
+
+    #: How long an attribution survives with no door activity and no
+    #: transaction. Derived from the firmware's own timeout budget rather than
+    #: picked round — it is the longest a customer can legitimately be standing
+    #: at the terminal between opening the door and the sale being reported:
+    #:
+    #:     SELECT_TIMEOUT_MS   30 s   deciding, door open
+    #:     RECOUNT_TIMEOUT_MS   8 s   waiting for our own scan reply
+    #:     PAYMENT_TIMEOUT_MS 120 s   choosing and completing payment
+    #:                        ------
+    #:                        158 s, rounded up for the frames in between
+    #:
+    #: It matters because a card sale reports TXN_START at the END, so the gap
+    #: between the tap and the only message carrying the sale can be minutes.
+    #: Past this, the board has certainly given up and returned to Idle, so a
+    #: still-held attribution could only ever be wrong.
+    SESSION_WINDOW_S = 180.0
+
+    def _on_rfid(self, frame, ts):
+        """`EVT RFID uid= granted=` — somebody presented a card.
+
+        WHY A TAP IS NOT IMMEDIATELY AN ATTRIBUTION
+        -------------------------------------------
+        Tapping in and then walking off is a real thing people do, and the board
+        models it: `Greeting` returns to `Idle` after `GREETING_TIMEOUT_MS` with
+        nothing bought. If a tap attributed the *next* transaction
+        unconditionally, that abandoned tap would be charged to whoever opened
+        the door afterwards — quietly, and with no way to tell from the data.
+
+        So a tap only ARMS an attribution. The door opening is what commits it,
+        which mirrors the firmware's own `Greeting -> Selecting` transition. A
+        sale with no armed tap behind it is stored with a NULL `member_uid`, and
+        that is what the dashboard reports as "other".
+
+        Denied cards are recorded but never attributed: `granted=0` means the
+        board did not recognise the card, so there is no member to attribute to.
+        """
+        uid = protocol.field(frame.payload, "uid")
+        if not uid:
+            log.warning("RFID frame with no uid: %s", frame.payload)
+            return
+
+        granted = protocol.u32(frame.payload, "granted", 0) == 1
+        self.store.rfid_event(ts, uid, granted)
+
+        if not granted:
+            log.info("card %s presented and DENIED", uid)
+            return
+
+        self.pending_tap = (uid, ts)
+        log.debug("card %s tapped in; armed for %.0fs", uid, self.TAP_WINDOW_S)
+
+    def _claim_tap(self, ts):
+        """Promote an armed tap to the active member. Called on door open."""
+        if self.pending_tap is None:
+            return
+        uid, tapped_at = self.pending_tap
+        self.pending_tap = None
+
+        if ts - tapped_at > self.TAP_WINDOW_S:
+            # The board has already returned to Idle and forgotten this person,
+            # so attributing to them now would disagree with what the terminal
+            # showed the customer.
+            log.debug("tap by %s expired before the door opened", uid)
+            return
+
+        self.active_member = uid
+        self.active_member_ts = ts
+        label = self.store.label_for_uid(uid)
+        log.info("this purchase is attributed to %s", label or f"unnamed card {uid}")
+
+    def _member_for_txn(self, ts):
+        """Who this transaction belongs to, or None for "other".
+
+        Checked against the clock rather than trusted outright. One tap can span
+        several door cycles — people open the fridge, look, shut it, and open it
+        again, and the board treats that as one visit — so the attribution is
+        NOT dropped at the next door open. What bounds it instead is
+        `SESSION_WINDOW_S`, past which the board has certainly returned to Idle.
+        """
+        if self.active_member is None:
+            return None
+        if ts - self.active_member_ts > self.SESSION_WINDOW_S:
+            log.debug("attribution for %s expired; recording as other",
+                      self.active_member)
+            self.active_member = None
+            return None
+        return self.active_member
+
     # --- Transactions -------------------------------------------------------
 
     def _on_txn_start(self, frame, ts):
@@ -278,7 +399,8 @@ class Ingest:
             method = None
 
         self.store.upsert_txn(self.boot_id, txn_id, ts_start=ts,
-                              owed_cents=owed, method=method)
+                              owed_cents=owed, method=method,
+                              member_uid=self._member_for_txn(ts))
         self.open_txn_id = txn_id
 
         items = self._parse_items(protocol.field(frame.payload, "items"))
@@ -304,14 +426,28 @@ class Ingest:
             log.warning("TXN_END with an unrecognised outcome: %r", outcome)
             outcome = None
 
+        # `member_uid` is passed HERE as well as in TXN_START, and it is not
+        # redundant: an abandoned card sale sends only TXN_END, for a
+        # transaction we have never heard of (see `Store.upsert_txn`). Without
+        # it, the one outcome where knowing who walked off matters most —
+        # `stolen` — would be the one always recorded as "other".
+        member_uid = self._member_for_txn(ts)
         self.store.upsert_txn(
             self.boot_id, txn_id, ts_end=ts, outcome=outcome,
             owed_cents=protocol.u32(frame.payload, "owed"),
-            paid_cents=protocol.u32(frame.payload, "paid"))
+            paid_cents=protocol.u32(frame.payload, "paid"),
+            member_uid=member_uid)
 
         if outcome == "stolen":
-            log.info("transaction %s ended unpaid", txn_id)
+            label = self.store.label_for_uid(member_uid) if member_uid else None
+            log.info("transaction %s ended unpaid (%s)", txn_id,
+                     label or "nobody identified")
+
         self.open_txn_id = None
+        # The customer is done. A tap must not carry over into whatever the next
+        # person does, and the board has already returned to Idle.
+        self.active_member = None
+        self.pending_tap = None
 
     def _on_coin(self, frame, ts):
         """`EVT COIN denom= delta_g=` — no id, so it is attributed here."""
