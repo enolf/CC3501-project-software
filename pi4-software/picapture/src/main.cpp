@@ -24,7 +24,7 @@ Can distance thresholding
 
 #include "trackbar.h"
 
-// #define USE_FLAT_IMAGE
+#define USE_FLAT_IMAGE
 #define TESTING
 #define PI_CAMERA_MODULE
 
@@ -164,7 +164,7 @@ void show_all(const Pipeline_Frames& pf){
   // cv::imshow("Camera - Thresholded", pf.thresholded);
   cv::imshow("Camera - Morphology", pf.morphology);
 #ifdef USE_FLAT_IMAGE
-  cv::imshow("Camera - Flattend", flat_frame);
+  cv::imshow("Camera - Flattend", pf.flattened);
 #endif
 }
 // void show_all(const std::vector<cv::Mat>& fs){
@@ -508,7 +508,7 @@ int main()
 
 
 #ifdef USE_FLAT_IMAGE
-    flat_frame = removeHighlightsShadows(frame);
+    pf.flattened = removeHighlightsShadows(pf.original);
     cv::cvtColor(pf.flattened, pf.hsv_frame, cv::COLOR_BGR2HSV);
 #else
     cv::cvtColor(pf.original, pf.hsv_frame, cv::COLOR_BGR2HSV);
