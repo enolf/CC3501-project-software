@@ -53,6 +53,7 @@ struct Contour_Info {
 
 struct Color_Config{
   std::string name;
+  char wire_code;
   int lowH, highH, lowS, highS, lowV, highV;
 };
 
@@ -156,7 +157,7 @@ cv::Mat removeHighlightsShadows(const cv::Mat& bgr_input, int blurRadius = 51) {
 #endif
 void show_all(const Pipeline_Frames& pf){
   cv::imshow("Camera", pf.original);
-  // cv::imshow("Camera - Thresholded", pf.thresholded);
+  cv::imshow("Camera - Thresholded", pf.thresholded);
   cv::imshow("Camera - Morphology", pf.morphology);
 #ifdef USE_FLAT_IMAGE
   cv::imshow("Camera - Flattend", pf.flattened);
@@ -165,13 +166,11 @@ void show_all(const Pipeline_Frames& pf){
 // void show_all(const std::vector<cv::Mat>& fs){
 //         for (const auto& f : fs){ cv::imshow("", f);}
 // }
-
 std::string serialize_image(const std::vector<std::vector<Contour_Info>>& image_info, const std::vector<Color_Config>& color_config){
-  size_t name_idx = 0;
   std::ostringstream oss;
-  for (int i = 0; i < image_info.size(); i++){
+  for (size_t i = 0; i < image_info.size(); i++){
     if (i != 0){ oss << ","; }
-    oss << (color_config[i].name)[0] << ":" << image_info[i].size();
+    oss << color_config[i].wire_code << ":" << image_info[i].size();
   }
   oss << ";";
   return oss.str();
@@ -459,13 +458,18 @@ int main()
   //   {"Coke", 0, 8, 160, 255, 100, 255},      // red
   //   {"Pepsi", 100, 120, 150, 255, 100, 255}, // blue
   // };
-
 std::vector<Color_Config> colors_vec = {
-  {"Coke",    0,   8, 150, 255, 80,  255},  // red
-  {"Fanta",   8,  20, 150, 255, 100, 255},  // orange
-  {"Passito", 130, 155, 60, 255, 60,  255},  // purple
-  {"Solo",   22,  35, 130, 255, 130, 255},  // yellow
+  {"Coke",   'C', 0,   8, 150, 255, 80,  255},  // red
+  {"Fanta",  'F', 8,  20, 150, 255, 100, 255},  // orange
+  {"Sprite", 'G', 45, 75, 100, 255, 80,  255},  // green — 'G' to avoid clashing with Solo's 'S'
+  {"Solo",   'S', 22, 35, 130, 255, 130, 255},  // yellow
 };
+// std::vector<Color_Config> colors_vec = {
+//   {"Coke",    0,   8, 150, 255, 80,  255},  // red
+//   {"Fanta",   8,  20, 150, 255, 100, 255},  // orange
+//   {"Passito", 130, 155, 60, 255, 60,  255},  // purple
+//   {"Solo",   22,  35, 130, 255, 130, 255},  // yellow
+// };
 
   // NEW: precompute the brand HSV centres once. These drive the per-pixel
   // classification below and only need to be rebuilt if colors_vec changes.
