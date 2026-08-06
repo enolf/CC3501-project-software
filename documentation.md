@@ -408,8 +408,10 @@ Notes for whoever builds this:
   checkout state machine never touches a widget.
 
 **`camera_side/inventory`** holds per-can price and count with a `Can` enum
-(Coke, Sprite, Fanta, Pasito) and a `sync_dashboard()` hook for cloud price
-overrides. The hook is a stub (see §7), so it is not yet usable.
+(Coke, Fanta, Mountain Dew, Solo) and a `sync_dashboard()` hook for cloud price
+overrides. The hook is a stub (see §7), so it is not yet usable. The module is
+superseded and not compiled — `catalogue` owns the drink list and the prices,
+and `basket` owns the counts.
 
 ### 4.5 Coin payment subsystem
 

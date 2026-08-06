@@ -29,14 +29,25 @@ import random
 
 log = logging.getLogger("fridged.camera")
 
-#: Drink keys as they appear on the wire. The firmware builds these by
-#: lowercasing `catalogue::name()`, so they must match that table exactly —
-#: see the INV handler in pi_link_serial.cpp.
-DRINKS = ("coke", "sprite", "fanta", "pasito")
+#: Drink keys as they appear on the wire. These are `catalogue::wire_key()` on
+#: the firmware side — a column of its own in `catalogue.h`, NOT the display
+#: name lowercased.
+#:
+#: They used to be the display name lowercased, and that quietly stopped working
+#: when a drink acquired a space in it: a payload is space-separated `key=value`
+#: pairs, so `mountain dew=5` is not one field but a key nobody looks for
+#: followed by a stray token. Both ends would have gone on running and agreed on
+#: the wrong numbers. Keep these short, lower case and space-free.
+#:
+#: ORDER MATTERS. It matches `catalogue::Can` on the board and `colors_vec` in
+#: picapture, which reports its counts positionally.
+DRINKS = ("coke", "fanta", "mtndew", "solo")
 
-#: Display names, for `txn_item` and the panels. Same order.
-DISPLAY = {"coke": "Coke", "sprite": "Sprite", "fanta": "Fanta",
-           "pasito": "Pasito"}
+#: Display names, for `txn_item` and the panels. Same order. This is the one
+#: place the pretty name lives on the Pi side, exactly as `Entry::name` is on
+#: the board.
+DISPLAY = {"coke": "Coke", "fanta": "Fanta", "mtndew": "Mountain Dew",
+           "solo": "Solo"}
 
 #: How many of each drink a full shelf holds.
 SHELF_CAPACITY = 6
@@ -120,7 +131,7 @@ class SimCamera:
         return dict(self.shelf), confidence
 
     def payload(self):
-        """The `EVT INV` payload: `coke=5 sprite=4 ... conf=98`."""
+        """The `EVT INV` payload: `coke=5 fanta=4 ... conf=98`."""
         counts, confidence = self.scan()
         pairs = " ".join(f"{drink}={counts[drink]}" for drink in DRINKS)
         return f"{pairs} conf={confidence}", counts

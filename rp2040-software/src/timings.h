@@ -83,6 +83,15 @@ constexpr uint32_t THANK_YOU_MS = 3000;
 /// How long the cancellation message stays up before returning to Idle.
 constexpr uint32_t ABANDONED_MS = 3000;
 
+/// How long "you are owed a refund" stays up.
+///
+/// The longest of the end-of-transaction screens, and for the same reason as
+/// SD_RESULT_MS: it is an INSTRUCTION rather than feedback. Somebody has to
+/// read an amount, understand that the machine cannot give it back, and note
+/// who to ask. Three seconds is enough to read "Thank you"; it is nowhere near
+/// enough to act on being out of pocket.
+constexpr uint32_t REFUND_OWED_MS = 10000;
+
 /// Minimum time on the fault screen, so an intermittent fault cannot strobe
 /// the display by clearing and re-asserting.
 constexpr uint32_t FAULT_MIN_MS = 5000;

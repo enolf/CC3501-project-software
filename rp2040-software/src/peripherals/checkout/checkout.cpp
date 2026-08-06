@@ -46,9 +46,39 @@ namespace {
 State    state = State::Idle;
 uint32_t state_since_ms = 0;
 
-/// The shelf as last reported. The difference between this and the next report
-/// is what the customer took.
-basket::Inventory previous_inventory;
+/// The shelf as it was when THIS customer arrived, captured from the scan
+/// requested when the door first opened.
+///
+/// FIXED FOR THE WHOLE TRANSACTION. Every recount is measured against this one
+/// snapshot, so the basket is always an absolute statement of what has left the
+/// fridge since the customer walked up — never a running total of per-door-cycle
+/// differences.
+///
+/// THAT DISTINCTION IS THE WHOLE FEATURE. The previous version re-baselined
+/// after every recount, which made the basket differential, and three ordinary
+/// things a customer does all came out wrong:
+///
+///   put a drink back      counts went UP against the new baseline, so it read
+///                         as a restock and the customer was still charged
+///   swap one for another  the returned drink vanished from the basket while
+///                         the new one was added, so they were charged for both
+///   change their mind     no way back to Idle; the sale stood
+///
+/// Against a fixed baseline all three are the same arithmetic as the first
+/// recount, and none of them needs a special case. It is the same argument the
+/// camera makes for reporting absolute counts rather than differences
+/// (fridged/camera.py): a reading that is absolute cannot accumulate error, and
+/// a reading that is differential eventually will.
+basket::Inventory transaction_baseline;
+
+/// Whether `transaction_baseline` holds a real reading yet. False between
+/// transactions and until the door-open scan comes back.
+bool has_baseline = false;
+
+/// Whether the Pi has been told about this sale (`EVT TXN_START`). Decides
+/// whether a transaction that ends up empty needs a matching `TXN_END`, so the
+/// dashboard is not left with a sale that never concludes.
+bool sale_announced = false;
 
 /// What is being bought right now.
 basket::Basket current_basket;
@@ -164,6 +194,7 @@ void enter(State next)
         case State::ThankYou:      Display::show_thanks(paid_cents,
                                                         owed_cents);   break;
         case State::Abandoned:     Display::show_cancelled();      break;
+        case State::RefundOwed:    Display::show_refund_owed(paid_cents); break;
         case State::Fault:         Display::show_fault(fault_code); break;
         case State::UtilityMenu:   Display::show_utility_menu();   break;
         case State::SdResult:      Display::show_sd_result(sd_write_ok,
@@ -175,6 +206,12 @@ void enter(State next)
 }
 
 /// Clear everything belonging to a transaction and go back to Idle.
+///
+/// `transaction_id = 0` is load-bearing, not just tidiness: a non-zero id is
+/// what "a transaction is in progress" MEANS everywhere else in this file, and
+/// it is how begin_selecting() tells a customer arriving from Idle apart from
+/// one who has reopened the door mid-sale. Any path back to Idle must come
+/// through here, or the next customer inherits this one's transaction.
 void finish_transaction()
 {
     current_basket = basket::Basket{};
@@ -185,6 +222,15 @@ void finish_transaction()
     transaction_id = 0;
     square_url[0] = '\0';
     greeted_name = nullptr;
+
+    // Dropped rather than carried over, so the next customer's baseline is a
+    // fresh look at the shelf. That is what makes a restock between two
+    // transactions invisible to the arithmetic instead of being charged to
+    // whoever opens the door next.
+    transaction_baseline = basket::Inventory{};
+    has_baseline = false;
+    sale_announced = false;
+
     enter(State::Idle);
 }
 
@@ -214,10 +260,44 @@ void raise_fault(uint16_t code)
 }
 
 /// Wake up: ask the Pi to start looking, and show the welcome screen.
+///
+/// Reached only from a state where nothing is in progress (Idle, Greeting,
+/// AccessDenied, UtilityMenu). A door opening DURING a transaction goes to
+/// reopen_for_changes() instead, which is a different thing entirely — it must
+/// not mint a new transaction id and must not disturb the baseline.
 void begin_selecting()
 {
     transaction_id = now_ms();
+    has_baseline = false;
+    sale_announced = false;
+
+    // The reply to THIS scan becomes the baseline. It used to be requested and
+    // then thrown away — Selecting ignored InventoryUpdated — which is why the
+    // baseline had to come from the previous customer's recount, and why the
+    // first purchase after boot was free.
     pi_link::request_scan();
+    enter(State::Selecting);
+}
+
+/// The customer opened the door again in the middle of a transaction: to put a
+/// drink back, to swap one, or to take another.
+///
+/// Keeps the transaction id AND the baseline, so the recount that follows
+/// re-derives the basket from scratch rather than layering another difference
+/// on top of the last one.
+///
+/// No scan is requested here. The baseline already exists and a second reading
+/// of a shelf the customer is currently reaching into would be discarded
+/// anyway; the recount on the way out is the one that counts.
+///
+/// Note what enter() does on the way out of an online payment state: it fires
+/// `CMD SQUARE_CANCEL`. That is exactly right and comes for free — the basket
+/// is about to change, so a live link for the old amount must not survive.
+void reopen_for_changes()
+{
+    logf(LogLevel::INFORMATION,
+         "checkout: door reopened during %s - the basket will be recounted",
+         state_name(state));
     enter(State::Selecting);
 }
 
@@ -364,8 +444,56 @@ void complete_payment()
     enter(State::ThankYou);
 }
 
-/// Work out what changed on the shelf and decide whether there is anything to
-/// charge for. Called once, on the report that follows the door closing.
+/// The basket came out empty: either nothing was ever taken, or everything that
+/// was taken has since been put back.
+///
+/// Split out because there are two very different ways to arrive here and only
+/// one of them is uneventful.
+void settle_empty_basket()
+{
+    current_basket = basket::Basket{};
+    owed_cents = 0;
+
+    // Coins are already in the box and there is nothing left to sell. The box
+    // is one-way — there is no hopper and no way to give change — so this
+    // cannot be resolved by the machine, only reported.
+    //
+    // Handled exactly like a Square late payment (decision D17): say so on
+    // screen, and write the amount to serial AND the SD card so the two
+    // accounts can be reconciled by whoever empties the box.
+    if (paid_cents > 0 || paid_grams > 0.0) {
+        logf(LogLevel::ERROR,
+             "checkout: REFUND OWED - every drink was returned but %" PRIu32
+             "c (%.2f g) is in the box for txn %" PRIu32,
+             paid_cents, paid_grams, transaction_id);
+        sd_log::write_linef("REFUND_OWED id=%" PRIu32 " cents=%" PRIu32
+                            " grams=%.2f", transaction_id, paid_cents,
+                            paid_grams);
+        pi_link::notify_transaction_end(Outcome::Cancelled, 0, paid_cents,
+                                        transaction_id);
+        enter(State::RefundOwed);
+        return;
+    }
+
+    // The Pi has a TXN_START for this id and would otherwise wait forever for
+    // it to conclude. Only sent if the sale was actually announced — a customer
+    // who never got as far as choosing a payment method was never mentioned.
+    if (sale_announced) {
+        pi_link::notify_transaction_end(Outcome::Cancelled, 0, 0, transaction_id);
+        sd_log::write_linef("TXN_END id=%" PRIu32 " outcome=cancelled",
+                            transaction_id);
+    }
+
+    log(LogLevel::INFORMATION, "checkout: nothing taken, nobody is charged");
+    finish_transaction();
+}
+
+/// A scan came back. What it means depends entirely on which one it was.
+///
+/// Called for EVERY inventory report in every state, so a reply that arrives
+/// somewhere unexpected is drained rather than left waiting — an undrained
+/// report would be collected by the next customer's Selecting and used as their
+/// baseline, which is a stale shelf reading charged to the wrong person.
 void apply_inventory()
 {
     basket::Inventory current;
@@ -376,33 +504,60 @@ void apply_inventory()
         return;
     }
 
+    // --- The baseline scan, requested when the door opened ---
+    if (!has_baseline) {
+        transaction_baseline = current;
+        has_baseline = true;
+        log(LogLevel::INFORMATION, "checkout: shelf baseline captured");
+
+        // Arriving in Recount means the door shut before the baseline came
+        // back — a quick open and close, or a slow Pi. Nothing is lost and
+        // nothing needs a special case: entering Recount ALWAYS requests a
+        // second scan, so the recount is already in flight and this reply is
+        // simply the baseline arriving late. Stay put and wait for it.
+        //
+        // If it never comes, RECOUNT_TIMEOUT_MS raises FAULT_PI_TIMEOUT, which
+        // is the honest answer — with one reading there is no way to know what
+        // was taken, and guessing would either charge for nothing or give
+        // drinks away.
+        return;
+    }
+
+    if (state != State::Recount) {
+        // A reply we no longer have any use for: the scan requested at the
+        // door opening, arriving after the customer has already reopened the
+        // door, or a stale report landing outside a transaction. Drained above,
+        // discarded here.
+        logf(LogLevel::INFORMATION,
+             "checkout: inventory report arrived in %s, nothing to measure it "
+             "against - discarded", state_name(state));
+        return;
+    }
+
+    // --- The recount, after the door shut ---
     basket::Basket taken;
-    const basket::Change change = basket::diff(previous_inventory, current, taken);
+    const basket::Change change = basket::diff(transaction_baseline, current,
+                                               taken);
 
-    // The new shelf becomes the baseline whatever happened. Skipping this after
-    // a restock would make the next scan look like an enormous purchase.
-    previous_inventory = current;
+    // THE BASELINE IS DELIBERATELY NOT MOVED. See the note on its declaration:
+    // holding it still is what lets the customer open the door again and put a
+    // drink back, and what makes this recount say what has left the fridge
+    // rather than what changed since the last time we looked.
 
-    switch (change) {
-        case basket::Change::None:
-            log(LogLevel::INFORMATION, "checkout: nothing taken");
-            enter(State::Idle);
-            return;
+    if (change == basket::Change::Restocked) {
+        // Counts only went up against the shelf as it was when the door
+        // opened. Somebody refilled the fridge rather than buying from it.
+        log(LogLevel::INFORMATION, "checkout: restocked, nobody is charged");
+        sd_log::write_line("RESTOCK");
+    } else if (change == basket::Change::Mixed) {
+        // One drink back, another taken. Normal customer behaviour, and the
+        // basket already holds only what left.
+        log(LogLevel::INFORMATION, "checkout: a drink was swapped");
+    }
 
-        case basket::Change::Restocked:
-            log(LogLevel::INFORMATION, "checkout: restocked, nobody is charged");
-            sd_log::write_line("RESTOCK");
-            enter(State::Idle);
-            return;
-
-        case basket::Change::Mixed:
-            // A drink was put back and another taken. Normal customer
-            // behaviour, and the basket already holds only what left.
-            log(LogLevel::INFORMATION, "checkout: a drink was swapped");
-            break;
-
-        case basket::Change::ItemsTaken:
-            break;
+    if (basket::is_empty(taken)) {
+        settle_empty_basket();
+        return;
     }
 
     current_basket = taken;
@@ -411,12 +566,43 @@ void apply_inventory()
     if (owed_cents == 0) {
         // Can only happen if a drink is priced at zero. Nothing to collect.
         log(LogLevel::WARNING, "checkout: items taken but nothing owed");
-        enter(State::Idle);
+        settle_empty_basket();
         return;
     }
 
     logf(LogLevel::INFORMATION, "checkout: %u item(s), owed %" PRIu32 "c",
          basket::item_count(taken), owed_cents);
+
+    // --- Where the customer goes next ---
+    //
+    // Straight back to the cash screen if coins are already committed, and NOT
+    // through PaymentSelect. Entering PaymentSelect calls
+    // scale::begin_transaction(), which re-zeroes the coin baseline — so
+    // routing a customer with money in the box through it would erase
+    // everything they had paid, silently, at the exact moment they were owed
+    // the most care.
+    if (method == PaymentMethod::Cash && (paid_cents > 0 || paid_grams > 0.0)) {
+        // Re-announced with the new basket. `upsert_txn` and `set_txn_items` on
+        // the Pi are both replace-not-append precisely so a second TXN_START
+        // for one id corrects the first rather than doubling it.
+        pi_link::notify_sale(current_basket, owed_cents, method, transaction_id);
+        sale_announced = true;
+
+        // The swap may have made the drinks cheaper than what is already in the
+        // box, in which case they have finished paying without touching
+        // anything. Asking the mass gate is the same question PayCash asks on
+        // every coin, so there is one definition of "has this been paid for".
+        if (basket::mass_gate_satisfied(owed_cents, paid_grams)) {
+            log(LogLevel::INFORMATION,
+                "checkout: the new basket is already covered by the coins in "
+                "the box");
+            complete_payment();
+        } else {
+            enter(State::PayCash);
+        }
+        return;
+    }
+
     enter(State::PaymentSelect);
 }
 
@@ -493,6 +679,20 @@ void handle_event(const events::Event &event)
     if (event.kind == events::Kind::CoinRejected) {
         pi_link::notify_coin(0, (double)event.coin.delta_grams, false);
         log(LogLevel::WARNING, "checkout: unrecognised object in the coin box");
+        return;
+    }
+
+    // Inventory reports are handled in ONE place rather than per state, and
+    // handled in EVERY state rather than only where they are wanted.
+    //
+    // The reason is that poll_inventory() is a one-shot latch: a report nobody
+    // collects stays waiting. Left in the queue by a state that did not care,
+    // it would be picked up by the next customer's Selecting and taken as their
+    // baseline — a shelf reading from minutes ago, charged to the wrong person.
+    // apply_inventory() decides from `state` what the report means, including
+    // deciding it means nothing.
+    if (event.kind == events::Kind::InventoryUpdated) {
+        apply_inventory();
         return;
     }
 
@@ -582,13 +782,21 @@ void handle_event(const events::Event &event)
             break;
 
         case State::Recount:
-            if (event.kind == events::Kind::InventoryUpdated) {
-                apply_inventory();
+            // Reopened while the camera was still counting. The reply that is
+            // already in flight will be discarded, because a baseline exists
+            // and the state will no longer be Recount when it lands.
+            if (event.kind == events::Kind::DoorOpened) {
+                reopen_for_changes();
             }
             break;
 
         case State::PaymentSelect:
-            if (event.kind == events::Kind::TouchCash) {
+            // Changed their mind before choosing how to pay. Nothing is
+            // committed, so this is the cheapest case: back to Selecting, and
+            // whatever the recount says is simply the new basket.
+            if (event.kind == events::Kind::DoorOpened) {
+                reopen_for_changes();
+            } else if (event.kind == events::Kind::TouchCash) {
                 if (!scale::is_ready()) {
                     // Without the scale there is no way to know money arrived.
                     // In a build with the coin-simulation keys compiled in this
@@ -607,6 +815,7 @@ void handle_event(const events::Event &event)
                 paid_grams = 0.0;
                 pi_link::notify_sale(current_basket, owed_cents, method,
                                      transaction_id);
+                sale_announced = true;
                 enter(State::PayCash);
             } else if (event.kind == events::Kind::TouchOnline) {
                 method = PaymentMethod::Online;
@@ -617,13 +826,24 @@ void handle_event(const events::Event &event)
             break;
 
         case State::PayCash:
-            if (event.kind == events::Kind::CoinAccepted) {
+            // Reopening with coins already in the box is allowed, and it is the
+            // case that needs the most care. The recount routes back here
+            // rather than through PaymentSelect so the coin baseline is never
+            // re-zeroed under a customer who has already paid something; see
+            // apply_inventory().
+            if (event.kind == events::Kind::DoorOpened) {
+                reopen_for_changes();
+            } else if (event.kind == events::Kind::CoinAccepted) {
                 apply_coin(event);
             }
             break;
 
         case State::PayOnlineLink:
-            if (event.kind == events::Kind::SquareUrlReady) {
+            // enter() fires CMD SQUARE_CANCEL on the way out, so a link for the
+            // old amount cannot outlive the basket it was created for.
+            if (event.kind == events::Kind::DoorOpened) {
+                reopen_for_changes();
+            } else if (event.kind == events::Kind::SquareUrlReady) {
                 if (pi_link::poll_square_url(square_url, sizeof(square_url))) {
                     logf(LogLevel::INFORMATION, "checkout: payment link %s",
                          square_url);
@@ -640,7 +860,11 @@ void handle_event(const events::Event &event)
             break;
 
         case State::PayOnlineQr:
-            if (event.kind == events::Kind::SquarePaid) {
+            // Same as PayOnlineLink: the QR on screen is for an amount that is
+            // about to be recalculated, so the link is cancelled by enter().
+            if (event.kind == events::Kind::DoorOpened) {
+                reopen_for_changes();
+            } else if (event.kind == events::Kind::SquarePaid) {
                 (void)pi_link::poll_square_paid();
                 paid_cents = owed_cents;   // Square only confirms the exact amount
                 complete_payment();
@@ -653,11 +877,18 @@ void handle_event(const events::Event &event)
 
         case State::ThankYou:
         case State::Abandoned:
+        case State::RefundOwed:
         case State::SdResult:
         case State::TareResult:
         case State::UselessButton:
             // Leaving on a timer. Nothing a customer does should cut these
             // short or extend them.
+            //
+            // RefundOwed in particular must NOT accept a door opening. Somebody
+            // who is owed money and opens the fridge again is starting a fresh
+            // visit, and the refund message has to finish being read first —
+            // reopening from here would swallow it, and with it the only notice
+            // the customer ever gets.
             //
             // The two button states are here rather than anywhere else because
             // that is the whole requirement: the panel button does something
@@ -710,8 +941,22 @@ void check_timeouts()
         case State::Selecting:
             // Reached by someone leaving the fridge door standing open.
             if (elapsed_ms() >= timings::SELECT_TIMEOUT_MS) {
-                log(LogLevel::INFORMATION, "checkout: nobody took anything");
-                enter(State::Idle);
+                if (owed_cents > 0 || sale_announced) {
+                    // They reopened the door mid-transaction and walked off
+                    // with it hanging open. Drinks are out and unpaid, and that
+                    // is a theft — going quietly to Idle here would erase a
+                    // sale the machine had already worked out and announced.
+                    log(LogLevel::WARNING,
+                        "checkout: door left open with an unpaid basket");
+                    abandon();
+                } else {
+                    // Nothing was ever owed, so there is nothing to record.
+                    // finish_transaction() rather than enter(Idle): the
+                    // transaction id must be cleared, or the next customer
+                    // inherits it and their door-open is mistaken for a reopen.
+                    log(LogLevel::INFORMATION, "checkout: nobody took anything");
+                    finish_transaction();
+                }
             }
             break;
 
@@ -749,6 +994,14 @@ void check_timeouts()
 
         case State::Abandoned:
             if (elapsed_ms() >= timings::ABANDONED_MS) {
+                finish_transaction();
+            }
+            break;
+
+        case State::RefundOwed:
+            // Held longer than the other end-of-transaction screens because it
+            // asks something of the customer rather than just informing them.
+            if (elapsed_ms() >= timings::REFUND_OWED_MS) {
                 finish_transaction();
             }
             break;
@@ -802,19 +1055,26 @@ void init()
 {
     state = State::Idle;
     state_since_ms = now_ms();
-    previous_inventory = basket::Inventory{};
+    transaction_baseline = basket::Inventory{};
+    has_baseline = false;
+    sale_announced = false;
     current_basket = basket::Basket{};
     owed_cents = 0;
     paid_cents = 0;
     paid_grams = 0.0;
     method = PaymentMethod::None;
+    transaction_id = 0;
     fault_code = FAULT_NONE;
     greeted_name = nullptr;
 
-    // previous_inventory starts empty, so the very first scan reports every
-    // drink as newly arrived and is classified as a restock. That is the
-    // correct behaviour, not a special case: the first look at the shelf
-    // establishes the baseline and charges nobody.
+    // Nothing is known about the shelf yet, and nothing needs to be. The
+    // baseline is captured per transaction, from the scan requested when the
+    // door opens, so the first customer after a reboot is measured against a
+    // real reading rather than against an all-zero table.
+    //
+    // That is a change from the previous design, where the baseline carried
+    // over between customers and started empty — which made the first purchase
+    // after every boot look like a restock, and therefore free.
 
     Display::show_idle();
     log(LogLevel::INFORMATION, "checkout: ready, in Idle");

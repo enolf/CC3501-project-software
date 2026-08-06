@@ -4,9 +4,9 @@ std::string simulate_dashboard_get() {
     return R"({
         "prices": {
             "coke": 200,
-            "sprite": 250,
-            "fanta": 200,
-            "pasito": 0
+            "fanta": 250,
+            "mtndew": 200,
+            "solo": 0
         }
     })";
 }

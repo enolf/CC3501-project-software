@@ -521,12 +521,12 @@ def test_transaction_ingest():
     # The duplicate is the whole point — an INSERT would raise, and naive item
     # handling would double the basket and the units-sold panel with it.
     for payload in (
-        ("TXN_START", "id=7 items=Coke:2,Fanta:1 owed=600 method=cash"),
+        ("TXN_START", "id=7 items=coke:2,fanta:1 owed=600 method=cash"),
         ("COIN", "denom=200 delta_g=6.60"),
         ("COIN", "denom=200 delta_g=6.60"),
         ("COIN_REJECT", "delta_g=3.40"),
         ("COIN", "denom=200 delta_g=6.60"),
-        ("TXN_START", "id=7 items=Coke:2,Fanta:1 owed=600 method=cash"),
+        ("TXN_START", "id=7 items=coke:2,fanta:1 owed=600 method=cash"),
         ("TXN_END", "id=7 outcome=paid owed=600 paid=600"),
     ):
         feed(ingest, link, protocol.build("EVT", payload[0], payload[1], ms=1))
@@ -540,7 +540,7 @@ def test_transaction_ingest():
           row == ("cash", 600, 600, "paid"))
     items = dict(store._conn.execute("SELECT drink, qty FROM txn_item"))
     check(f"the basket is not doubled by the duplicate ({items})",
-          items == {"Coke": 2, "Fanta": 1})
+          items == {"coke": 2, "fanta": 1})
     check("coins are attributed to the open transaction",
           store._conn.execute(
               "SELECT COUNT(*) FROM coin_event WHERE txn_id = 7 "
@@ -572,14 +572,56 @@ def test_transaction_ingest():
               "SELECT COUNT(*) FROM coin_event WHERE txn_id IS NULL"
           ).fetchone()[0] == 1)
 
+    # --- Changing your mind: the basket is REPLACED, never merged ---
+    #
+    # The board lets a customer reopen the door mid-transaction and swap one
+    # drink for another, then re-sends TXN_START with the corrected basket. The
+    # second frame names a drink the first one never mentioned, and drops one it
+    # did.
+    #
+    # Merging instead of replacing would record BOTH drinks as sold, one of
+    # which was put back. Revenue would still be right — that comes from
+    # txn.owed_cents — which is exactly what makes it nasty: the units-sold and
+    # stock reconciliation panels would drift away from the money with nothing
+    # anywhere reporting an error.
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_START", "id=13 items=coke:1 owed=200 method=cash", ms=6))
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_START", "id=13 items=mtndew:1 owed=200 method=cash", ms=7))
+    store.flush(force=True)
+    items = dict(store._conn.execute(
+        "SELECT drink, qty FROM txn_item WHERE txn_id = 13"))
+    check(f"swapping a drink replaces the basket rather than adding to it "
+          f"({items})", items == {"mtndew": 1})
+
+    # Two drinks down to one: the same rule, and the case a naive "delete only
+    # when the basket is empty" fix would still get wrong.
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_START", "id=14 items=coke:1,solo:2 owed=600 method=cash",
+        ms=8))
+    feed(ingest, link, protocol.build(
+        "EVT", "TXN_START", "id=14 items=solo:1 owed=200 method=cash", ms=9))
+    store.flush(force=True)
+    items = dict(store._conn.execute(
+        "SELECT drink, qty FROM txn_item WHERE txn_id = 14"))
+    check(f"putting drinks back shrinks the basket ({items})",
+          items == {"solo": 1})
+
+    # A multi-word drink has to survive the wire at all. `items=` sits inside a
+    # space-separated payload, so a display name would truncate the field here
+    # and every drink after it would be lost.
+    check("a multi-word drink is carried by its wire key, not its name",
+          "mtndew" in dict(store._conn.execute(
+              "SELECT drink, qty FROM txn_item WHERE txn_id = 13")))
+
     # The duplicate arrives at completion; it must not drag ts_start forward.
     feed(ingest, link, protocol.build(
-        "EVT", "TXN_START", "id=11 items=Coke:1 owed=200 method=cash", ms=4))
+        "EVT", "TXN_START", "id=11 items=coke:1 owed=200 method=cash", ms=4))
     first = store._conn.execute(
         "SELECT ts_start FROM txn WHERE txn_id = 11").fetchone()[0]
     time.sleep(0.01)
     feed(ingest, link, protocol.build(
-        "EVT", "TXN_START", "id=11 items=Coke:1 owed=200 method=cash", ms=5))
+        "EVT", "TXN_START", "id=11 items=coke:1 owed=200 method=cash", ms=5))
     second = store._conn.execute(
         "SELECT ts_start FROM txn WHERE txn_id = 11").fetchone()[0]
     check("ts_start keeps the EARLIEST value, not the duplicate's",
@@ -981,14 +1023,16 @@ def test_dashboards():
     store.upsert_txn(boot_id, 1001, ts_start=now - 460, ts_end=now - 430,
                      method="cash", owed_cents=400, paid_cents=400,
                      outcome="paid", member_uid=NAMED_UID)
-    store.set_txn_items(boot_id, 1001, {"Coke": 1, "Fanta": 1}, 200)
+    # Keyed by WIRE name, as the board sends them: the `items=` list on a
+    # TXN_START carries catalogue::wire_key(), not the display name.
+    store.set_txn_items(boot_id, 1001, {"coke": 1, "fanta": 1}, 200)
     store.upsert_txn(boot_id, 1002, ts_start=now - 300, ts_end=now - 260,
                      method="card", owed_cents=200, paid_cents=200,
                      outcome="paid", member_uid=UNNAMED_UID)
-    store.set_txn_items(boot_id, 1002, {"Sprite": 1}, 200)
+    store.set_txn_items(boot_id, 1002, {"mtndew": 1}, 200)
     store.upsert_txn(boot_id, 1003, ts_start=now - 200, ts_end=now - 80,
                      owed_cents=200, paid_cents=0, outcome="stolen")
-    store.set_txn_items(boot_id, 1003, {"Pasito": 1}, 200)
+    store.set_txn_items(boot_id, 1003, {"solo": 1}, 200)
     store.coin_event(now - 450, boot_id, 1001, 200, 6.60, True)
     store.coin_event(now - 445, boot_id, 1001, 200, 6.60, True)
     store.coin_event(now - 440, boot_id, 1001, None, 3.10, False)
@@ -996,11 +1040,11 @@ def test_dashboards():
     # Stock over three scans, with a restock in the middle, so the
     # reconciliation panel's restock-detection has something to detect.
     store.stock_snapshot(now - 500,
-                         {"coke": 6, "sprite": 6, "fanta": 6, "pasito": 6})
+                         {"coke": 6, "fanta": 6, "mtndew": 6, "solo": 6})
     store.stock_snapshot(now - 300,
-                         {"coke": 5, "sprite": 5, "fanta": 5, "pasito": 6})
+                         {"coke": 5, "fanta": 5, "mtndew": 5, "solo": 6})
     store.stock_snapshot(now - 100,
-                         {"coke": 6, "sprite": 6, "fanta": 6, "pasito": 6})
+                         {"coke": 6, "fanta": 6, "mtndew": 6, "solo": 6})
     store.flush(force=True)
 
     for path in files:

@@ -120,7 +120,8 @@ void print_help()
 {
     printf("\n--- debug keys ---\n");
     printf(" Pi simulator (stands in for the camera and Square):\n");
-    printf("  1 2 3 4  take a Coke / Sprite / Fanta / Pasito off the shelf\n");
+    printf("  1 2 3 4  take a Coke / Fanta / Mountain Dew / Solo off the shelf\n");
+    printf("  Q W E R  put one back (the shifted key above the one that took it)\n");
     printf("  r        restock the shelf\n");
     printf("  i        show the shelf, and what was last reported\n");
     printf("  q        hurry along a pending Square link\n");

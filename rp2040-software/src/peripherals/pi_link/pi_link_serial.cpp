@@ -86,14 +86,22 @@ void send(frame::Prefix prefix, const char *type, const char *payload)
 
 /// Room for the comma-separated item list two messages both need.
 ///
-/// Sized from the worst real case rather than picked round: four drink types,
-/// the longest name being "Sprite", counts that cannot exceed a shelf —
-/// "Coke:5,Sprite:5,Fanta:5,Pasito:5" is 32 characters. 40 leaves room and,
-/// crucially, leaves the whole payload provably inside frame::MAX_PAYLOAD_LEN
-/// once the id, total and method are added.
+/// Sized from the worst case the type system allows, not from the worst case
+/// expected. Four drink types, wire keys (the longest being "mtndew"), and a
+/// count that is a uint8_t and so could in principle be 255:
+///
+///     coke:255,fanta:255,mtndew:255,solo:255      38 characters
+///
+/// 40 covers it with the null. A real shelf holds single digits, which would
+/// be 30 — but sizing to what is expected rather than to what will fit is how
+/// a buffer gets overrun by a camera having a bad day.
+///
+/// Crucially it also leaves the whole payload provably inside
+/// frame::MAX_PAYLOAD_LEN: id, items, owed and method at their longest come to
+/// 88 of the 95 usable bytes.
 constexpr size_t ITEM_TEXT_MAX = 40;
 
-/// Render a basket as "Coke:2,Fanta:1". Returns the number of characters
+/// Render a basket as "coke:2,fanta:1". Returns the number of characters
 /// written, so an empty basket (0) can be told from a full one.
 ///
 /// Shared by SQUARE_LINK and TXN_START because both name the same sale, and two
@@ -107,9 +115,13 @@ size_t format_items(const basket::Basket &basket, char *out, size_t length)
         if (basket.taken[i] == 0) {
             continue;
         }
+        // wire_key(), NOT name(). The item list rides inside a single
+        // `items=` field of a space-separated payload, so a display name
+        // containing a space ("Mountain Dew") would truncate the field at the
+        // Pi's first split and lose every drink after it.
         const int written = snprintf(out + used, length - used, "%s%s:%u",
                                      used > 0 ? "," : "",
-                                     catalogue::name(catalogue::from_index(i)),
+                                     catalogue::wire_key(catalogue::from_index(i)),
                                      basket.taken[i]);
         if (written < 0 || (size_t)written >= length - used) {
             break;
@@ -131,15 +143,11 @@ void handle_frame(const frame::Frame &f)
         bool any = false;
         for (uint8_t i = 0; i < catalogue::CAN_COUNT; i++) {
             uint32_t count = 0;
-            // The key is the drink's own name, so adding a drink to the
-            // catalogue needs no change here.
-            char key[16];
-            snprintf(key, sizeof(key), "%s", catalogue::name(catalogue::from_index(i)));
-            for (char *c = key; *c != '\0'; c++) {
-                if (*c >= 'A' && *c <= 'Z') {
-                    *c = (char)(*c - 'A' + 'a');    // the wire uses lower case
-                }
-            }
+            // The key comes straight out of the catalogue, so adding a drink
+            // needs no change here. It used to be name() lowercased in place,
+            // which quietly stopped working the moment a drink had a space in
+            // it — see the note on catalogue::TABLE.
+            const char *key = catalogue::wire_key(catalogue::from_index(i));
             if (frame::u32_for_key(f.payload, key, count)) {
                 received.count[i] = (uint8_t)(count > 255 ? 255 : count);
                 any = true;

@@ -430,11 +430,30 @@ class Store:
         self.rows_written += 1
 
     def set_txn_items(self, boot_id, txn_id, items, unit_price_cents=None):
-        """Replace the item list for a transaction.
+        """Replace the item list for a transaction. REPLACE, not merge.
 
-        REPLACE rather than INSERT because the duplicate `TXN_START` carries the
+        Upsert rather than INSERT because the duplicate `TXN_START` carries the
         same basket again; adding it would double every quantity and silently
         double the units-sold panel.
+
+        WHY THE DELETE IS NOT OPTIONAL
+        ------------------------------
+        Upserting alone only corrects drinks that appear in the NEW basket. A
+        drink that has left it entirely keeps its old row, because nothing
+        touches it.
+
+        That is not hypothetical any more. The board now lets a customer reopen
+        the door mid-transaction and swap one drink for another, and it re-sends
+        `TXN_START` with the corrected basket. Swap a Coke for a Fanta and the
+        two frames say `items=coke:1` then `items=fanta:1` — so without this the
+        transaction would be recorded as having sold BOTH, one of which was put
+        back and never paid for. Revenue would still be right, because that
+        comes from `txn.owed_cents`, which is exactly what makes it nasty: the
+        units-sold and stock panels would drift away from the money with nothing
+        anywhere reporting an error.
+
+        Deleting first and re-inserting would be simpler to read but would churn
+        every row on every duplicate frame; this touches only what changed.
         """
         for drink, qty in items.items():
             self._conn.execute(
@@ -444,6 +463,15 @@ class Store:
                 "  qty = excluded.qty, "
                 "  unit_price_cents = excluded.unit_price_cents",
                 (boot_id, txn_id, drink, qty, unit_price_cents))
+
+        # Anything previously recorded for this transaction that the latest
+        # basket no longer mentions. An empty `items` clears the lot, which is
+        # the right answer for a customer who put everything back.
+        placeholders = ",".join("?" * len(items))
+        self._conn.execute(
+            "DELETE FROM txn_item WHERE boot_id = ? AND txn_id = ?"
+            + (f" AND drink NOT IN ({placeholders})" if items else ""),
+            (boot_id, txn_id, *items))
         self.rows_written += len(items)
 
     def coin_event(self, ts, boot_id, txn_id, denom_cents, mass_delta_g,

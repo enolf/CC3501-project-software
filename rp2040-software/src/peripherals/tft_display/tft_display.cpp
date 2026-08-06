@@ -200,7 +200,7 @@ constexpr uint32_t COLOUR_FAULT      = 0xB71C1C;   // red
 /// rather than rebuilt on every coin.
 enum class Screen : uint8_t {
     None, Idle, Greeting, Denied, Selecting, Recount, PaymentSelect,
-    Cash, OnlineWait, Qr, Thanks, Cancelled, Fault,
+    Cash, OnlineWait, Qr, Thanks, Cancelled, Refund, Fault,
     UtilityMenu, SdWriting, SdResult, Taring, TareResult, Useless,
 };
 
@@ -682,6 +682,28 @@ void Display::show_cancelled()
                LV_ALIGN_CENTER, 0, -10);
     make_label(scr, "See a committee member if this is wrong",
                &lv_font_montserrat_14, COLOUR_DIM, LV_ALIGN_CENTER, 0, 30);
+}
+
+void Display::show_refund_owed(uint32_t paid_cents)
+{
+    lv_obj_t *scr = begin_screen(Screen::Refund);
+
+    char amount[16];
+    format_money(amount, sizeof(amount), paid_cents);
+
+    // The amount is the biggest thing on the screen on purpose. Everything else
+    // here is an apology; the number is the only part the customer needs to
+    // remember when they go and find somebody.
+    make_label(scr, "Drinks returned", &lv_font_montserrat_20, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, -55);
+    make_label(scr, "You are owed", &lv_font_montserrat_14, COLOUR_DIM,
+               LV_ALIGN_CENTER, 0, -20);
+    make_label(scr, amount, &lv_font_montserrat_28, COLOUR_GOOD,
+               LV_ALIGN_CENTER, 0, 12);
+    make_label(scr, "The box cannot give change", &lv_font_montserrat_14,
+               COLOUR_DIM, LV_ALIGN_CENTER, 0, 50);
+    make_label(scr, "See a committee member", &lv_font_montserrat_14,
+               COLOUR_TEXT, LV_ALIGN_CENTER, 0, 72);
 }
 
 void Display::show_fault(uint16_t code)

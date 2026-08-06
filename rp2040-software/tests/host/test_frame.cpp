@@ -140,7 +140,7 @@ void test_frame_round_trip()
         { frame::Prefix::Event,    "HEALTH",      "die_c=31 box_g=250 faults=0" },
         { frame::Prefix::Command,  "SCAN",        nullptr },
         { frame::Prefix::Command,  "SQUARE_LINK", "cents=200 id=99" },
-        { frame::Prefix::Event,    "INV",         "coke=5 sprite=4 fanta=5 pasito=5 conf=98" },
+        { frame::Prefix::Event,    "INV",         "coke=5 fanta=4 mtndew=5 solo=5 conf=98" },
         { frame::Prefix::Response, "SQUARE_URL",  "id=99 url=https://sq.co/abc123" },
         { frame::Prefix::Event,    "SQUARE_PAID", "id=99 order=ORD42" },
         { frame::Prefix::Response, "SQUARE_ERR",  "id=99 reason=timeout" },
@@ -372,14 +372,14 @@ void test_frame_payload_fields()
     CHECK(frame::value_for_key("state=open", "state", value, sizeof(value)));
     CHECK(strcmp(value, "open") == 0);
 
-    CHECK(frame::value_for_key("coke=5 sprite=4 fanta=3", "sprite", value, sizeof(value)));
+    CHECK(frame::value_for_key("coke=5 fanta=4 solo=3", "fanta", value, sizeof(value)));
     CHECK(strcmp(value, "4") == 0);
 
-    CHECK(frame::value_for_key("coke=5 sprite=4 fanta=3", "fanta", value, sizeof(value)));
+    CHECK(frame::value_for_key("coke=5 fanta=4 solo=3", "solo", value, sizeof(value)));
     CHECK(strcmp(value, "3") == 0);
     testing::case_passed("keys are found at the start, middle and end");
 
-    CHECK(!frame::value_for_key("coke=5", "sprite", value, sizeof(value)));
+    CHECK(!frame::value_for_key("coke=5", "fanta", value, sizeof(value)));
     testing::case_passed("an absent key reports absent");
 
     // A key must match a whole field. Without this, asking for "id" would find

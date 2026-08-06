@@ -2,6 +2,8 @@
 
 #include "test_support.h"
 
+#include <string.h>
+
 #include "peripherals/basket/basket.h"
 #include "peripherals/catalogue/catalogue.h"
 #include "peripherals/coin_acceptor/coin_acceptor.h"
@@ -10,13 +12,13 @@ using catalogue::Can;
 
 namespace {
 
-basket::Inventory make(uint8_t coke, uint8_t sprite, uint8_t fanta, uint8_t pasito)
+basket::Inventory make(uint8_t coke, uint8_t fanta, uint8_t dew, uint8_t solo)
 {
     basket::Inventory inv;
-    inv.count[static_cast<uint8_t>(Can::Coke)]   = coke;
-    inv.count[static_cast<uint8_t>(Can::Sprite)] = sprite;
-    inv.count[static_cast<uint8_t>(Can::Fanta)]  = fanta;
-    inv.count[static_cast<uint8_t>(Can::Pasito)] = pasito;
+    inv.count[static_cast<uint8_t>(Can::Coke)]        = coke;
+    inv.count[static_cast<uint8_t>(Can::Fanta)]       = fanta;
+    inv.count[static_cast<uint8_t>(Can::MountainDew)] = dew;
+    inv.count[static_cast<uint8_t>(Can::Solo)]        = solo;
     return inv;
 }
 
@@ -32,7 +34,7 @@ void test_catalogue()
     testing::suite("catalogue");
 
     CHECK_EQ(catalogue::price_cents(Can::Coke), 200);
-    CHECK_EQ(catalogue::price_cents(Can::Pasito), 200);
+    CHECK_EQ(catalogue::price_cents(Can::Solo), 200);
     testing::case_passed("every drink is $2.00");
 
     // Prices are cents, so $2.00 must be 200 and not 2 or 2000. The 2000 case
@@ -44,10 +46,38 @@ void test_catalogue()
     }
     testing::case_passed("all prices are plausible cent values");
 
-    CHECK(catalogue::is_valid(Can::Pasito));
+    CHECK(catalogue::is_valid(Can::Solo));
     CHECK(!catalogue::is_valid(static_cast<Can>(catalogue::CAN_COUNT)));
     CHECK_EQ(catalogue::price_cents(static_cast<Can>(99)), 0);
     testing::case_passed("out-of-range drink IDs are rejected, not indexed");
+
+    // --- Wire keys must survive a serial payload ---
+    //
+    // A payload is space-separated `key=value` pairs, so a key containing a
+    // space does not fail loudly: it splits into a key nobody looks for and a
+    // stray token, and both ends carry on agreeing about the wrong numbers.
+    // "Mountain Dew" did exactly that. This is the guard that stops the next
+    // multi-word drink from reintroducing it.
+    for (uint8_t i = 0; i < catalogue::CAN_COUNT; i++) {
+        const char *key = catalogue::wire_key(catalogue::from_index(i));
+        CHECK(key != nullptr && key[0] != '\0');
+        for (const char *c = key; *c != '\0'; c++) {
+            CHECK(*c != ' ' && *c != '=' && *c != '*');
+            CHECK(!(*c >= 'A' && *c <= 'Z'));
+        }
+    }
+    testing::case_passed("every wire key is lower case with no spaces");
+
+    // Two drinks sharing a key would make one of them permanently unreadable —
+    // u32_for_key() finds the first match and the second drink's count would
+    // silently never arrive.
+    for (uint8_t i = 0; i < catalogue::CAN_COUNT; i++) {
+        for (uint8_t j = (uint8_t)(i + 1); j < catalogue::CAN_COUNT; j++) {
+            CHECK(strcmp(catalogue::wire_key(catalogue::from_index(i)),
+                         catalogue::wire_key(catalogue::from_index(j))) != 0);
+        }
+    }
+    testing::case_passed("wire keys are unique");
 }
 
 void test_diff()
@@ -65,7 +95,7 @@ void test_diff()
     testing::case_passed("single can taken -> $2.00");
 
     // --- Several drinks, several types ---
-    change = basket::diff(make(5, 5, 5, 5), make(3, 5, 4, 5), b);
+    change = basket::diff(make(5, 5, 5, 5), make(3, 4, 5, 5), b);
     CHECK(change == basket::Change::ItemsTaken);
     CHECK_EQ(taken_of(b, Can::Coke), 2);
     CHECK_EQ(taken_of(b, Can::Fanta), 1);
@@ -90,7 +120,7 @@ void test_diff()
     // --- Swap: one put back, another taken ---
     // A real customer behaviour, and the basket must contain only the drink
     // that left. Charging for the returned one would be theft in reverse.
-    change = basket::diff(make(5, 5, 5, 5), make(6, 5, 4, 5), b);
+    change = basket::diff(make(5, 5, 5, 5), make(6, 4, 5, 5), b);
     CHECK(change == basket::Change::Mixed);
     CHECK_EQ(taken_of(b, Can::Coke), 0);
     CHECK_EQ(taken_of(b, Can::Fanta), 1);

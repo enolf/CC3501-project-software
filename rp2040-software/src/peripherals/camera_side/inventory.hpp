@@ -40,14 +40,18 @@ std::string simulate_dashboard_get();
 constexpr int DEFAULT_PRICE_CENTS = 200;
 constexpr int DEFAULT_UNIQUE_CAN_TYPE_COUNT = 4;
 
+// Kept in step with catalogue::Can purely so that a grep for a drink name does
+// not turn up two different lists and leave you wondering which is live. It is
+// not: catalogue.h is, and this file is not compiled. Note there is no wire_key
+// here, because nothing in this file ever reaches the serial link.
 enum class Can : uint8_t {
     Coke,
-    Sprite,
     Fanta,
-    Pasito
+    MountainDew,
+    Solo
 };
 
-static_assert(static_cast<size_t>(Can::Pasito) < DEFAULT_UNIQUE_CAN_TYPE_COUNT,
+static_assert(static_cast<size_t>(Can::Solo) < DEFAULT_UNIQUE_CAN_TYPE_COUNT,
               "Can enum has more entrees than DEFAULT_UNIQUE_CAN_TYPE_COUNT");
 
 struct Can_state{
@@ -74,9 +78,9 @@ private:
     std::array<Can_state, DEFAULT_UNIQUE_CAN_TYPE_COUNT> m_inventory = {
         {
             {DEFAULT_PRICE_CENTS, 0}, // Coke
-            {DEFAULT_PRICE_CENTS, 0}, // Sprite
             {DEFAULT_PRICE_CENTS, 0}, // Fanta
-            {DEFAULT_PRICE_CENTS, 0}, // Pasito
+            {DEFAULT_PRICE_CENTS, 0}, // Mountain Dew
+            {DEFAULT_PRICE_CENTS, 0}, // Solo
         }
     };
 

@@ -114,6 +114,31 @@ void take_drink(catalogue::Can can)
     print_shelf();
 }
 
+/// Put one drink back on the simulated shelf.
+///
+/// The counterpart to take_drink(), and the only way to exercise the part of
+/// the state machine that lets a customer change their mind: open the door
+/// again, put the drink back, shut it, and watch the basket shrink. Without a
+/// key for this the behaviour could only be tested by standing at a real fridge
+/// with a real camera.
+///
+/// Capped at a full shelf. Nobody can return a drink that was never there, and
+/// letting the count run away would produce baskets the diff has no way to
+/// explain.
+void put_drink_back(catalogue::Can can)
+{
+    const uint8_t index = static_cast<uint8_t>(can);
+    if (shelf.count[index] >= SIM_FULL_SHELF) {
+        printf("  %s: the shelf is already full\n", catalogue::name(can));
+        return;
+    }
+
+    shelf.count[index]++;
+    printf("  put a %s back (silently - the camera has not looked yet)\n",
+           catalogue::name(can));
+    print_shelf();
+}
+
 } // namespace
 
 void init()
@@ -250,8 +275,10 @@ void notify_sale(const basket::Basket &basket, uint32_t cents,
         if (basket.taken[i] == 0) {
             continue;
         }
+        // wire_key(), matching the real backend byte for byte — the whole point
+        // of printing these is that they are the frames stage 12 will send.
         printf("%s%s:%u", first ? "" : ",",
-               catalogue::name(catalogue::from_index(i)), basket.taken[i]);
+               catalogue::wire_key(catalogue::from_index(i)), basket.taken[i]);
         first = false;
     }
     if (first) {
@@ -317,10 +344,20 @@ bool is_healthy()
 bool handle_debug_key(int key)
 {
     switch (key) {
-        case '1': take_drink(catalogue::Can::Coke);   return true;
-        case '2': take_drink(catalogue::Can::Sprite); return true;
-        case '3': take_drink(catalogue::Can::Fanta);  return true;
-        case '4': take_drink(catalogue::Can::Pasito); return true;
+        // Take a drink off the shelf. Order matches catalogue::Can.
+        case '1': take_drink(catalogue::Can::Coke);        return true;
+        case '2': take_drink(catalogue::Can::Fanta);       return true;
+        case '3': take_drink(catalogue::Can::MountainDew); return true;
+        case '4': take_drink(catalogue::Can::Solo);        return true;
+
+        // Put one back: the shifted key directly above the one that took it, so
+        // the pairing is visible on the keyboard rather than something to look
+        // up. Upper case because every unshifted letter in this range is
+        // already spoken for.
+        case 'Q': put_drink_back(catalogue::Can::Coke);        return true;
+        case 'W': put_drink_back(catalogue::Can::Fanta);       return true;
+        case 'E': put_drink_back(catalogue::Can::MountainDew); return true;
+        case 'R': put_drink_back(catalogue::Can::Solo);        return true;
 
         case 'r':
             fill_shelf();

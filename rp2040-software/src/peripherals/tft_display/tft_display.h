@@ -75,6 +75,15 @@ public:
     /// The transaction ended without payment.
     static void show_cancelled();
 
+    /// Every drink was put back after coins had already gone in, so the
+    /// customer is owed `paid_cents` and the machine has no way to return it.
+    ///
+    /// Takes the amount rather than just saying "see somebody" because the
+    /// number is the whole point: it is what the customer has to be able to
+    /// quote, and it is written to the log in the same breath so the two
+    /// accounts can be reconciled.
+    static void show_refund_owed(uint32_t paid_cents);
+
     /// Out of service, with a numeric code. Diagnostics go to the serial log,
     /// not the screen — customers get one clear message (decision D14).
     static void show_fault(uint16_t code);

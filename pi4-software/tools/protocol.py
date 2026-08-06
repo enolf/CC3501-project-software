@@ -1,7 +1,7 @@
 """The RP2040 <-> Pi wire format, in Python. One copy, imported by everything.
 
     import protocol
-    port.write(protocol.build("EVT", "INV", "coke=5 sprite=4"))
+    port.write(protocol.build("EVT", "INV", "coke=5 fanta=4"))
     frame = protocol.parse(line)
     if frame and frame.type == "SCAN": ...
 
@@ -276,7 +276,7 @@ if __name__ == "__main__":
         ("EVT", "DOOR", "state=closed"),
         ("EVT", "TEMP", "rom=28FF1234 c=4.250"),
         ("EVT", "RFID", "uid=DEADBEEF granted=1"),
-        ("EVT", "TXN_START", "id=99 items=coke:2,fanta:1 owed=600"),
+        ("EVT", "TXN_START", "id=99 items=coke:2,mtndew:1 owed=600"),
         ("EVT", "TXN_METHOD", "id=99 method=cash"),
         ("EVT", "COIN", "id=99 denom=200 delta_g=6.60"),
         ("EVT", "COIN_REJECT", "delta_g=4.00"),
@@ -284,7 +284,7 @@ if __name__ == "__main__":
         ("EVT", "HEALTH", "die_c=31 box_g=250 faults=0"),
         ("CMD", "SCAN", ""),
         ("CMD", "SQUARE_LINK", "cents=200 id=99"),
-        ("EVT", "INV", "coke=5 sprite=4 fanta=5 pasito=5 conf=98"),
+        ("EVT", "INV", "coke=5 fanta=4 mtndew=5 solo=5 conf=98"),
         ("RSP", "SQUARE_URL", "id=99 url=https://sq.co/abc123"),
         ("EVT", "SQUARE_PAID", "id=99 order=ORD42"),
         ("RSP", "SQUARE_ERR", "id=99 reason=timeout"),
@@ -342,8 +342,8 @@ if __name__ == "__main__":
     # --- Payloads with spaces, and field extraction ---
     f = parse(build("EVT", "X", "a=1 b=2 c=3 d=4", ms=1).decode().rstrip())
     check("a payload full of spaces survives", f and f.payload == "a=1 b=2 c=3 d=4")
-    check("field() reads a value", field("coke=5 sprite=4", "sprite") == "4")
-    check("field() reports an absent key", field("coke=5", "sprite") is None)
+    check("field() reads a value", field("coke=5 fanta=4", "fanta") == "4")
+    check("field() reports an absent key", field("coke=5", "fanta") is None)
     check("field() does not match the tail of a longer key",
           field("order_id=42", "id") is None)
     check("u32() reads a number", u32("cents=600 id=9", "cents") == 600)

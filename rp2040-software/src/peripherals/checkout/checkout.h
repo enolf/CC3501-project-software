@@ -75,6 +75,16 @@ enum class State : uint8_t {
     /// the system returns to Idle — theft is logged, not prevented.
     Abandoned,
 
+    /// The customer put every drink back AFTER feeding the coin box, so they
+    /// are owed their money and there is nothing left to sell them.
+    ///
+    /// This firmware cannot give change — there is no hopper, only a one-way
+    /// box — so the only honest thing it can do is say so on screen and write
+    /// the amount somewhere a human will find it. Deliberately the same shape
+    /// as the Square late-payment path (decision D17): a refund is a person's
+    /// job, and the log line is the evidence that one is owed.
+    RefundOwed,
+
     /// Not fit to trade (the Pi is unreachable, the scale has failed). Shows a
     /// generic out-of-service screen with a code; details go to the log.
     Fault,
@@ -159,6 +169,7 @@ inline const char *state_name(State state)
         case State::PayOnlineQr:   return "PayOnlineQr";
         case State::ThankYou:      return "ThankYou";
         case State::Abandoned:     return "Abandoned";
+        case State::RefundOwed:    return "RefundOwed";
         case State::Fault:         return "Fault";
         case State::UtilityMenu:   return "UtilityMenu";
         case State::SdResult:      return "SdResult";

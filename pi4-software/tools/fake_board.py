@@ -105,11 +105,15 @@ LOOKBACK_S = 10.0 * DOOR_TAU_RECOVER_S
 # Names and prices come from catalogue.h, which is "THE ONLY PLACE A PRICE
 # APPEARS" on the firmware side. Copied rather than shared because the two live
 # in different languages; if they diverge, catalogue.h is right.
-DRINKS = ("Coke", "Sprite", "Fanta", "Pasito")
+DRINKS = ("Coke", "Fanta", "Mountain Dew", "Solo")
 
-#: The same drinks as they appear on the wire in `EVT INV`. The
-#: firmware lowercases catalogue::name() to build these keys.
-DRINK_KEYS = ("coke", "sprite", "fanta", "pasito")
+#: The same drinks as they appear on the wire, in `EVT INV` and in the
+#: `items=` list of `EVT TXN_START` alike. These are `catalogue::wire_key()`,
+#: a column of its own on the firmware side — NOT the display name lowercased,
+#: which is what they used to be and what broke the moment a drink had a space
+#: in it. A payload is space-separated `key=value` pairs and "Mountain Dew"
+#: does not survive that.
+DRINK_KEYS = ("coke", "fanta", "mtndew", "solo")
 DRINK_DISPLAY = dict(zip(DRINK_KEYS, DRINKS))
 PRICE_CENTS = 200
 
@@ -198,7 +202,10 @@ def _basket(rng):
             break
     items = {}
     for _ in range(count):
-        drink = rng.choice(DRINKS)
+        # Wire keys, not display names. This dict is rendered straight into
+        # `items=` on a TXN_START, and that field is inside a space-separated
+        # payload — a name with a space in it truncates the field at the Pi.
+        drink = rng.choice(DRINK_KEYS)
         items[drink] = items.get(drink, 0) + 1
     return items, count * PRICE_CENTS
 
@@ -855,7 +862,10 @@ class FakeBoard:
         for drink, before in (self._inv_before or {}).items():
             gone = before - counts.get(drink, before)
             if gone > 0:
-                taken[DRINK_DISPLAY[drink]] = gone
+                # Keyed by the WIRE name, which is what goes out in `items=`.
+                # DRINK_DISPLAY is for anything a person reads, and this is not
+                # that — see the note on DRINK_KEYS.
+                taken[drink] = gone
         self._inv_before = counts
 
         # Net zero, or a restock (a negative diff), returns to Idle in silence -

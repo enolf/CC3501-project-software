@@ -20,7 +20,8 @@ What it does automatically:
 
 Type these and press Enter to drive it:
 
-    1 2 3 4   take a Coke / Sprite / Fanta / Pasito off the shelf
+    1 2 3 4   take a Coke / Fanta / Mountain Dew / Solo off the shelf
+    Q W E R   put one back (the shifted key above the one that took it)
     r         restock
     i         show the shelf
     p         tell the board Square reports the payment received
@@ -53,7 +54,9 @@ except ImportError:
 
 # --- Simulated world --------------------------------------------------------
 
-DRINKS = ["coke", "sprite", "fanta", "pasito"]
+#: Wire keys, matching catalogue::wire_key() on the board. Order matters: it is
+#: what the 1-4 and Q-R keys index into.
+DRINKS = ["coke", "fanta", "mtndew", "solo"]
 FULL_SHELF = 5
 
 # How long the "camera" takes to answer a scan. Deliberately not instant: an
@@ -179,6 +182,18 @@ class FakePi:
             else:
                 self.shelf[drink] -= 1
                 print(f"      took a {drink} (silently - no scan yet)")
+        elif text in ("Q", "W", "E", "R"):
+            # Put one back. Handled HERE and not forwarded as a debug keypress,
+            # because with the serial backend compiled the board has no shelf of
+            # its own — this process is the camera, so this process owns the
+            # drinks. It is also the only way to exercise the board's
+            # change-your-mind path against real firmware.
+            drink = DRINKS["QWER".index(text)]
+            if self.shelf[drink] >= FULL_SHELF:
+                print(f"      the shelf is already full of {drink}")
+            else:
+                self.shelf[drink] += 1
+                print(f"      put a {drink} back (silently - no scan yet)")
         elif text == "r":
             self.shelf = {d: FULL_SHELF for d in DRINKS}
             print("      shelf restocked")

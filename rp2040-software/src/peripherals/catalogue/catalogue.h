@@ -23,11 +23,16 @@ namespace catalogue {
 /// The drink types the camera can distinguish. The Pi reports counts in this
 /// same order, so the numeric values matter: they index the table below and the
 /// inventory arrays in basket.h.
+///
+/// THE ORDER MATCHES THE VISION PROGRAM'S `colors_vec`. picapture classifies
+/// pixels against a list of brand colours and reports them positionally, so a
+/// drink inserted in the middle here without the same edit there silently
+/// relabels every count.
 enum class Can : uint8_t {
-    Coke   = 0,
-    Sprite = 1,
-    Fanta  = 2,
-    Pasito = 3,
+    Coke        = 0,
+    Fanta       = 1,
+    MountainDew = 2,
+    Solo        = 3,
 };
 
 /// How many drink types exist. Used to size every per-drink array.
@@ -35,17 +40,32 @@ constexpr uint8_t CAN_COUNT = 4;
 
 /// One row of the catalogue.
 struct Entry {
-    const char *name;       ///< Shown on the TFT and in the sale record
+    const char *name;       ///< Shown on the TFT and on the customer's receipt
+    const char *wire_key;   ///< How this drink is named in a serial payload
     uint32_t    price_cents;
 };
 
 /// ===== THE PRICE TABLE =====
 /// Order must match the Can enum above.
+///
+/// WHY `wire_key` IS NOT JUST `name` LOWERCASED
+/// --------------------------------------------
+/// It used to be: the INV handler lowercased name() to build the key it looked
+/// for. That worked only for as long as every drink happened to be one word.
+/// "Mountain Dew" broke it, and not visibly — a payload is space-separated
+/// `key=value` pairs, so `mountain dew=5` splits into a key nobody asked for
+/// and a stray token, and `items=Mountain Dew:1 owed=200` truncates to
+/// `items=Mountain` at the first space. Both ends would have gone on running
+/// and quietly agreed on the wrong numbers.
+///
+/// So the wire name is now its own column: short, lower case, no spaces, and
+/// free to differ from what the customer reads on the screen. Keep it that way
+/// — a drink named "Solo & Lime" must not be able to reach the link.
 inline constexpr Entry TABLE[CAN_COUNT] = {
-    /* Coke   */ { "Coke",   200 },
-    /* Sprite */ { "Sprite", 200 },
-    /* Fanta  */ { "Fanta",  200 },
-    /* Pasito */ { "Pasito", 200 },
+    /* Coke        */ { "Coke",         "coke",   200 },
+    /* Fanta       */ { "Fanta",        "fanta",  200 },
+    /* MountainDew */ { "Mountain Dew", "mtndew", 200 },
+    /* Solo        */ { "Solo",         "solo",   200 },
 };
 
 /// True if `value` is a drink type this build knows about. Worth checking
@@ -61,6 +81,17 @@ constexpr bool is_valid(Can can)
 constexpr const char *name(Can can)
 {
     return is_valid(can) ? TABLE[static_cast<uint8_t>(can)].name : "Unknown";
+}
+
+/// How this drink is named in a serial payload. ALWAYS use this, never name(),
+/// when building or reading a frame — see the note on the table above.
+///
+/// Returns "unknown" rather than reading past the end of the table. That is a
+/// key no sender will ever emit, so an out-of-range value fails to match
+/// instead of matching the wrong drink.
+constexpr const char *wire_key(Can can)
+{
+    return is_valid(can) ? TABLE[static_cast<uint8_t>(can)].wire_key : "unknown";
 }
 
 /// Price in whole cents. Returns 0 for an out-of-range value; a caller that
