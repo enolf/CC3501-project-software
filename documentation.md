@@ -540,7 +540,22 @@ Classical colour-blob vision, no machine learning. Per frame:
 4. **Classify every pixel to its nearest brand**, once, for all four drinks.
 5. Per brand: mask, morphological open (speckle) then close (glare bands),
    `findContours`, filter by area, count.
-6. Print one line: `coke:5,fanta:4,mtndew:5,solo:3;`
+6. Print one line: `coke:5,fanta:4,mtndew:5,solo:3;conf=87;`
+
+**`conf=` is how a wrong count becomes visible.** Every other fault in this
+system announces itself — a corrupt frame fails its CRC, a missing payment has
+no row. A miscounted shelf produces a perfectly well-formed packet with the
+wrong numbers in it, and nothing anywhere reports a fault. The only evidence
+available is how equivocal the measurement was, so it is measured and carried:
+how far each blob sits from a whole number of cans, whether the drink had ever
+been calibrated, how much was discarded by the area filter, and how the frame
+was exposed. Deductions from 100 rather than a product of factors, because the
+number has to be explainable — `--debug-all`'s `a` key prints the arithmetic.
+
+It is a **per-frame** figure: how well-formed this one look was. It is not the
+same as the confidence eventually reported to the board, which also has to
+account for whether successive frames agreed. One says the picture was good; the
+other says the shelf held still.
 
 **Why nearest-centre and not `inRange` per brand.** The original ran an
 independent threshold per drink against the full frame. Coke, Fanta, Mountain

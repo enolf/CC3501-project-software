@@ -500,6 +500,86 @@ bool SampleSet::to_brand(Brand &brand, std::string *error) const
     return true;
 }
 
+int confidence(const Quality &quality, std::string *why)
+{
+    double score = 100.0;
+    std::ostringstream working;
+    working << "100";
+
+    auto deduct = [&](double amount, const std::string &because) {
+        if (amount <= 0.0) return;
+        score -= amount;
+        working << " - " << (int)std::lround(amount) << " (" << because << ")";
+    };
+
+    // --- Nobody has measured a can ---
+    if (quality.brands > 0 && quality.uncalibrated > 0) {
+        deduct(Config::CONF_UNCALIBRATED_PENALTY *
+                   (double)quality.uncalibrated / (double)quality.brands,
+               std::to_string(quality.uncalibrated) + " of " +
+                   std::to_string(quality.brands) +
+                   " drinks have no can area measured");
+    }
+
+    // --- Blobs that do not divide cleanly into cans ---
+    //
+    // Doubled because a single term runs 0 to 0.5: halfway between two whole
+    // numbers of cans is as ambiguous as a blob can be, and should spend the
+    // whole of this deduction rather than half of it.
+    if (quality.ambiguity_blobs > 0) {
+        const double mean =
+            quality.ambiguity_sum / (double)quality.ambiguity_blobs;
+        std::ostringstream detail;
+        detail.precision(2);
+        detail << std::fixed << "blobs average " << mean
+               << " of a can away from a whole number";
+        deduct(Config::CONF_AMBIGUITY_PENALTY * 2.0 * mean, detail.str());
+    }
+
+    // --- Things seen and not explained ---
+    //
+    // An absolute count rather than a proportion of the blobs accepted. A
+    // proportion would let a full shelf absorb a reject that an empty one could
+    // not, and the reject means the same thing either way: something was there
+    // and the pipeline had no account of it.
+    const int rejects = quality.rejected_small + quality.rejected_large;
+    if (rejects > 0) {
+        deduct(std::min(Config::CONF_REJECT_PENALTY_MAX,
+                        Config::CONF_REJECT_PENALTY * rejects),
+               std::to_string(rejects) + " blob(s) thrown away by the area "
+                                         "filter");
+    }
+
+    // --- Exposure ---
+    //
+    // Ramped rather than a cliff. There is no brightness at which hue abruptly
+    // stops meaning anything; it degrades, and so should this.
+    if (quality.mean_value < Config::CONF_VALUE_FLOOR) {
+        const double excursion =
+            (Config::CONF_VALUE_FLOOR - quality.mean_value) /
+            Config::CONF_VALUE_FLOOR;
+        deduct(Config::CONF_EXPOSURE_PENALTY * excursion,
+               "the picture is dark (mean brightness " +
+                   std::to_string((int)std::lround(quality.mean_value)) +
+                   " of 255)");
+    } else if (quality.mean_value > Config::CONF_VALUE_CEILING) {
+        const double excursion =
+            (quality.mean_value - Config::CONF_VALUE_CEILING) /
+            (255.0 - Config::CONF_VALUE_CEILING);
+        deduct(Config::CONF_EXPOSURE_PENALTY * excursion,
+               "the picture is washed out (mean brightness " +
+                   std::to_string((int)std::lround(quality.mean_value)) +
+                   " of 255)");
+    }
+
+    const int result = (int)std::lround(std::max(0.0, std::min(100.0, score)));
+    if (why != nullptr) {
+        working << " = " << result;
+        *why = working.str();
+    }
+    return result;
+}
+
 bool normalise(Config &config, std::string *note)
 {
     std::ostringstream changes;

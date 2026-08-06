@@ -421,6 +421,157 @@ void test_normalise()
     if (!note.empty()) printf("        %s\n", note.c_str());
 }
 
+/// A frame with nothing wrong with it: everything calibrated, blobs landing on
+/// whole cans, nothing discarded, sensibly exposed.
+vision::Quality perfect_frame()
+{
+    vision::Quality quality;
+    quality.brands = 4;
+    quality.uncalibrated = 0;
+    quality.ambiguity_blobs = 5;
+    quality.ambiguity_sum = 0.0;
+    quality.mean_value = 130.0;
+    return quality;
+}
+
+void test_confidence()
+{
+    suite("confidence");
+
+    std::string why;
+    check("a clean frame is fully trusted",
+          vision::confidence(perfect_frame(), &why) == 100);
+    check("the reasoning is written out even when nothing was deducted",
+          why.find("100") != std::string::npos);
+
+    // --- Nothing to compare against ---
+    //
+    // The default config ships with every can area at zero, so this is what a
+    // freshly built, never-tuned Pi reports. It should NOT look like a frame
+    // somebody checked and was happy with.
+    vision::Quality uncalibrated = perfect_frame();
+    uncalibrated.uncalibrated = 4;
+    uncalibrated.ambiguity_blobs = 0;
+    uncalibrated.ambiguity_sum = 0.0;
+    check("a wholly uncalibrated frame is not fully trusted",
+          vision::confidence(uncalibrated) < 100);
+
+    vision::Quality half = uncalibrated;
+    half.uncalibrated = 2;
+    check("calibrating half the drinks recovers half the deduction",
+          vision::confidence(half) > vision::confidence(uncalibrated) &&
+          vision::confidence(half) < 100);
+
+    // --- The blob that could be one can or two ---
+    //
+    // The measurement this whole figure exists for. A blob at 1.5x the size of
+    // one can rounds to two and could just as well have been one, and nothing
+    // else anywhere in the pipeline can tell that apart from a blob at 2.0x:
+    // both produce a well-formed packet saying "2".
+    vision::Quality ambiguous = perfect_frame();
+    ambiguous.ambiguity_blobs = 1;
+    ambiguous.ambiguity_sum = 0.5;
+    why.clear();
+    const int worst = vision::confidence(ambiguous, &why);
+    check("a blob halfway between one can and two is heavily distrusted",
+          worst <= 50);
+    check("and the reason names the area evidence",
+          why.find("whole number") != std::string::npos);
+
+    vision::Quality slightly_off = perfect_frame();
+    slightly_off.ambiguity_blobs = 1;
+    slightly_off.ambiguity_sum = 0.05;
+    check("a blob nearly on a whole can is barely penalised",
+          vision::confidence(slightly_off) >= 90 &&
+          vision::confidence(slightly_off) < 100);
+
+    // Ambiguity is a mean, not a sum: one doubtful blob among twenty good ones
+    // is a far better frame than one doubtful blob on its own, and a sum would
+    // score them identically.
+    vision::Quality diluted = perfect_frame();
+    diluted.ambiguity_blobs = 20;
+    diluted.ambiguity_sum = 0.5;
+    check("one doubtful blob among many scores better than one on its own",
+          vision::confidence(diluted) > vision::confidence(ambiguous));
+
+    // --- Things seen and not accounted for ---
+    vision::Quality rejects = perfect_frame();
+    rejects.rejected_small = 1;
+    check("a discarded blob costs something",
+          vision::confidence(rejects) < 100);
+
+    vision::Quality many_rejects = perfect_frame();
+    many_rejects.rejected_small = 50;
+    many_rejects.rejected_large = 50;
+    // Capped, because otherwise a frame with a noisy mask would score zero and
+    // drown out the area evidence, which is the part that actually bears on
+    // whether the count is right.
+    check("the discard deduction is capped rather than unbounded",
+          vision::confidence(many_rejects) >=
+              (int)(100.0 - vision::Config::CONF_REJECT_PENALTY_MAX -
+                    vision::Config::CONF_UNCALIBRATED_PENALTY));
+
+    // --- Exposure ---
+    //
+    // The failure that actually happened: ae-enable=false with no exposure time
+    // blacked out the picture, every count went to zero, and the packets were
+    // perfectly well-formed. Confidence has to be the thing that notices.
+    vision::Quality dark = perfect_frame();
+    dark.mean_value = 3.0;
+    dark.ambiguity_blobs = 0;
+    why.clear();
+    check("a nearly black frame is heavily distrusted",
+          vision::confidence(dark, &why) < 50);
+    check("and says the picture was dark rather than blaming the tuning",
+          why.find("dark") != std::string::npos);
+
+    vision::Quality washed_out = perfect_frame();
+    washed_out.mean_value = 252.0;
+    check("a blown-out frame is distrusted too",
+          vision::confidence(washed_out) < 50);
+
+    // Ramped, not a cliff: there is no brightness at which hue abruptly stops
+    // meaning anything, so a frame just below the floor must not score the same
+    // as a black one.
+    vision::Quality dim = perfect_frame();
+    dim.mean_value = vision::Config::CONF_VALUE_FLOOR - 5.0;
+    check("dim scores between well-lit and black",
+          vision::confidence(dim) < 100 &&
+          vision::confidence(dim) > vision::confidence(dark));
+
+    vision::Quality just_inside = perfect_frame();
+    just_inside.mean_value = vision::Config::CONF_VALUE_FLOOR;
+    check("exactly at the floor is not yet penalised",
+          vision::confidence(just_inside) == 100);
+
+    // --- The number stays a percentage ---
+    //
+    // Deductions are independent and several can apply at once, so their total
+    // can exceed 100. A negative confidence would be nonsense on a dashboard
+    // and would break any downstream threshold.
+    vision::Quality everything_wrong;
+    everything_wrong.brands = 4;
+    everything_wrong.uncalibrated = 4;
+    everything_wrong.ambiguity_blobs = 3;
+    everything_wrong.ambiguity_sum = 1.5;
+    everything_wrong.rejected_small = 20;
+    everything_wrong.rejected_large = 5;
+    everything_wrong.mean_value = 0.0;
+    const int floor_value = vision::confidence(everything_wrong);
+    check("confidence never goes below zero", floor_value >= 0);
+    check("an entirely broken frame reports close to zero", floor_value <= 10);
+
+    // An empty shelf is not a bad frame. Reporting "none of anything" correctly
+    // has to score well, or the figure would mean two different things at once
+    // and no threshold could be set on it.
+    vision::Quality empty_shelf;
+    empty_shelf.brands = 4;
+    empty_shelf.uncalibrated = 0;
+    empty_shelf.mean_value = 120.0;
+    check("a correctly-seen empty shelf is fully trusted",
+          vision::confidence(empty_shelf) == 100);
+}
+
 void test_hue_arithmetic()
 {
     suite("hue arithmetic");
@@ -540,6 +691,7 @@ int main()
     test_refusals();
     test_validation();
     test_normalise();
+    test_confidence();
 
     printf("\n=========================================\n");
     printf("%d checks, %d failed\n", checks, failures);

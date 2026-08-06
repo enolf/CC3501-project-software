@@ -295,6 +295,59 @@ struct Config {
     /// be missed, rarely enough not to become the log.
     static constexpr int DARK_FRAME_WARN_REPEAT = 240;
 
+    // --- How much this frame is worth believing ---
+    //
+    // Every count line carries a `conf=` figure, and these are the deductions
+    // that produce it. Deductions from 100 rather than factors multiplied
+    // together, because the number has to be explainable: "60, because two
+    // drinks are uncalibrated and a blob was thrown away" is actionable, and
+    // "0.6" is not.
+    //
+    // The whole point is that a wrong count is otherwise INVISIBLE. Every other
+    // fault in this system announces itself — a bad frame fails its CRC, a
+    // missing payment has no row. A miscounted shelf produces a perfectly
+    // well-formed packet with the wrong numbers in it, and the only evidence
+    // available is how equivocal the measurement was.
+
+    /// Deducted when no brand has had its can area measured, scaled by the
+    /// fraction that have not. An uncalibrated brand counts one can per blob,
+    /// so it cannot notice two touching cans and cannot contribute the area
+    /// evidence below. It should say so rather than look as sure as a
+    /// calibrated one.
+    static constexpr double CONF_UNCALIBRATED_PENALTY = 20.0;
+
+    /// Deducted for a blob sitting exactly halfway between two whole numbers of
+    /// cans, scaled down to zero for a blob at a whole number. The largest of
+    /// the deductions because it is the most direct evidence there is: a blob
+    /// measuring 1.5 cans genuinely could be either, and whichever way it
+    /// rounds decides whether somebody is charged.
+    static constexpr double CONF_AMBIGUITY_PENALTY = 50.0;
+
+    /// Deducted per blob thrown out for being too small or too large, up to the
+    /// cap below. A rejected blob is a thing the camera saw and could not
+    /// explain; it is usually noise, and occasionally it is a can at an angle.
+    static constexpr double CONF_REJECT_PENALTY = 8.0;
+    static constexpr double CONF_REJECT_PENALTY_MAX = 24.0;
+
+    /// How large a discarded blob has to be, as a fraction of
+    /// `contour_min_area`, before it counts against confidence at all.
+    ///
+    /// Without this the deduction would sit at its cap permanently and carry no
+    /// information: any real mask contains dozens of few-pixel fragments per
+    /// frame — a letter of a label, an edge, a speck of the wrong colour — and
+    /// every one of them is a discard. None of them is evidence about the
+    /// count. A blob at four fifths of a can very much is.
+    static constexpr double CONF_NOTABLE_REJECT_FRACTION = 0.5;
+
+    /// Deducted for an exposure right at the end of its range, ramping in from
+    /// the bounds below. Also large, because outside these bounds hue is not
+    /// measured so much as guessed.
+    static constexpr double CONF_EXPOSURE_PENALTY = 60.0;
+
+    /// The mean-brightness band within which no exposure deduction is taken.
+    static constexpr double CONF_VALUE_FLOOR = 40.0;
+    static constexpr double CONF_VALUE_CEILING = 215.0;
+
     // --- Slider ranges for the debug UI ---
     //
     // Here rather than in the UI code so that a value loaded from a file which
@@ -409,6 +462,56 @@ private:
     std::vector<int> saturations_;
     std::vector<int> values_;
 };
+
+// --- How much this frame is worth believing -------------------------------
+
+/// What was observed about one frame, as far as its trustworthiness goes.
+///
+/// Filled in by the pipeline, turned into a number by `confidence()` below.
+/// Separated from the OpenCV code for the usual reason — the arithmetic is what
+/// is worth testing, and it needs no camera to test.
+///
+/// THIS IS A PER-FRAME FIGURE. It says how well-formed this one look was. It is
+/// NOT the confidence eventually reported to the board, which also has to
+/// account for whether successive frames agreed with each other. One says "the
+/// picture was good"; the other says "the shelf held still". Conflating them
+/// would let a run of identically bad frames look like a settled answer.
+struct Quality {
+    /// How many brands were looked for, and how many of those have no
+    /// `can_area` measured.
+    int brands = 0;
+    int uncalibrated = 0;
+
+    /// How cleanly the counted blobs divide into whole cans. Only calibrated
+    /// brands contribute — without a can area there is nothing to divide by,
+    /// which is why being uncalibrated is a deduction in its own right rather
+    /// than free.
+    int ambiguity_blobs = 0;
+    double ambiguity_sum = 0.0;   ///< Each term 0 (a whole can) to 0.5 (halfway)
+
+    /// Blobs discarded by the area filter. Kept apart because they mean
+    /// different things: lots of small ones is noise or a tuning problem, a
+    /// large one is usually cans merging beyond what the filter allows.
+    int rejected_small = 0;
+    int rejected_large = 0;
+
+    /// Mean brightness of the frame, 0-255.
+    ///
+    /// The candidate-pixel fraction is deliberately NOT an input here, even
+    /// though it is what the dark-frame detector uses. An empty shelf honestly
+    /// has almost no candidate pixels, and reporting low confidence for
+    /// correctly seeing nothing would make the figure mean two different things
+    /// at once. Brightness separates the two cases, which is exactly the job it
+    /// already does for the dark-frame warning.
+    double mean_value = 0.0;
+};
+
+/// How much to believe this frame, 0-100.
+///
+/// With `why`, also writes the arithmetic out — every deduction taken, in
+/// words. That readout is the point: a bare number tells you something is
+/// wrong, and the breakdown tells you which knob it is about.
+int confidence(const Quality &quality, std::string *why = nullptr);
 
 /// Snap the values that have to take a particular shape, and say what changed.
 ///

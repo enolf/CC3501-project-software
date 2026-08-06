@@ -3,7 +3,7 @@
 Counts the drinks on the shelf from the Pi camera, and prints what it sees.
 
 ```
-coke:5,fanta:4,mtndew:5,solo:3;
+coke:5,fanta:4,mtndew:5,solo:3;conf=87;
 ```
 
 One line per look, on stdout, forever. It opens no serial port and talks to
@@ -51,6 +51,45 @@ Three modes, and one of them must be given:
 under systemd with no display attached. The debug modes need a real display; a
 direct HDMI output is much better than VNC or X forwarding.
 
+## `conf=` — how sure it is
+
+Every other fault in this system announces itself. A corrupt serial frame fails
+its CRC; a payment that never happened has no row. **A miscounted shelf produces
+a perfectly well-formed packet with the wrong numbers in it**, and nothing
+anywhere reports a fault. The only evidence available is how equivocal the
+measurement was, so it is measured and sent.
+
+Four deductions from 100, all of them things actually observed:
+
+| Deduction | Because |
+| --- | --- |
+| Uncalibrated drinks | A drink with no `can_area` counts one can per blob. It cannot notice two touching cans and cannot supply the area evidence below, so it should not look as sure as one that can. |
+| Blobs off a whole can | The most direct evidence there is. A blob at 1.02× or 1.98× the size of one can is telling you plainly what it is; one at 1.5× is a coin toss, and how it rounds decides whether somebody is charged. |
+| Discarded blobs | Something the camera saw and could not account for. Only ones at least half of `contour_min_area` count — every mask holds dozens of few-pixel fragments and none of them says anything about the count. |
+| Exposure | Outside a sensible brightness band, hue is not measured so much as guessed. Ramped, not a cliff. |
+
+Deductions rather than factors multiplied together, because the figure has to be
+explainable. "62, because two drinks are uncalibrated and a blob landed halfway
+between one can and two" is actionable; "0.62" is not. The `a` key prints the
+arithmetic in full:
+
+```
+  confidence 62: 100 - 10 (2 of 4 drinks have no can area measured)
+                     - 28 (blobs average 0.28 of a can away from a whole number) = 62
+```
+
+**An empty shelf is not a bad frame.** Correctly seeing nothing scores 100. The
+candidate-pixel fraction is deliberately not an input here even though the
+dark-frame detector uses it, because an empty shelf honestly has almost no
+candidate pixels — letting that lower the score would make the figure mean two
+different things at once and no threshold could be set on it. Brightness
+separates the two cases, which is the job it already does.
+
+This is a **per-frame** figure: how well-formed this one look was. It is not the
+confidence eventually sent to the board, which also has to account for whether
+successive frames agreed with each other. One says the picture was good; the
+other says the shelf held still.
+
 ## Tuning
 
 Every threshold lives in `src/vision_config.h`, and is loaded at startup from
@@ -71,7 +110,7 @@ Retuning does not need a compiler:
 | --- | --- |
 | `1`–`4` | Choose which drink the next two clicks tune |
 | click ×2 | Sample **one** can twice — its brightest part, then its dullest |
-| `a` | Print the size of every blob being counted right now |
+| `a` | Print every blob's size, and what the confidence figure is made of |
 | `c` | With **one** can of the selected drink in view: record how big one can is |
 | `u` | Undo the last sample |
 | `r` | Reset the selected drink to its built-in colour |
@@ -102,7 +141,9 @@ roughly 29–45, leaving half of every can undetected.
 
 In the debug modes, **counts print only when they change** — a steady shelf is
 silent, and a wandering one is obvious. Headless still emits every period,
-because that is the protocol.
+because that is the protocol. The change is judged on the counts alone:
+confidence drifts a point or two every frame, so including it would make every
+frame a change and the quiet shelf would be gone.
 
 The sliders and the clicks write straight into the live config, so the effect
 shows on the very next frame. `s` writes exactly what you are looking at, and
@@ -235,6 +276,8 @@ rather than guessing — press `a` with a known shelf and read the real numbers:
   blob areas (min=2500 max=40000):
     Coke           1 blob(s) -> 1 can(s) [one can = 5400]:  5380
     Fanta          1 blob(s) -> 1 can(s) [uncalibrated: press c]:  5210
+  confidence 89: 100 - 10 (2 of 4 drinks have no can area measured)
+                     - 1 (blobs average 0.01 of a can away from a whole number) = 89
 ```
 
 **A blob is not a can.** Two cans of the same drink standing against each other

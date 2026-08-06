@@ -3,7 +3,15 @@
 // Reads the Pi camera, decides how many of each drink it can see, and prints
 // one line per look:
 //
-//     coke:5,fanta:4,mtndew:5,solo:3;
+//     coke:5,fanta:4,mtndew:5,solo:3;conf=87;
+//
+// The `conf=` is how much to believe that line, 0-100. It exists because a
+// miscounted shelf is otherwise INVISIBLE: every other fault in this system
+// announces itself — a corrupt serial frame fails its CRC, a payment that never
+// happened has no row — but a wrong count produces a perfectly well-formed
+// packet with the wrong numbers in it. The only evidence available is how
+// equivocal the measurement was, so it is measured and carried. See
+// vision::Quality.
 //
 // It talks to nobody. `fridged` runs this as a subprocess and reads its
 // standard output, which is what keeps the serial link owned by exactly one
@@ -20,6 +28,7 @@
 //   3. convert to HSV
 //   4. classify             assign every pixel to its NEAREST brand, once
 //   5. per brand            clean up the mask, find contours, count them
+//   6. score                how equivocal was any of that
 //
 // Step 4 is the one worth understanding. The obvious approach — one inRange()
 // per brand — is what this did first, and it does not work here: Coke, Fanta,
@@ -294,7 +303,8 @@ void build_mask(int brand_index, Frames &frames, const vision::Config &config)
 /// zero. Nothing said so; the packets were well-formed and entirely wrong.
 /// `annotate` now suppresses the drawing alone.
 std::vector<Detection> find_cans(Frames &frames, const vision::Config &config,
-                                 const vision::Brand &brand, bool annotate)
+                                 const vision::Brand &brand, bool annotate,
+                                 vision::Quality &quality)
 {
     std::vector<Detection> found;
     std::vector<std::vector<cv::Point>> contours;
@@ -309,9 +319,27 @@ std::vector<Detection> find_cans(Frames &frames, const vision::Config &config,
                                cv::arcLength(contour, true);
         cv::approxPolyDP(contour, simplified, epsilon, true);
 
+        // A rejected blob is not nothing. It is a region of this drink's colour
+        // that the pipeline saw and then decided not to account for, and it is
+        // counted so the frame's confidence can say so — a discard that leaves
+        // no trace anywhere is how a count goes wrong quietly.
+        //
+        // Only the ones big enough to have been a can, though. Every mask
+        // contains dozens of few-pixel fragments and none of them says anything
+        // about the count; counting those would peg the deduction at its cap
+        // every single frame and the figure would stop varying at all.
         const double area = cv::contourArea(simplified);
-        if (area < config.contour_min_area) continue;
-        if (area > config.contour_max_area) continue;
+        if (area < config.contour_min_area) {
+            if (area >= config.contour_min_area *
+                            vision::Config::CONF_NOTABLE_REJECT_FRACTION) {
+                quality.rejected_small++;
+            }
+            continue;
+        }
+        if (area > config.contour_max_area) {
+            quality.rejected_large++;
+            continue;
+        }
 
         const cv::Moments moments = cv::moments(simplified);
         if (moments.m00 <= 0) continue;
@@ -364,10 +392,54 @@ int count_cans(const std::vector<Detection> &blobs, const vision::Brand &brand)
     return total;
 }
 
+/// Record how cleanly one brand's blobs divide into whole cans.
+///
+/// The most direct evidence available about whether a count is right. Area is
+/// nearly linear in the number of cans, so a blob at 1.02× or 1.98× the size of
+/// one can is telling you plainly what it is — and a blob at 1.5× is a coin
+/// toss whose outcome decides whether somebody gets charged. Nothing else in
+/// the pipeline can see that distinction: both round to a number and both
+/// produce an identical, entirely well-formed packet.
+///
+/// An uncalibrated brand contributes nothing here, because there is nothing to
+/// divide by. That is not free — `confidence()` deducts for it separately,
+/// rather than letting a brand that cannot be checked look as sure as one that
+/// was checked and passed.
+void tally_areas(const std::vector<Detection> &blobs,
+                 const vision::Brand &brand, vision::Quality &quality)
+{
+    quality.brands++;
+
+    if (brand.can_area <= 0) {
+        quality.uncalibrated++;
+        return;
+    }
+
+    for (const Detection &blob : blobs) {
+        const double ratio = blob.area / (double)brand.can_area;
+
+        // Floored at one can, matching count_cans: a blob at 0.3× is still
+        // counted as the one can it presumably is. The gap is capped at 0.5
+        // because that is already maximally ambiguous — being further out than
+        // halfway does not make it more of a coin toss, it makes it a blob that
+        // is the wrong size, which the area filter is the thing to complain
+        // about.
+        const double whole = std::max(1.0, std::round(ratio));
+        quality.ambiguity_sum += std::min(0.5, std::fabs(ratio - whole));
+        quality.ambiguity_blobs++;
+    }
+}
+
 /// `coke:5,fanta:4,mtndew:5,solo:3;`
 ///
 /// Wire keys rather than initials, so the reader needs no letter-to-drink table
 /// of its own to keep in step with catalogue.h.
+///
+/// The counts ALONE. `conf=` is appended by the caller rather than added here,
+/// because the debug modes print only when the counts change and the confidence
+/// figure moves a point or two every frame — folded into one string, "print on
+/// change" would print on every frame and the quiet-shelf behaviour that makes
+/// instability visible would be gone.
 std::string serialise(const std::vector<std::vector<Detection>> &per_brand,
                       const vision::Config &config)
 {
@@ -592,7 +664,8 @@ void print_debug_keys(const vision::Config &config)
            config.brands.size());
     printf("  click  twice on ONE can - its brightest part, then its dullest\n");
     printf("         (the drink being tuned is shown on the camera window)\n");
-    printf("  a      print the size of every blob being counted right now\n");
+    printf("  a      print the size of every blob being counted right now,\n");
+    printf("         and what the frame's confidence figure is made of\n");
     printf("  c      with ONE can of the selected drink in view: record how\n");
     printf("         big a single can is, so touching cans count separately\n");
     printf("  u      undo the last sample\n");
@@ -617,7 +690,8 @@ void print_debug_keys(const vision::Config &config)
 /// twice that. It is also how contour_min_area and contour_max_area get set
 /// from measurements rather than from guesses.
 void print_areas(const std::vector<std::vector<Detection>> &per_brand,
-                 const vision::Config &config, const FrameStats &stats)
+                 const vision::Config &config, const FrameStats &stats,
+                 const vision::Quality &quality)
 {
     // Exposure first, because if this is wrong nothing below means anything.
     printf("  picture: mean brightness %.0f of 255, %ld of %ld pixels "
@@ -643,6 +717,20 @@ void print_areas(const std::vector<std::vector<Detection>> &per_brand,
             printf("  %.0f", detection.area);
         }
         printf("\n");
+    }
+
+    // The same arithmetic that produced the `conf=` on the wire, written out.
+    // A confidence figure nobody can account for is one nobody will act on: the
+    // useful question is never "is 62 bad" but "which of these four things cost
+    // the 38", and that is answerable only if the deductions are shown.
+    std::string why;
+    const int score = vision::confidence(quality, &why);
+    printf("  confidence %d: %s\n", score, why.c_str());
+    if (quality.rejected_small > 0 || quality.rejected_large > 0) {
+        printf("    (%d discarded for being under min area, %d for being over "
+               "max - only ones at least %.0f%% of min area are counted)\n",
+               quality.rejected_small, quality.rejected_large,
+               100.0 * vision::Config::CONF_NOTABLE_REJECT_FRACTION);
     }
     fflush(stdout);
 }
@@ -838,8 +926,10 @@ int main(int argc, char *argv[])
     vision::Brand undo_brand;
     int undo_index = -1;
 
-    /// Last packet printed, for the debug modes' print-on-change.
-    std::string last_packet;
+    /// Last counts printed, for the debug modes' print-on-change. The COUNTS,
+    /// not the whole packet: confidence moves a point or two every frame, so
+    /// including it would make every frame a change.
+    std::string last_counts;
 
     /// Consecutive frames with almost nothing bright enough to be a drink.
     int dark_frames = 0;
@@ -899,12 +989,16 @@ int main(int argc, char *argv[])
         // headless has nobody to show it to.
         const bool annotate = (mode != Mode::Headless);
 
+        vision::Quality quality;
+        quality.mean_value = stats.mean_value;
+
         std::vector<std::vector<Detection>> per_brand;
         per_brand.reserve(config.brands.size());
         for (size_t i = 0; i < config.brands.size(); i++) {
             build_mask((int)i, frames, config);
             per_brand.push_back(
-                find_cans(frames, config, config.brands[i], annotate));
+                find_cans(frames, config, config.brands[i], annotate, quality));
+            tally_areas(per_brand.back(), config.brands[i], quality);
         }
 
         // The one line anybody downstream reads. std::endl rather than '\n'
@@ -919,12 +1013,20 @@ int main(int argc, char *argv[])
         // exactly how a tuning session goes wrong without anybody noticing.
         // Printing on change also makes instability visible rather than
         // something to spot in a wall of identical lines.
-        const std::string packet = serialise(per_brand, config);
+        //
+        // The change is judged on the COUNTS, not on the whole line. Confidence
+        // drifts by a point or two every frame, so comparing the full packet
+        // would make every frame a change and the quiet shelf would go away.
+        const std::string counts = serialise(per_brand, config);
+        const std::string packet =
+            counts + "conf=" + std::to_string(vision::confidence(quality)) +
+            ";";
+
         if (mode == Mode::Headless) {
             std::cout << packet << std::endl;
-        } else if (packet != last_packet) {
+        } else if (counts != last_counts) {
             std::cout << packet << std::endl;
-            last_packet = packet;
+            last_counts = counts;
         }
 
         if (mode != Mode::Headless) {
@@ -953,7 +1055,7 @@ int main(int argc, char *argv[])
             } else if (key == 'p') {
                 print_config(config, sampling.brand_index);
             } else if (key == 'a') {
-                print_areas(per_brand, config, stats);
+                print_areas(per_brand, config, stats, quality);
             } else if (key == 'c') {
                 vision::Brand &brand = config.brands[sampling.brand_index];
                 undo_brand = brand;
