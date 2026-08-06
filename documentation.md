@@ -187,11 +187,59 @@ message.
 | `__pycache__/`, `*.py[cod]` | root + `pi4-software/` | **Compiled bytecode contains the token — see below** |
 | `credentials.json`, `*.pem`, `*.key` | root | Standard credential formats, ignored pre-emptively |
 | `.env`, `.env.*` | root | Ditto |
+| `access_list.h` | `rp2040-software/` | Card UIDs paired with people's names — see below |
 
 Both `tokens.py` rules are written twice, once as a path and once as a bare
 name, so a copy left in `tools/` or a scratch folder is caught as well. A
 credential that leaks because it sat in an unexpected directory is no less
-leaked.
+leaked. `access_list.h` is written twice for the same reason.
+
+#### `access_list.h` — the approved card list
+
+`src/peripherals/access_control/access_list.h` holds the RFID UIDs the fridge
+will unlock for, each next to the name of the person who carries that card.
+
+**Why this is treated as a secret, and why it is worse than a token.** A UID is
+not a credential you can change. It is burned into the card at manufacture, so
+there is no rotation step — the only remedy for publishing one is issuing that
+person a new card. Paired with a name it is also personal data about somebody
+who did not choose to be in a public repository.
+
+**It does not arrive with a clone**, so a fresh checkout will not build until you
+write it. That is deliberate: a build that failed loudly is better than one that
+silently shipped somebody else's placeholder UIDs. The error names this section.
+
+Create `rp2040-software/src/peripherals/access_control/access_list.h`:
+
+```c
+#pragma once
+
+// Card UIDs, paired with names. GITIGNORED - see documentation.md section 3.5.
+//
+// uid_len is 4 for single-size UIDs (Mifare Classic) or 7 for double-size
+// (NTAG, Mifare Ultralight, DESFire). Only the first uid_len bytes are
+// compared, so a 4-byte entry can leave the remaining slots at zero.
+
+static const ApprovedUser approved_users[] = {
+    { "Jane Smith", 7, { 0x04, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 } },
+    { "Spare Fob",  4, { 0xDE, 0xAD, 0xBE, 0xEF } },
+};
+```
+
+**To enrol somebody**, put their card on the reader and read the serial line:
+
+```
+Card detected, UID: AA BB CC DD EE FF 00
+```
+
+Copy those bytes into a new row, set `uid_len` to how many there are, give them
+a name, and rebuild. To revoke access, delete their row. Nothing else changes —
+`access_lookup()` sizes itself from the table, and an empty table is a valid
+state (a fridge nobody is enrolled on yet).
+
+The type it fills in, `ApprovedUser`, is declared in `access_control.cpp`
+immediately above the `#include`. That ordering is why the include sits in the
+middle of the file rather than at the top.
 
 #### The bytecode trap — a real incident, not a hypothetical
 

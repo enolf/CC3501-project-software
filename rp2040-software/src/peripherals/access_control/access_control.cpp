@@ -17,25 +17,28 @@ typedef struct {
 } ApprovedUser;
 
 // ---------------------------------------------------------------------------
-// THE APPROVED LIST  ("the database")
+// THE APPROVED LIST
 //
-// To add someone: place their card on the reader and read the serial line
-//     Card detected, UID: AA BB CC DD EE FF 00
-// then copy those bytes into a new row below, set uid_len to the number of
-// bytes, and give them a name. To revoke access, delete their row. Nothing
-// else needs to change — access_lookup() sizes itself from this table.
+// Lives in access_list.h, which is GITIGNORED, because a card UID paired with a
+// name identifies a real person. Unlike a password a UID cannot be rotated — it
+// is burned into the card at manufacture — so the only remedy for a leaked one
+// is issuing a new card. Same arrangement as `tokens.py` on the Pi side: the
+// secret is created by hand on each machine and only a template is committed.
 //
-// The UIDs below are PLACEHOLDERS — replace them with your real cards.
+// `approved_users[]` is defined there, still as a plain array of ApprovedUser,
+// so everything below continues to size itself from it.
+//
+// Included HERE rather than at the top of the file because the definition needs
+// the ApprovedUser type declared above it. Keeping the two adjacent is what
+// makes that ordering obvious to whoever edits it next.
 // ---------------------------------------------------------------------------
-static const ApprovedUser approved_users[] = {
-    { "Damien Turner", 7, { 0x04, 0x40, 0x4C, 0x22, 0xC0, 0x67, 0x80 } },
-    { "Batman", 7, { 0x04, 0x0F, 0x35, 0x4A, 0xAD, 0x11, 0x90 } },
-    { "Alister Maltby", 7, { 0x04, 0x43, 0x5A, 0x22, 0xC0, 0x67, 0x80 } },
-
-    // Add more people the same way — one row each, then re-build. For example:
-    // { "Jane Smith", 7, { 0x04, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 } },
-    // { "Spare Fob",  4, { 0xDE, 0xAD, 0xBE, 0xEF } },
-};
+#if __has_include("peripherals/access_control/access_list.h")
+#include "peripherals/access_control/access_list.h"
+#else
+// A missing file would otherwise surface as "approved_users was not declared",
+// which says nothing about what to do. This says it.
+#error "access_list.h is missing. It holds the approved card UIDs and is gitignored on purpose, so it does not arrive with a clone and must be written by hand. documentation.md section 3.5 has the file to copy."
+#endif
 
 /// How many rows the table above has. Everything else sizes itself from this,
 /// so adding or removing a person needs no other change.
