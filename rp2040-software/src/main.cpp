@@ -101,8 +101,12 @@ void run_health_report()
     }
     next = make_timeout_time_ms(timings::HEALTH_INTERVAL_MS);
 
+    // box_grams(), NOT level_grams(). The dashboard's money-box gauge and the
+    // cash reconciliation both want what is IN the box; level_grams() is
+    // measured from the coin acceptor's per-payment baseline, so it read ~0
+    // with seven coins sitting in there and the gauge was quietly meaningless.
     pi_link::notify_health(temperature::die_celsius(),
-                           scale::level_grams(),
+                           scale::box_grams(),
                            checkout::fault_count());
 }
 

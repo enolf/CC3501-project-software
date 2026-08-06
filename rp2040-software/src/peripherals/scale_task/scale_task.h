@@ -49,7 +49,27 @@ bool retare();
 void set_raw_dump(bool enabled);
 bool raw_dump_enabled();
 
-/// Mass currently accepted as the resting level, in grams above the tare point.
+/// Mass currently accepted as the resting level, in grams above the coin
+/// acceptor's per-payment baseline.
+///
+/// NOT the contents of the money box. `begin_transaction()` re-baselines at the
+/// start of every payment so that coins already in the box drop out of the
+/// arithmetic — which is exactly right for deciding whether THIS customer has
+/// paid, and exactly wrong for anything asking how much money is in there. Use
+/// `box_grams()` for that.
 double level_grams();
+
+/// What is actually sitting in the money box, in grams above the HARDWARE tare.
+///
+/// This is the number the dashboard's money-box gauge and the cash
+/// reconciliation want: the raw cell reading, unaffected by the per-payment
+/// baseline. Reporting `level_grams()` there made the gauge read ~0 with a box
+/// full of coins, because they had all gone in before the current baseline.
+///
+/// ZERO MEANS "SAME AS AT TARE TIME", NOT "EMPTY". The tare is taken once at
+/// startup, so if the box had coins in it when the board booted, they are
+/// invisible to this and every reading is short by their mass. Boot with an
+/// empty box, or re-tare with `retare()` once it is emptied.
+double box_grams();
 
 } // namespace scale

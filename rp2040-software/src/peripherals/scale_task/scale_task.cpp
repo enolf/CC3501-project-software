@@ -21,6 +21,14 @@ CoinAcceptor acceptor;
 bool ready = false;
 bool dump_raw = false;
 
+/// The most recent reading straight off the cell, in grams above the HARDWARE
+/// tare — which is to say, what is actually sitting in the box.
+///
+/// Kept separately from the coin acceptor's `level_grams()` because the two
+/// answer different questions and only one of them is "how much money is in
+/// there". See the note on box_grams().
+double last_raw_grams = 0.0;
+
 } // namespace
 
 bool init()
@@ -58,6 +66,7 @@ void run_scale()
     if (!sensor.poll(grams)) {
         return;
     }
+    last_raw_grams = grams;
 
     if (dump_raw) {
         printf("raw: %8.3f g\n", grams);
@@ -129,6 +138,14 @@ bool retare()
     // The zero moved, so whatever the classifier thought the resting level was
     // is meaningless now.
     acceptor.begin();
+
+    // And so is the last raw sample, which was measured against the OLD zero.
+    // Cleared rather than left stale because the tare screen reads it back
+    // immediately — before `run_scale()` has had a chance to poll again — and a
+    // pre-tare number under the words "Tare successful" is worse than no number
+    // at all. It is replaced with a real reading on the next sample, about a
+    // tenth of a second later.
+    last_raw_grams = 0.0;
     return ok;
 }
 
@@ -145,6 +162,11 @@ bool raw_dump_enabled()
 double level_grams()
 {
     return acceptor.level_grams();
+}
+
+double box_grams()
+{
+    return last_raw_grams;
 }
 
 } // namespace scale

@@ -62,6 +62,10 @@ uint32_t paid_cents = 0;
 /// Outcome of the last SD log dump, for the screen that reports it.
 bool sd_write_ok = false;
 unsigned long sd_write_lines = 0;
+
+/// Outcome of the last money-box tare, likewise.
+bool   tare_ok = false;
+double tare_grams = 0.0;
 double   paid_grams = 0.0;
 
 PaymentMethod method = PaymentMethod::None;
@@ -161,8 +165,11 @@ void enter(State next)
                                                         owed_cents);   break;
         case State::Abandoned:     Display::show_cancelled();      break;
         case State::Fault:         Display::show_fault(fault_code); break;
+        case State::UtilityMenu:   Display::show_utility_menu();   break;
         case State::SdResult:      Display::show_sd_result(sd_write_ok,
                                                            sd_write_lines); break;
+        case State::TareResult:    Display::show_tare_result(tare_ok,
+                                                             tare_grams); break;
         case State::UselessButton: Display::show_useless_button(); break;
     }
 }
@@ -300,6 +307,31 @@ void abandon()
 /// and it is the reason the panel button does nothing in any other state —
 /// which is also what was asked for, so the constraint and the requirement
 /// happen to agree.
+/// Re-zero the money box. UtilityMenu only, and for the same reason as the SD
+/// write: `retare()` blocks for about a second while it averages samples.
+///
+/// WHY THIS EXISTS AS A BUTTON
+/// ---------------------------
+/// The startup tare is the only other one, so a board rebooted with coins in
+/// the box treats their mass as zero and every reading afterwards is short by
+/// it — silently, and for as long as the board stays up. Emptying the box and
+/// pressing this is the fix, and it needs no serial terminal and no reflash.
+void tare_money_box()
+{
+    // Drawn and flushed before the blocking call, exactly as the SD write does.
+    Display::show_taring();
+
+    tare_ok = scale::retare();
+    tare_grams = scale::box_grams();
+
+    logf(LogLevel::INFORMATION, "checkout: money box tare %s, reads %.3f g",
+         tare_ok ? "succeeded" : "FAILED", tare_grams);
+    sd_log::write_linef("TARE %s grams=%.3f", tare_ok ? "ok" : "failed",
+                        tare_grams);
+
+    enter(State::TareResult);
+}
+
 void write_log_to_card()
 {
     // Drawn and flushed BEFORE the write starts. Queued behind it, this screen
@@ -482,9 +514,27 @@ void handle_event(const events::Event &event)
             } else if (event.kind == events::Kind::CardDenied) {
                 deny_access(event);
             } else if (event.kind == events::Kind::UserButtonHeld) {
-                write_log_to_card();
+                enter(State::UtilityMenu);
             } else if (event.kind == events::Kind::UserButtonPressed) {
                 enter(State::UselessButton);
+            }
+            break;
+
+        case State::UtilityMenu:
+            // The two targets are the same ones the payment screen uses, so
+            // they arrive as TouchCash and TouchOnline. Only this state reads
+            // them this way, and only Idle can reach it, so there is no chance
+            // of a customer's payment tap landing here.
+            if (event.kind == events::Kind::TouchCash) {
+                tare_money_box();
+            } else if (event.kind == events::Kind::TouchOnline) {
+                write_log_to_card();
+            } else if (event.kind == events::Kind::TouchBack) {
+                enter(State::Idle);
+            } else if (event.kind == events::Kind::DoorOpened) {
+                // A customer arriving outranks maintenance. Nobody should have
+                // to wait out a menu somebody else left open.
+                begin_selecting();
             }
             break;
 
@@ -604,6 +654,7 @@ void handle_event(const events::Event &event)
         case State::ThankYou:
         case State::Abandoned:
         case State::SdResult:
+        case State::TareResult:
         case State::UselessButton:
             // Leaving on a timer. Nothing a customer does should cut these
             // short or extend them.
@@ -702,8 +753,25 @@ void check_timeouts()
             }
             break;
 
+        case State::UtilityMenu:
+            if (elapsed_ms() >= timings::UTILITY_MENU_MS) {
+                log(LogLevel::INFORMATION,
+                    "checkout: maintenance menu timed out");
+                enter(State::Idle);
+            }
+            break;
+
         case State::SdResult:
             if (elapsed_ms() >= timings::SD_RESULT_MS) {
+                enter(State::Idle);
+            }
+            break;
+
+        case State::TareResult:
+            // Kept live while it is up, so the number on screen is the cell's
+            // current reading rather than the instant the tare finished.
+            Display::update_tare_reading(scale::box_grams());
+            if (elapsed_ms() >= timings::TARE_RESULT_MS) {
                 enter(State::Idle);
             }
             break;

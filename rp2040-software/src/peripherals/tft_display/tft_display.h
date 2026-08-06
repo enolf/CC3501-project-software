@@ -81,6 +81,15 @@ public:
 
     // --- The panel button ---------------------------------------------------
 
+    /// The maintenance menu: TARE BOX on the left, WRITE SD on the right.
+    ///
+    /// Reuses TouchCash and TouchOnline for its two targets rather than adding
+    /// events of its own. They are already "the left button" and "the right
+    /// button" everywhere else, the state machine reads them in exactly one
+    /// state at a time, and two more event kinds would have to be ignored by
+    /// every other state for no gain.
+    static void show_utility_menu();
+
     /// "Writing log to SD card". Put up BEFORE the write starts.
     ///
     /// The write blocks the superloop for as long as the card takes, so this
@@ -88,6 +97,22 @@ public:
     /// blocking write appears only after it has finished, which is precisely
     /// when it is no longer true.
     static void show_sd_writing();
+
+    /// "Taring...". Same reasoning as show_sd_writing(): retare() blocks for
+    /// about a second, so this is drawn and flushed before it is called.
+    static void show_taring();
+
+    /// The tare outcome and the reading it left behind.
+    ///
+    /// `grams` is shown whether or not it succeeded, because a tare that
+    /// reports success and then reads nowhere near zero is the interesting
+    /// failure — the cell is responding but not behaving.
+    static void show_tare_result(bool ok, double grams);
+
+    /// Refresh the number on the tare screen, without rebuilding it. Ignored
+    /// unless that screen is the one currently up, so it is safe to call every
+    /// pass. Same arrangement as the cash screen's running total.
+    static void update_tare_reading(double grams);
 
     /// The outcome, and permission to take the card out.
     static void show_sd_result(bool ok, unsigned long lines);

@@ -201,7 +201,7 @@ constexpr uint32_t COLOUR_FAULT      = 0xB71C1C;   // red
 enum class Screen : uint8_t {
     None, Idle, Greeting, Denied, Selecting, Recount, PaymentSelect,
     Cash, OnlineWait, Qr, Thanks, Cancelled, Fault,
-    SdWriting, SdResult, Useless,
+    UtilityMenu, SdWriting, SdResult, Taring, TareResult, Useless,
 };
 
 Screen current_screen = Screen::None;
@@ -211,6 +211,7 @@ Screen current_screen = Screen::None;
 // a stale pointer here would be written through after it was freed.
 lv_obj_t *cash_amount_label = nullptr;
 lv_obj_t *cash_bar = nullptr;
+lv_obj_t *tare_reading_label = nullptr;
 
 void format_money(char *out, size_t length, uint32_t cents)
 {
@@ -226,6 +227,7 @@ lv_obj_t *begin_screen(Screen which, uint32_t background = COLOUR_BACKGROUND)
 
     cash_amount_label = nullptr;
     cash_bar = nullptr;
+    tare_reading_label = nullptr;
     current_screen = which;
 
     lv_obj_set_style_bg_color(scr, lv_color_hex(background), LV_PART_MAIN);
@@ -550,6 +552,78 @@ void Display::show_thanks(uint32_t paid_cents, uint32_t owed_cents)
                LV_ALIGN_CENTER, 0, -8);
     make_label(scr, line, &lv_font_montserrat_20, COLOUR_TEXT,
                LV_ALIGN_CENTER, 0, 38);
+}
+
+void Display::show_utility_menu()
+{
+    lv_obj_t *scr = begin_screen(Screen::UtilityMenu);
+
+    make_label(scr, "Maintenance", &lv_font_montserrat_28, COLOUR_TEXT,
+               LV_ALIGN_TOP_MID, 0, 18);
+    make_label(scr, "Insert the SD card before writing",
+               &lv_font_montserrat_14, COLOUR_DIM, LV_ALIGN_TOP_MID, 0, 56);
+
+    // Same geometry as the CASH/ONLINE pair, so the two targets a person has
+    // already learned are in the same places. Colours differ, because these do
+    // something to the fridge rather than complete a purchase, and a green
+    // button where CASH normally sits should not mean something else entirely.
+    make_button(scr, "TARE BOX", COLOUR_ONLINE, events::Kind::TouchCash,
+                8, 150, 147, 82);
+    make_button(scr, "WRITE SD", COLOUR_ONLINE, events::Kind::TouchOnline,
+                165, 150, 147, 82);
+}
+
+void Display::show_taring()
+{
+    lv_obj_t *scr = begin_screen(Screen::Taring);
+    make_label(scr, "Taring...", &lv_font_montserrat_28, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, -18);
+    make_label(scr, "Keep the money box still", &lv_font_montserrat_14,
+               COLOUR_DIM, LV_ALIGN_CENTER, 0, 24);
+
+    // Same reason as show_sd_writing(): retare() blocks for about a second, so
+    // a frame queued behind it would appear only once it had finished.
+    lv_refr_now(nullptr);
+}
+
+void Display::show_tare_result(bool ok, double grams)
+{
+    lv_obj_t *scr = begin_screen(Screen::TareResult);
+
+    // Three decimals, not two. The cell's noise floor is well under a tenth of
+    // a gram, so this is the resolution at which "did the tare actually take"
+    // is answerable; %.2f would round a drifting cell to a convincing 0.00.
+    char reading[32];
+    snprintf(reading, sizeof(reading), "Reading %.3f g", grams);
+
+    make_label(scr, ok ? "Tare successful" : "Tare failed",
+               &lv_font_montserrat_28, ok ? COLOUR_GOOD : COLOUR_FAULT,
+               LV_ALIGN_CENTER, 0, -30);
+
+    // Kept for in-place updates, like the cash screen's running total. The
+    // number is live for as long as this screen is up, and that is the point:
+    // a single frozen 0.000 g captured microseconds after the tare proves only
+    // that the tare happened, whereas a number that keeps arriving and stays
+    // near zero proves the cell is still sampling and has settled there.
+    tare_reading_label = make_label(scr, reading, &lv_font_montserrat_20,
+                                    COLOUR_TEXT, LV_ALIGN_CENTER, 0, 10);
+
+    make_label(scr, ok ? "The box now reads empty"
+                       : "No samples arrived from the cell",
+               &lv_font_montserrat_14, COLOUR_DIM, LV_ALIGN_CENTER, 0, 48);
+}
+
+void Display::update_tare_reading(double grams)
+{
+    // Ignored unless the tare screen is the one actually on the panel. Without
+    // this check a late call would write through a pointer to a label that
+    // lv_obj_clean() has already freed.
+    if (current_screen != Screen::TareResult || tare_reading_label == nullptr) {
+        return;
+    }
+    char reading[32];
+    snprintf(reading, sizeof(reading), "Reading %.3f g", grams);
+    lv_label_set_text(tare_reading_label, reading);
 }
 
 void Display::show_sd_writing()

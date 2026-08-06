@@ -95,12 +95,31 @@ constexpr uint32_t FAULT_MIN_MS = 5000;
 /// button — which is why the screen appears the instant it qualifies.
 constexpr uint32_t USER_BUTTON_HOLD_MS = 3000;
 
+/// How long the two-button utility menu waits before giving up and returning
+/// to Idle.
+///
+/// The most generous screen in the system, and deliberately: it is the only one
+/// where somebody is expected to be doing something physical — finding the SD
+/// card, emptying the coin box — between arriving at the screen and pressing a
+/// button. Every other timeout assumes a customer who is already deciding.
+///
+/// It also takes the fridge out of service while it is up, so this is the
+/// number to lower if that ever matters more than the convenience.
+constexpr uint32_t UTILITY_MENU_MS = 30000;
+
 /// How long "Write successful / failed — remove SD card" stays up.
 ///
 /// Longer than the other confirmations because it is an INSTRUCTION, not just
 /// feedback: somebody has to read it, reach over and pull the card out. Three
 /// seconds is enough to read "Thank you"; it is not enough to act on.
 constexpr uint32_t SD_RESULT_MS = 8000;
+
+/// How long the tare result and its reading stay up.
+///
+/// Shorter than SD_RESULT_MS because nothing has to be done afterwards — the
+/// number is there to be READ, as confirmation that the cell is now zeroed and
+/// responding, not acted on.
+constexpr uint32_t TARE_RESULT_MS = 5000;
 
 /// How long the useless-button message stays up. Short — it is a joke, and the
 /// fridge should not be out of service for it.

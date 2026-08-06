@@ -79,14 +79,29 @@ enum class State : uint8_t {
     /// generic out-of-service screen with a code; details go to the log.
     Fault,
 
+    /// The maintenance menu: tare the money box, or write the log to SD.
+    /// Reached only from Idle, by holding the panel button.
+    ///
+    /// Both jobs are things a person does to the fridge rather than things a
+    /// customer does with it, which is why they share one screen behind a
+    /// deliberate gesture instead of appearing anywhere a customer will look.
+    UtilityMenu,
+
     /// Showing the outcome of an SD log write, and telling somebody they can
-    /// take the card out. Reached only from Idle, by holding the panel button.
+    /// take the card out.
     ///
     /// There is no state for the write ITSELF. `sd_log::dump_to_card()` blocks
     /// the superloop from start to finish, so no state machine pass could
     /// observe one — the "Writing…" screen is drawn and forced out to the panel
     /// immediately before the call instead.
     SdResult,
+
+    /// Showing the outcome of a money-box tare, with the reading it produced.
+    ///
+    /// The reading matters as much as the word "successful": a tare that
+    /// worked leaves the cell reading approximately zero, so a number that is
+    /// not approximately zero says the tare ran but the cell is not behaving.
+    TareResult,
 
     /// Telling somebody the panel button does nothing. Reached only from Idle,
     /// by a short press.
@@ -145,7 +160,9 @@ inline const char *state_name(State state)
         case State::ThankYou:      return "ThankYou";
         case State::Abandoned:     return "Abandoned";
         case State::Fault:         return "Fault";
+        case State::UtilityMenu:   return "UtilityMenu";
         case State::SdResult:      return "SdResult";
+        case State::TareResult:    return "TareResult";
         case State::UselessButton: return "UselessButton";
     }
     return "Unknown";
