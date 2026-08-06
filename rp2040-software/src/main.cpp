@@ -20,6 +20,7 @@
 #include <inttypes.h>
 #include "pico/stdlib.h"
 
+#include "timings.h"
 #include "board.h"
 #include "sim_config.h"
 #include "drivers/logging/logging.h"
@@ -41,20 +42,8 @@ namespace {
 /// Reported in the BOOT line so a log can be matched to a build.
 constexpr const char *FIRMWARE_VERSION = "0.2";
 
-/// How often the "still alive" line is printed. Its real job is negative
-/// evidence: a heartbeat that stops, or arrives late, means something in the
-/// loop has blocked, and that is the failure this project most needs to catch.
-constexpr uint32_t HEARTBEAT_INTERVAL_MS = 10000;
 
-/// Longest single pass through the superloop that is considered acceptable.
-/// LVGL wants servicing every few milliseconds, so anything approaching this is
-/// already a problem worth naming.
-constexpr uint32_t LOOP_TIME_WARN_MS = 50;
 
-/// How often the board reports its own condition to the Pi. Matched to the
-/// temperature sample rate so the dashboard gets one coherent picture per
-/// interval rather than two that disagree by a few seconds.
-constexpr uint32_t HEALTH_INTERVAL_MS = 30000;
 
 // ---------------------------------------------------------------------------
 // Heartbeat and loop-time watchdog
@@ -66,7 +55,7 @@ void run_heartbeat()
     // Static locals are how a non-blocking task remembers where it was between
     // calls. `next_beat` survives from one pass to the next; the whole function
     // does nothing at all on the vast majority of passes.
-    static absolute_time_t next_beat = make_timeout_time_ms(HEARTBEAT_INTERVAL_MS);
+    static absolute_time_t next_beat = make_timeout_time_ms(timings::CONSOLE_HEARTBEAT_MS);
     static uint32_t worst_loop_ms = 0;
     static absolute_time_t last_pass = get_absolute_time();
 
@@ -77,7 +66,7 @@ void run_heartbeat()
     if (pass_ms > worst_loop_ms) {
         worst_loop_ms = pass_ms;
     }
-    if (pass_ms > LOOP_TIME_WARN_MS) {
+    if (pass_ms > timings::LOOP_TIME_WARN_MS) {
         logf(LogLevel::WARNING, "loop: pass took %" PRIu32 " ms - something is blocking",
              pass_ms);
     }
@@ -85,7 +74,7 @@ void run_heartbeat()
     if (!time_reached(next_beat)) {
         return;
     }
-    next_beat = make_timeout_time_ms(HEARTBEAT_INTERVAL_MS);
+    next_beat = make_timeout_time_ms(timings::CONSOLE_HEARTBEAT_MS);
 
     logf(LogLevel::INFORMATION,
          "HB  worst_loop=%" PRIu32 " ms  queued=%u  dropped=%" PRIu32,
@@ -105,12 +94,12 @@ void run_heartbeat()
 /// have to know about the others.
 void run_health_report()
 {
-    static absolute_time_t next = make_timeout_time_ms(HEALTH_INTERVAL_MS);
+    static absolute_time_t next = make_timeout_time_ms(timings::HEALTH_INTERVAL_MS);
 
     if (!time_reached(next)) {
         return;
     }
-    next = make_timeout_time_ms(HEALTH_INTERVAL_MS);
+    next = make_timeout_time_ms(timings::HEALTH_INTERVAL_MS);
 
     pi_link::notify_health(temperature::die_celsius(),
                            scale::level_grams(),

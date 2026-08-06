@@ -1,5 +1,6 @@
 #include "peripherals/temperature_task/temperature_task.h"
 
+#include "timings.h"
 #include "pico/stdlib.h"
 #include "hardware/adc.h"
 
@@ -13,13 +14,6 @@ namespace temperature {
 
 namespace {
 
-/// How often every sensor is read.
-///
-/// 30 seconds, from dashboard.md section 2: fast enough to catch a door
-/// excursion and the recovery afterwards, slow enough to be kind to the Pi's SD
-/// card, which is where these end up. Three sensors at this rate is about 8,600
-/// rows a day.
-constexpr uint32_t SAMPLE_INTERVAL_MS = 30000;
 
 /// How many sample cycles between re-scans of the 1-Wire bus, so a sensor
 /// plugged in after boot is picked up without a reset.
@@ -110,7 +104,7 @@ bool init()
     }
     health.noteDiscovery(roms, sensors.sensorCount(), 0);
 
-    next_sample_ms = now_ms() + SAMPLE_INTERVAL_MS;
+    next_sample_ms = now_ms() + timings::TEMP_SAMPLE_INTERVAL_MS;
     phase = Phase::Waiting;
     return ready;
 }
@@ -132,7 +126,7 @@ void run_temperature()
             }
 
             if (sensors.sensorCount() == 0) {
-                next_sample_ms = now_ms() + SAMPLE_INTERVAL_MS;
+                next_sample_ms = now_ms() + timings::TEMP_SAMPLE_INTERVAL_MS;
                 return;
             }
 
@@ -141,7 +135,7 @@ void run_temperature()
             // the two halves separately, so nothing here has to wait for it.
             if (!sensors.startConversion()) {
                 log(LogLevel::WARNING, "temperature: could not start a conversion");
-                next_sample_ms = now_ms() + SAMPLE_INTERVAL_MS;
+                next_sample_ms = now_ms() + timings::TEMP_SAMPLE_INTERVAL_MS;
                 return;
             }
             phase = Phase::Converting;
@@ -159,7 +153,7 @@ void run_temperature()
 
         case Phase::Reading: {
             if (reading_index >= sensors.sensorCount()) {
-                next_sample_ms = now_ms() + SAMPLE_INTERVAL_MS;
+                next_sample_ms = now_ms() + timings::TEMP_SAMPLE_INTERVAL_MS;
                 phase = Phase::Waiting;
                 return;
             }

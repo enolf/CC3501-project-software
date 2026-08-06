@@ -21,6 +21,7 @@
 #include <string.h>
 #include <inttypes.h>
 
+#include "timings.h"
 #include "pico/stdlib.h"
 
 #include "drivers/logging/logging.h"
@@ -41,14 +42,7 @@ namespace {
 /// the link will ever need.
 constexpr int MAX_BYTES_PER_PASS = 64;
 
-/// How long without a single valid frame before the link is called unhealthy.
-///
-/// Generous: the Pi has nothing to say while the fridge is idle, so silence is
-/// normal. What this catches is the cable being pulled or `fridged` dying.
-constexpr uint32_t LINK_TIMEOUT_MS = 30000;
 
-/// How often to announce that this board is alive.
-constexpr uint32_t HEARTBEAT_INTERVAL_MS = 10000;
 
 frame::Parser parser;
 
@@ -242,9 +236,9 @@ void init()
 {
     parser.reset();
     // Counted as if a frame had just arrived, so the link is not declared dead
-    // during the first LINK_TIMEOUT_MS while the Pi is still booting.
+    // during the first timings::LINK_TIMEOUT_MS while the Pi is still booting.
     last_frame_ms = now_ms();
-    next_heartbeat_ms = now_ms() + HEARTBEAT_INTERVAL_MS;
+    next_heartbeat_ms = now_ms() + timings::LINK_HEARTBEAT_MS;
 
     inventory_waiting = false;
     url_waiting = false;
@@ -288,7 +282,7 @@ void run()
 
     const uint32_t now = now_ms();
     if ((int32_t)(now - next_heartbeat_ms) >= 0) {
-        next_heartbeat_ms = now + HEARTBEAT_INTERVAL_MS;
+        next_heartbeat_ms = now + timings::LINK_HEARTBEAT_MS;
         send(frame::Prefix::Event, "HB", nullptr);
     }
 }
@@ -453,7 +447,7 @@ bool is_healthy()
     // Pi is expected to send its own HB every 10 s. Without that, a link that
     // is perfectly fine would be declared dead simply because the fridge had
     // been quiet — the Pi has nothing to say while nobody is buying anything.
-    return (now_ms() - last_frame_ms) < LINK_TIMEOUT_MS;
+    return (now_ms() - last_frame_ms) < timings::LINK_TIMEOUT_MS;
 }
 
 bool handle_debug_key(int /*key*/)

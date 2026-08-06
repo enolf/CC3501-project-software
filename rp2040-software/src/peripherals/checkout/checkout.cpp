@@ -19,6 +19,8 @@
 
 #include "peripherals/checkout/checkout.h"
 
+#include "timings.h"
+
 #include <stdio.h>
 #include <inttypes.h>
 
@@ -504,7 +506,7 @@ void handle_event(const events::Event &event)
             break;
 
         case State::AccessDenied:
-            // Leaves on its own after DENIED_MS, but must not ignore the world
+            // Leaves on its own after timings::DENIED_MS, but must not ignore the world
             // meanwhile: the door still works, and a second tap of a good card
             // should be believed immediately rather than after the timer.
             if (event.kind == events::Kind::DoorOpened) {
@@ -639,7 +641,7 @@ void check_timeouts()
             // Tapped in and then walked away, or tapped out of curiosity.
             // Nothing was started, so there is nothing to abandon or record —
             // this is just the screen going back to sleep.
-            if (elapsed_ms() >= GREETING_TIMEOUT_MS) {
+            if (elapsed_ms() >= timings::GREETING_TIMEOUT_MS) {
                 logf(LogLevel::INFORMATION,
                      "checkout: %s tapped in but never opened the door",
                      greeted_name != nullptr ? greeted_name : "somebody");
@@ -649,14 +651,14 @@ void check_timeouts()
             break;
 
         case State::AccessDenied:
-            if (elapsed_ms() >= DENIED_MS) {
+            if (elapsed_ms() >= timings::DENIED_MS) {
                 enter(State::Idle);
             }
             break;
 
         case State::Selecting:
             // Reached by someone leaving the fridge door standing open.
-            if (elapsed_ms() >= SELECT_TIMEOUT_MS) {
+            if (elapsed_ms() >= timings::SELECT_TIMEOUT_MS) {
                 log(LogLevel::INFORMATION, "checkout: nobody took anything");
                 enter(State::Idle);
             }
@@ -665,7 +667,7 @@ void check_timeouts()
         case State::Recount:
             // The Pi is not answering. This one IS a fault: with no inventory
             // there is no way to know what to charge for.
-            if (elapsed_ms() >= RECOUNT_TIMEOUT_MS) {
+            if (elapsed_ms() >= timings::RECOUNT_TIMEOUT_MS) {
                 raise_fault(FAULT_PI_TIMEOUT);
             }
             break;
@@ -674,7 +676,7 @@ void check_timeouts()
             // A payment link that never arrives falls back to the choice, so
             // cash still works. Checked before the payment timeout because it
             // is the shorter of the two.
-            if (elapsed_ms() >= SQUARE_LINK_TIMEOUT_MS) {
+            if (elapsed_ms() >= timings::SQUARE_LINK_TIMEOUT_MS) {
                 log(LogLevel::WARNING, "checkout: payment link timed out");
                 enter(State::PaymentSelect);
             }
@@ -683,31 +685,31 @@ void check_timeouts()
         case State::PaymentSelect:
         case State::PayCash:
         case State::PayOnlineQr:
-            if (elapsed_ms() >= PAYMENT_TIMEOUT_MS) {
+            if (elapsed_ms() >= timings::PAYMENT_TIMEOUT_MS) {
                 abandon();
             }
             break;
 
         case State::ThankYou:
-            if (elapsed_ms() >= THANK_YOU_MS) {
+            if (elapsed_ms() >= timings::THANK_YOU_MS) {
                 finish_transaction();
             }
             break;
 
         case State::Abandoned:
-            if (elapsed_ms() >= ABANDONED_MS) {
+            if (elapsed_ms() >= timings::ABANDONED_MS) {
                 finish_transaction();
             }
             break;
 
         case State::SdResult:
-            if (elapsed_ms() >= SD_RESULT_MS) {
+            if (elapsed_ms() >= timings::SD_RESULT_MS) {
                 enter(State::Idle);
             }
             break;
 
         case State::UselessButton:
-            if (elapsed_ms() >= USELESS_BUTTON_MS) {
+            if (elapsed_ms() >= timings::USELESS_BUTTON_MS) {
                 enter(State::Idle);
             }
             break;
@@ -716,8 +718,8 @@ void check_timeouts()
             // Held for a minimum time so an intermittent fault cannot strobe
             // the screen, then released once the cause has gone. The link being
             // healthy is the only condition currently checked; a fault raised
-            // from the debug key therefore clears on its own after FAULT_MIN_MS.
-            if (elapsed_ms() >= FAULT_MIN_MS && pi_link::is_healthy()) {
+            // from the debug key therefore clears on its own after timings::FAULT_MIN_MS.
+            if (elapsed_ms() >= timings::FAULT_MIN_MS && pi_link::is_healthy()) {
                 log(LogLevel::INFORMATION, "checkout: fault cleared");
                 fault_code = FAULT_NONE;
                 finish_transaction();

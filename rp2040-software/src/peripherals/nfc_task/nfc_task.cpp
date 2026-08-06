@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "timings.h"
 #include "pico/stdlib.h"
 #include "hardware/i2c.h"
 
@@ -16,21 +17,7 @@ namespace nfc {
 
 namespace {
 
-/// How often the reader is asked whether a card is present.
-///
-/// Not every pass, because each poll costs up to ~25 ms: the MFRC522 answers
-/// "no card" by letting its own 25 ms timer expire, and the driver waits for
-/// that. At 250 ms between polls the reader consumes about a tenth of the
-/// available time, and a card held to the pad is still picked up promptly — a
-/// person holding a card there does so for the better part of a second.
-constexpr uint32_t NFC_POLL_INTERVAL_MS = 250;
 
-/// How often to retry a reader that has not initialised.
-///
-/// Retrying rather than giving up matters here: the reader sits on a connector,
-/// and a module that is slow to power up or briefly loose at boot then works
-/// perfectly. Without this, the only recovery would be a reset.
-constexpr uint32_t NFC_RETRY_INTERVAL_MS = 5000;
 
 bool ready = false;
 
@@ -87,7 +74,7 @@ bool init()
 void run_nfc()
 {
     static uint32_t next_poll_ms = 0;
-    static uint32_t next_retry_ms = NFC_RETRY_INTERVAL_MS;
+    static uint32_t next_retry_ms = timings::NFC_RETRY_INTERVAL_MS;
 
     const uint32_t now = now_ms();
 
@@ -96,7 +83,7 @@ void run_nfc()
         if ((int32_t)(now - next_retry_ms) < 0) {
             return;
         }
-        next_retry_ms = now + NFC_RETRY_INTERVAL_MS;
+        next_retry_ms = now + timings::NFC_RETRY_INTERVAL_MS;
 
         if (mfrc522_init()) {
             ready = true;
@@ -108,7 +95,7 @@ void run_nfc()
     if ((int32_t)(now - next_poll_ms) < 0) {
         return;
     }
-    next_poll_ms = now + NFC_POLL_INTERVAL_MS;
+    next_poll_ms = now + timings::NFC_POLL_INTERVAL_MS;
 
     uint8_t uid[MFRC522_UID_MAX_LEN];
     uint8_t uid_len = 0;

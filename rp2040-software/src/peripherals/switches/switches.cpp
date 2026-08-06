@@ -2,6 +2,7 @@
 
 #include "pico/stdlib.h"
 
+#include "timings.h"
 #include "board.h"
 #include "drivers/DigitalSwitch/DigitalSwitch.h"
 #include "drivers/logging/logging.h"
@@ -21,11 +22,6 @@ namespace {
 DigitalSwitch door(LIMIT_SWITCH_PIN, LIMIT_SWITCH_ACTIVE_HIGH);
 DigitalSwitch user_button(USER_SWITCH_PIN, USER_SWITCH_ACTIVE_HIGH);
 
-/// How long the user button must be held to count as a hold rather than a
-/// press. Long enough that nobody triggers an SD write by leaning on the panel,
-/// short enough that three seconds of nothing happening does not read as a dead
-/// button — which is why the screen appears the instant it qualifies.
-constexpr uint32_t HOLD_MS = 3000;
 
 uint32_t pressed_at_ms = 0;
 bool hold_fired = false;
@@ -101,7 +97,7 @@ void run_switches()
     }
 
     if (user_button.isPressed() && !hold_fired &&
-        (to_ms_since_boot(get_absolute_time()) - pressed_at_ms) >= HOLD_MS) {
+        (to_ms_since_boot(get_absolute_time()) - pressed_at_ms) >= timings::USER_BUTTON_HOLD_MS) {
         hold_fired = true;
         events::push(events::Kind::UserButtonHeld);
     }

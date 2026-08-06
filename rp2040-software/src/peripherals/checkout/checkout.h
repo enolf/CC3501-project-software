@@ -152,54 +152,15 @@ inline const char *state_name(State state)
 }
 
 // --- Timeouts ---
-// Starting points to be tuned on the bench, not measurements. Every state that
-// can be entered must be able to leave on its own, or a customer walking away
-// would strand the terminal until someone opened the door.
-
-/// Selecting -> Idle. Covers a door left standing open.
-constexpr uint32_t SELECT_TIMEOUT_MS = 30000;
-
-/// Greeting -> Idle. Someone tapped their card and then walked away, or tapped
-/// it out of curiosity. Generous compared with the 3 s screens below because a
-/// person who has just identified themselves is usually about to open the door,
-/// and cutting the greeting short mid-reach reads as the terminal ignoring them.
-constexpr uint32_t GREETING_TIMEOUT_MS = 30000;
-
-/// AccessDenied -> Idle. Long enough to read a two-line message, short enough
-/// that a rejected card cannot leave a red screen up for the next customer.
-constexpr uint32_t DENIED_MS = 3000;
-
-/// Recount -> Fault. How long the Pi gets to stabilise and report.
-constexpr uint32_t RECOUNT_TIMEOUT_MS = 8000;
-
-/// Any payment state -> Abandoned. Restarted by every accepted coin and every
-/// touch, so a customer slowly finding coins is never cut off mid-payment.
-constexpr uint32_t PAYMENT_TIMEOUT_MS = 120000;
-
-/// PayOnlineLink -> PaymentSelect. A payment link that does not arrive falls
-/// back to the payment choice, so cash is still available; it is not a fault.
-constexpr uint32_t SQUARE_LINK_TIMEOUT_MS = 10000;
-
-/// How long the confirmation screen stays up before returning to Idle.
-constexpr uint32_t THANK_YOU_MS = 3000;
-
-/// How long the cancellation message stays up before returning to Idle.
-constexpr uint32_t ABANDONED_MS = 3000;
-
-/// How long "Write successful / failed — remove SD card" stays up.
-///
-/// Longer than the other confirmations because it is an INSTRUCTION, not just
-/// feedback: somebody has to read it, reach over and pull the card out. Three
-/// seconds is enough to read "Thank you"; it is not enough to act on.
-constexpr uint32_t SD_RESULT_MS = 8000;
-
-/// How long the useless-button message stays up. Short — it is a joke, and the
-/// fridge should not be out of service for it.
-constexpr uint32_t USELESS_BUTTON_MS = 2000;
-
-/// Minimum time on the fault screen, so an intermittent fault cannot strobe
-/// the display by clearing and re-asserting.
-constexpr uint32_t FAULT_MIN_MS = 5000;
+// Moved to `src/timings.h`, which now holds every interval that shapes how the
+// system feels to use. They are referenced from checkout.cpp as
+// `timings::SELECT_TIMEOUT_MS` and so on.
+//
+// They left this header because several of them have to agree with numbers that
+// are nowhere near it — SQUARE_LINK_TIMEOUT_MS against the Pi's HTTP timeout,
+// LINK_TIMEOUT_MS against `fridged/config.py` — and a constant whose correctness
+// depends on another file is best kept next to the others in the same position,
+// not filed under the one state machine that happens to read it.
 
 // --- Fault codes ---
 // Shown on the out-of-service screen. Deliberately terse: the customer only
