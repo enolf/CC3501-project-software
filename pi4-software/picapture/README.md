@@ -71,6 +71,7 @@ Retuning does not need a compiler:
 | --- | --- |
 | `1`–`4` | Choose which drink the next two clicks tune |
 | click ×2 | Sample **one** can twice — its brightest part, then its dullest |
+| `a` | Print the size of every blob being counted right now |
 | `u` | Undo the last sample |
 | `r` | Reset the selected drink to its built-in colour |
 | `s` | Save the current tuning to `picapture.conf` |

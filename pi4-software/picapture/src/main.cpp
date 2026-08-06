@@ -537,6 +537,7 @@ void print_debug_keys(const vision::Config &config)
            config.brands.size());
     printf("  click  twice on ONE can - its brightest part, then its dullest\n");
     printf("         (the drink being tuned is shown on the camera window)\n");
+    printf("  a      print the size of every blob being counted right now\n");
     printf("  u      undo the last sample\n");
     printf("  r      reset the selected drink to its built-in colour\n");
     printf("  s      save the current tuning to %s\n", CONFIG_PATH);
@@ -544,6 +545,36 @@ void print_debug_keys(const vision::Config &config)
     printf("  q      quit\n\n");
     printf("  counts print only when they CHANGE, so a steady shelf is quiet\n"
            "  and a wandering one is obvious.\n\n");
+    fflush(stdout);
+}
+
+/// Print the size of every blob currently being counted.
+///
+/// The instrument for the one question this approach cannot answer on its own:
+/// a count is a number of BLOBS, not a number of cans, so two cans of the same
+/// drink touching each other merge into a single blob and report as one. From
+/// the count alone that is indistinguishable from a can having been taken.
+///
+/// The areas tell them apart immediately. Two separate cans read as two blobs
+/// of roughly equal area; the same two touching read as one blob of about
+/// twice that. It is also how contour_min_area and contour_max_area get set
+/// from measurements rather than from guesses.
+void print_areas(const std::vector<std::vector<Detection>> &per_brand,
+                 const vision::Config &config)
+{
+    printf("  blob areas (min=%d max=%d):\n", config.contour_min_area,
+           config.contour_max_area);
+    for (size_t i = 0; i < per_brand.size(); i++) {
+        printf("    %-14s %zu blob(s):", config.brands[i].name.c_str(),
+               per_brand[i].size());
+        if (per_brand[i].empty()) {
+            printf("  -");
+        }
+        for (const Detection &detection : per_brand[i]) {
+            printf("  %.0f", detection.area);
+        }
+        printf("\n");
+    }
     fflush(stdout);
 }
 
@@ -790,6 +821,8 @@ int main(int argc, char *argv[])
                 fflush(stdout);
             } else if (key == 'p') {
                 print_config(config, sampling.brand_index);
+            } else if (key == 'a') {
+                print_areas(per_brand, config);
             } else if (key == 'u') {
                 if (undo_index >= 0) {
                     config.brands[undo_index] = undo_brand;
