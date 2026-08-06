@@ -272,7 +272,6 @@ The orientation block is a nice pattern worth keeping: set
 | `ili9341/` | 242 | TFT + XPT2046 touch (SPI) | Complete |
 | `mass_sensor/` | 250 | HX711 load cell amplifier | Complete |
 | `logging/` | 60 | Severity-filtered serial log | Complete |
-| `WS2812/` | 45 | Addressable LED PIO program | Unused, not compiled |
 
 **`DS18B20`** is the most thorough piece of code in the repository. Full 1-Wire
 ROM search so multiple sensors share one pin, CRC-8 verification on both ROM

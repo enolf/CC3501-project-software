@@ -3,7 +3,6 @@
 #include <chrono>
 
 #include "pico/stdlib.h"
-#include "ws2812.pio.h"
 
 void stdio_init_all()
 {

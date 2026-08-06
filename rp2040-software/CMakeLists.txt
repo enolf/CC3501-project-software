@@ -260,9 +260,6 @@ if(CrossCompiling)
     pico_enable_stdio_uart(labs 0)
     pico_enable_stdio_usb(labs 1)
 
-    # NOT NEEDED UNLESS LEDS ARE ADDED but keep for now
-    # pico_generate_pio_header(labs ${CMAKE_CURRENT_LIST_DIR}/src/drivers/WS2812/WS2812.pio)
-
     # Add the standard library to the build
     target_link_libraries(labs
         pico_stdlib
