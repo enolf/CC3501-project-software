@@ -67,11 +67,47 @@ DB_FILE_UMASK = 0o002
 #: Grafana can take its WAL read lock; not world-writable.
 DB_FILE_MODE = 0o664
 
-#: Where `picapture` writes the annotated frame that the dashboard displays.
-#: Served by the HTTP API (stage D4) because Grafana can only show an image over
-#: HTTP.
-FRAMES_DIR = Path(os.environ.get("FRIDGE_FRAMES", PI4_ROOT / "frames"))
-LATEST_JPG = FRAMES_DIR / "latest.jpg"
+# --- The camera -------------------------------------------------------------
+
+#: Where `picapture` lives, and what to run.
+#:
+#: The DIRECTORY matters as much as the binary: picapture reads `picapture.conf`
+#: from its working directory, and started anywhere else it runs perfectly
+#: happily on compiled-in defaults that nobody tuned — announcing it only on
+#: stderr, where a running service's output is easy not to read.
+PICAPTURE_DIR = Path(os.environ.get("FRIDGE_PICAPTURE", PI4_ROOT / "picapture"))
+PICAPTURE_BINARY = PICAPTURE_DIR / "build" / "PiCapture"
+
+#: How old the newest count may be before its confidence starts being marked
+#: down.
+#:
+#: picapture's own period is 250 ms, so a healthy camera produces four packets a
+#: second. A second of silence is four missed frames — a stall, not jitter.
+CAMERA_STALE_S = 1.0
+
+#: How old the newest count may be before it is not worth answering with at all.
+#: Past this the Pi sends no INV, and the board faults out of service after its
+#: own `RECOUNT_TIMEOUT_MS` (8 s). See decision D1 in IMPLEMENTATION.md: a
+#: fridge that cannot see its shelf should stop selling, not guess.
+#:
+#: Comfortably inside the board's budget so the fault is OUR verdict rather than
+#: a timeout nobody decided on.
+CAMERA_DEAD_S = 5.0
+
+#: How long to wait before restarting a picapture that died, and the ceiling
+#: that doubling backs off to. A camera that cannot start — no device, another
+#: process holding it — should not spin.
+CAMERA_RESTART_DELAY_S = 2.0
+CAMERA_RESTART_MAX_S = 30.0
+
+#: How long to give picapture to exit on shutdown before killing it. An
+#: orphaned picapture keeps the camera open and the NEXT start then fails.
+CAMERA_STOP_TIMEOUT_S = 3.0
+
+#: How many unparseable stdout lines to log before going quiet about them. The
+#: debug modes print tuning readouts to stdout as well as counts, so a few are
+#: normal; a flood is a version mismatch and the count is what shows it.
+CAMERA_MALFORMED_LOG_LIMIT = 5
 
 # --- The serial link --------------------------------------------------------
 

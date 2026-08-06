@@ -841,6 +841,320 @@ def test_stock():
     store.close()
 
 
+# --- The real camera backend -------------------------------------------------
+
+#: A stand-in for picapture: prints whatever it is told, then optionally exits.
+#: Run with this interpreter, so the subprocess machinery below is exercised for
+#: real — Popen, the pipes, line buffering, the reader threads and close() — on
+#: any machine, with no camera and no OpenCV.
+FAKE_PICAPTURE = r"""
+import sys, time
+lines = sys.argv[1].split("|")
+repeat = sys.argv[2] == "repeat"
+while True:
+    for line in lines:
+        sys.stdout.write(line + "\n")
+        sys.stdout.flush()
+        time.sleep(0.02)
+    if not repeat:
+        break
+    sys.stderr.write("still here\n")
+    sys.stderr.flush()
+"""
+
+
+def fake_picapture(*lines, repeat=True):
+    return [sys.executable, "-c", FAKE_PICAPTURE, "|".join(lines),
+            "repeat" if repeat else "once"]
+
+
+def wait_until(predicate, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.02)
+    return predicate()
+
+
+def test_camera_parsing():
+    print("\n--- picapture packet parsing ---")
+    from fridged.camera import DRINKS, build_payload, parse_packet
+
+    good = "coke:5,fanta:4,mtndew:3,solo:2;conf=87;"
+    check(f"a well-formed packet parses ({parse_packet(good)})",
+          parse_packet(good) == ({"coke": 5, "fanta": 4, "mtndew": 3,
+                                 "solo": 2}, 87))
+    check("trailing whitespace and newlines are tolerated",
+          parse_packet("  " + good + "\r\n") == parse_packet(good))
+    check("a zero count is a count, not a missing one",
+          parse_packet("coke:0,fanta:0,mtndew:0,solo:0;conf=100;")[0]
+          == {d: 0 for d in DRINKS})
+
+    # The strictness that matters. A picapture built from a different brand list
+    # must be REFUSED, not filtered down to the drinks that happen to match:
+    # partial acceptance means counts land on the wrong drinks and both ends go
+    # on agreeing about the wrong numbers with nothing reporting a fault.
+    refusals = {
+        "a missing drink": "coke:5,fanta:4,mtndew:3;conf=87;",
+        "an unknown drink": "coke:5,fanta:4,mtndew:3,pepsi:2;conf=87;",
+        "an extra drink alongside the right four":
+            "coke:5,fanta:4,mtndew:3,solo:2,pepsi:1;conf=87;",
+        "the same drink twice": "coke:5,coke:4,mtndew:3,solo:2;conf=87;",
+        "a negative count": "coke:-1,fanta:4,mtndew:3,solo:2;conf=87;",
+        "a non-numeric count": "coke:many,fanta:4,mtndew:3,solo:2;conf=87;",
+        "no confidence field": "coke:5,fanta:4,mtndew:3,solo:2;",
+        "confidence above 100": "coke:5,fanta:4,mtndew:3,solo:2;conf=101;",
+        "a diagnostic line": "  tuning: Coke H 0 S 247 V 190",
+        "an empty line": "",
+        "a half-written line": "coke:5,fanta:4,mtn",
+    }
+    for label, line in refusals.items():
+        check(f"refused: {label}", parse_packet(line) is None)
+
+    # Both backends must produce byte-identical payloads or the board can tell
+    # them apart, which defeats the whole point of the interface.
+    counts = {"coke": 5, "fanta": 4, "mtndew": 3, "solo": 2}
+    check(f"the INV payload is in DRINKS order "
+          f"({build_payload(counts, 87)})",
+          build_payload(counts, 87)
+          == "coke=5 fanta=4 mtndew=3 solo=2 conf=87")
+
+
+def test_camera_staleness():
+    print("\n--- answering, and refusing to answer (decision D1) ---")
+    from fridged import config as cfg
+    from fridged.camera import PiCapture
+
+    now = [1000.0]
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+
+    # Never produced a count. Not "0 of everything" — that is a claim about the
+    # shelf, and we have no basis for it.
+    check("a camera that has never counted refuses to answer",
+          camera.payload() is None)
+
+    camera._accept("coke:5,fanta:4,mtndew:3,solo:2;conf=90;")
+    payload, counts = camera.payload()
+    check(f"a fresh count answers at full confidence ({payload})",
+          "conf=90" in payload and counts["coke"] == 5)
+
+    # Wobbling: still running, just behind. Answer anyway — this is the common
+    # case and stopping the fridge for it would mean stopping it constantly.
+    now[0] += (cfg.CAMERA_STALE_S + cfg.CAMERA_DEAD_S) / 2
+    payload, _ = camera.payload()
+    stale_conf = int(payload.split("conf=")[1])
+    check(f"a stale count still answers, at reduced confidence "
+          f"({stale_conf} was 90)", 0 < stale_conf < 90)
+
+    # Dead: refuse. The board faults and goes out of service, which is the
+    # honest state for a fridge that cannot see its shelf.
+    now[0] += cfg.CAMERA_DEAD_S
+    check("a count older than CAMERA_DEAD_S is not answered with at all",
+          camera.payload() is None)
+
+    # ...and it recovers on its own the moment counts come back, rather than
+    # needing a restart.
+    camera._accept("coke:1,fanta:1,mtndew:1,solo:1;conf=80;")
+    check("a fresh count after a dead spell answers again",
+          camera.payload() is not None)
+
+    check("malformed lines are counted, not silently dropped",
+          (camera._accept("rubbish"), camera.malformed == 1)[1])
+    check("...and do not become the answer",
+          camera.payload()[1] == {"coke": 1, "fanta": 1, "mtndew": 1,
+                                  "solo": 1})
+    camera.close()
+
+
+def test_camera_subprocess():
+    print("\n--- picapture as a subprocess ---")
+    from fridged.camera import PiCapture
+
+    # The whole machinery for real: Popen, pipes, both reader threads, parsing,
+    # and close(). Only the OpenCV is stubbed out.
+    camera = PiCapture(command=fake_picapture(
+        "coke:5,fanta:4,mtndew:3,solo:2;conf=88;"), workdir=".")
+    try:
+        check("counts arrive from a real child process",
+              wait_until(lambda: camera.packets > 0))
+        answer = camera.payload()
+        check(f"and become an INV payload ({answer[0] if answer else None})",
+              answer is not None and answer[1]["coke"] == 5)
+        check("the age of the newest count is known",
+              camera.age_s is not None and camera.age_s < 5.0)
+    finally:
+        camera.close()
+    check("close() stops the child",
+          camera._process is None or camera._process.poll() is not None)
+
+    # picapture's stdout is not a pure count stream: the debug modes print
+    # tuning readouts to it. Those must be dropped, and must not become counts.
+    camera = PiCapture(command=fake_picapture(
+        "  tuning:",
+        "    1 Coke  H 0 S 247 V 190",
+        "coke:1,fanta:2,mtndew:3,solo:4;conf=70;"), workdir=".")
+    try:
+        check("diagnostics on stdout are filtered out",
+              wait_until(lambda: camera.packets > 0 and camera.malformed > 0))
+        check("only the packet became the answer",
+              camera.payload()[1] == {"coke": 1, "fanta": 2, "mtndew": 3,
+                                      "solo": 4})
+    finally:
+        camera.close()
+
+    # A picapture that dies must be restarted, or the fridge silently stops
+    # being able to answer for the rest of the day.
+    camera = PiCapture(command=fake_picapture(
+        "coke:2,fanta:2,mtndew:2,solo:2;conf=60;", repeat=False), workdir=".")
+    try:
+        check("a picapture that exits is restarted",
+              wait_until(lambda: camera.starts >= 2, timeout=20.0))
+    finally:
+        camera.close()
+
+    # A missing binary must say what to do about it, not raise
+    # FileNotFoundError out of a daemon thread where nobody ever sees it and
+    # the service goes on believing it has a camera.
+    camera = PiCapture(command=["./definitely-not-built"], workdir=".")
+    try:
+        # The supervisor has to SURVIVE the failure and keep retrying — a dead
+        # supervisor means the camera never comes back even once the binary is
+        # built, and nothing would say so.
+        check("a missing binary leaves the supervisor running, retrying",
+              wait_until(lambda: camera._threads and
+                         all(t.is_alive() for t in camera._threads)))
+        check("...having started nothing and produced no counts",
+              camera.starts == 0 and camera.packets == 0)
+        check("...and it answers no scan rather than inventing one",
+              camera.payload() is None)
+    finally:
+        camera.close()
+
+
+def test_camera_in_the_loop():
+    print("\n--- the real backend answering a real board ---")
+    from fridged.camera import PiCapture
+
+    # End to end with everything except OpenCV: a simulated board sends
+    # CMD SCAN over a Link, and the answer comes from counts that travelled out
+    # of a child process's stdout.
+    store = Store(temp_db()).open()
+    board = FakeBoard(seed=11, activity=400.0)
+    link = Link(board)
+    camera = PiCapture(command=fake_picapture(
+        "coke:6,fanta:5,mtndew:4,solo:3;conf=91;"), workdir=".")
+    try:
+        wait_until(lambda: camera.packets > 0)
+        ingest = Ingest(store, link, camera)
+
+        for _ in range(int(3 * 3600 / STEP_S)):
+            board.advance(STEP_S)
+            while True:
+                events = link.poll()
+                if not events:
+                    break
+                for event in events:
+                    ingest.handle(event)
+            store.flush()
+        store.flush(force=True)
+    finally:
+        camera.close()
+
+    snapshots = store._conn.execute(
+        "SELECT COUNT(DISTINCT ts) FROM stock_snapshot").fetchone()[0]
+    check(f"the board's scans are answered from the subprocess "
+          f"({snapshots} snapshots)", snapshots > 2)
+    check("the stored counts are the ones picapture printed",
+          store._conn.execute(
+              "SELECT DISTINCT count FROM stock_snapshot WHERE drink='coke'"
+          ).fetchall() == [(6,)])
+    check("every message type still has a handler", ingest.unhandled == {})
+    store.close()
+
+
+def test_camera_selection():
+    print("\n--- choosing a camera ---")
+    from fridged.__main__ import build_camera, parse_args
+    from fridged.camera import PiCapture, SimCamera
+
+    # The safe option is the one you get by saying nothing. Same asymmetry as
+    # --port and --square: a deployment that never asks for the real camera
+    # cannot end up running on fabricated stock.
+    check("the default is the simulated shelf",
+          parse_args(["--port", "sim"]).camera == "sim")
+    check("...and it builds a SimCamera",
+          isinstance(build_camera(parse_args([])), SimCamera))
+
+    check("an unknown camera is refused rather than defaulted",
+          _rejects_args(["--camera", "webcam"]))
+
+    # Independent of --port on purpose: real camera, simulated board is the
+    # useful hybrid for testing vision without standing at the fridge.
+    camera = build_camera(parse_args(["--port", "sim",
+                                      "--camera", "picapture"]))
+    try:
+        check("--camera picapture builds the real backend",
+              isinstance(camera, PiCapture))
+        check("...pointed at the configured binary and working directory",
+              camera.command[0] == str(config.PICAPTURE_BINARY) and
+              "--headless" in camera.command and
+              camera.workdir == str(config.PICAPTURE_DIR))
+    finally:
+        camera.close()
+
+    # Both backends must be closeable the same way, because the service's
+    # shutdown path calls close() without knowing which one it has.
+    sim = build_camera(parse_args([]))
+    sim.close()
+    check("both backends share door_opened/door_closed/payload/close",
+          all(hasattr(sim, name) and hasattr(camera, name)
+              for name in ("door_opened", "door_closed", "payload", "close")))
+
+
+def _rejects_args(argv):
+    from fridged.__main__ import parse_args
+    try:
+        parse_args(argv)
+    except SystemExit:
+        return True
+    return False
+
+
+def test_camera_cannot_answer():
+    print("\n--- a scan that cannot be answered ---")
+    from fridged.camera import PiCapture
+
+    # The board must be left to fault rather than handed a made-up count. This
+    # is the one place in the system where being quietly wrong moves money.
+    store = Store(temp_db()).open()
+    transport = StubTransport()
+    link = Link(transport)
+    camera = PiCapture(autostart=False)          # never produced a count
+    ingest = Ingest(store, link, camera)
+
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=10))
+    store.flush(force=True)
+
+    check("no INV is sent when the camera cannot answer",
+          b"INV" not in bytes(transport.written))
+    check("and no stock snapshot is invented",
+          store._conn.execute(
+              "SELECT COUNT(*) FROM stock_snapshot").fetchone()[0] == 0)
+
+    # The same scan, once counts exist, must be answered normally — the refusal
+    # is about not knowing, not a latched failure.
+    camera._accept("coke:3,fanta:3,mtndew:3,solo:3;conf=95;")
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=20))
+    store.flush(force=True)
+    check("the same board is answered once counts exist",
+          b"INV" in bytes(transport.written))
+    check("and the snapshot is written",
+          store._conn.execute(
+              "SELECT COUNT(*) FROM stock_snapshot").fetchone()[0] == 4)
+    store.close()
+
+
 # --- Card payments -----------------------------------------------------------
 
 def wait_for(service, kinds, timeout=20.0):
@@ -1144,6 +1458,12 @@ if __name__ == "__main__":
     test_transaction_ingest()
     test_member_attribution()
     test_stock()
+    test_camera_parsing()
+    test_camera_staleness()
+    test_camera_subprocess()
+    test_camera_in_the_loop()
+    test_camera_selection()
+    test_camera_cannot_answer()
     test_payments()
     test_dashboards()
     test_end_to_end()

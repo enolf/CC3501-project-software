@@ -207,7 +207,20 @@ class Ingest:
             log.warning("CMD SCAN arrived but no camera is configured")
             return
 
-        payload, counts = self.camera.payload()
+        # None means the camera cannot answer — it has never produced a count,
+        # or its newest one is too old to stand behind. DELIBERATELY NOT
+        # ANSWERED (decision D1): the board's Recount times out and it goes out
+        # of service, which is the honest outcome for a fridge that cannot see
+        # what it is selling. The alternative — repeating a stale count as
+        # though it were current — moves money on a number nobody measured, and
+        # nothing in the data would ever show it.
+        answer = self.camera.payload()
+        if answer is None:
+            log.error("CMD SCAN cannot be answered; letting the board fault "
+                      "rather than guessing what is on the shelf")
+            return
+
+        payload, counts = answer
         if not self.link.send("EVT", "INV", payload):
             log.error("could not send the INV reply: %s", payload)
             return
@@ -232,6 +245,13 @@ class Ingest:
             # -again cycle without being dropped halfway through.
             if self.active_member is not None:
                 self.active_member_ts = ts
+            # The camera is told BEFORE the scan arrives, and that ordering is
+            # guaranteed rather than lucky: the board runs `notify_door()` in
+            # the common section of `handle_event()`, ahead of the per-state
+            # switch that calls `request_scan()`. Stage 4 depends on it to
+            # freeze the pre-open reading.
+            if self.camera is not None:
+                self.camera.door_opened(ts)
             self.store.door_opened(ts)
         elif state == "closed":
             # The shelf changes here, NOT when the door opened.
@@ -245,9 +265,15 @@ class Ingest:
             #
             # `CMD SCAN` for the recount arrives just after this, so by the time
             # the Pi answers, the shelf is right.
+            #
+            # One method, not two, and named for the EVENT rather than for what
+            # the simulation does with it. `customer_takes()` and
+            # `maybe_restock()` are statements about a world the caller
+            # controls; a real camera observes a world it does not, and would
+            # have had to grow no-op versions of both to fit. What every backend
+            # can honestly be told is that the door shut.
             if self.camera is not None:
-                self.camera.customer_takes()
-                self.camera.maybe_restock()
+                self.camera.door_closed(ts)
 
             duration = self.store.door_closed(ts)
             if duration is None:

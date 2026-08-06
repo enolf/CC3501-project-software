@@ -12,6 +12,10 @@ asking which configuration is running.
                                                    for exercising reboots
     python -m fridged --port COM7                   the real board (Windows)
     python -m fridged --port /dev/ttyACM0           the real board (Pi)
+    python -m fridged --port sim --camera picapture the real camera, simulated
+                                                   board - the useful hybrid
+                                                   for testing the vision
+    python -m fridged --port /dev/ttyACM0 --camera picapture      the fridge
 """
 
 import argparse
@@ -22,7 +26,7 @@ import signal
 import time
 
 from . import config
-from .camera import SimCamera
+from .camera import PiCapture, SimCamera
 from .payments import BACKENDS, PaymentService
 from .ingest import Ingest
 from .link import Link
@@ -69,6 +73,28 @@ def build_transport(args):
     return serial.Serial(args.port, config.SERIAL_BAUD, timeout=0)
 
 
+def build_camera(args):
+    """Whatever `--camera` asked for. The second sim/real branch in the service.
+
+    Deliberately parallel to `build_transport()` and to `--square`, and
+    deliberately defaulting to the simulation for the same reason: a deployment
+    that never asks for the real camera cannot accidentally be running on
+    fabricated stock. That asymmetry is the point — the safe option is the one
+    you get by saying nothing.
+
+    Independent of `--port`, so the real camera can be pointed at a real shelf
+    while a simulated board drives the transaction flow. That combination is the
+    useful one for testing the vision without standing at the fridge pressing
+    buttons.
+    """
+    if args.camera == "sim":
+        return SimCamera(random.Random(args.sim_seed))
+
+    log.warning("REAL CAMERA - counting a physical shelf with %s",
+                config.PICAPTURE_BINARY)
+    return PiCapture()
+
+
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
         prog="python -m fridged",
@@ -94,6 +120,12 @@ def parse_args(argv=None):
              "is what you want when watching a live dashboard. Unlike "
              "--sim-speed this does not distort the clock, so timestamps stay "
              "honest. Ignored unless --port sim")
+    parser.add_argument(
+        "--camera", default="sim", choices=["sim", "picapture"],
+        help="what answers CMD SCAN: 'sim' is a modelled shelf that needs no "
+             "hardware; 'picapture' runs the real vision subprocess and counts "
+             "the actual shelf. Independent of --port, so a real camera can be "
+             "used with a simulated board")
     parser.add_argument(
         "--square", default="fake", choices=sorted(BACKENDS),
         help="card payments: 'fake' needs no credentials or network; 'real' "
@@ -143,9 +175,9 @@ def main(argv=None):
 
     link = Link(build_transport(args))
 
-    # Stage D8 swaps this for a picapture subprocess. The board cannot
-    # tell the difference: it sends CMD SCAN and something answers.
-    camera = SimCamera(random.Random(args.sim_seed))
+    # The board cannot tell the difference: it sends CMD SCAN and something
+    # answers.
+    camera = build_camera(args)
 
     # Independent of --port on purpose: a REAL payment against a SIMULATED
     # board is the hybrid test in plan.md stage 15.5, and it works because
@@ -186,6 +218,9 @@ def main(argv=None):
         # which matters more than it sounds: the batch is up to five seconds of
         # data, and losing it every time the service is restarted would put
         # small holes throughout the history.
+        # Camera first: it owns a child process, and an orphaned picapture keeps
+        # the camera device open so the NEXT start fails to acquire it.
+        camera.close()
         payments.close()
         store.close()
         link.close()

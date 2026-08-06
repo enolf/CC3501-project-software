@@ -609,6 +609,43 @@ preserving in any rewrite.
 On timeout it prints that the drink is flagged as stolen — the theft-logging
 behaviour the RP2040 side will eventually own.
 
+### 5.3 `fridged/camera.py` — what answers `CMD SCAN`
+
+Two backends behind one interface, the same shape as `pi_link` on the firmware
+side. `--camera sim` (the default) is a modelled shelf; `--camera picapture`
+runs the real vision.
+
+**picapture is a child process of `fridged`, not a service of its own.** That
+keeps the serial link owned by exactly one process, so there is never a window
+where the board asks and two things try to answer, and none where the camera is
+up but the link is not. A second systemd unit would have to be ordered against
+the first and could still drift out of step.
+
+**Newest wins; there is no queue.** `payments.py` queues because every card
+request must be processed. Here only the most recent count means anything, and a
+backlog would be actively harmful: after a stall it would hand the board a
+reading of the shelf as it was seconds ago, presented as current. One value
+under a lock, with the time it arrived.
+
+**Parsing is strict, and checks the key set as a whole.** A picapture built from
+a different brand list is refused outright rather than filtered down to the
+drinks that happen to match — partial acceptance puts counts on the wrong drinks
+and both ends go on agreeing about the wrong numbers with nothing reporting a
+fault.
+
+**When it cannot answer, it does not** (decision D1):
+
+| Age of the newest count | What happens |
+|---|---|
+| under `CAMERA_STALE_S` | answered at full confidence |
+| up to `CAMERA_DEAD_S` | answered, confidence ramped down with age |
+| beyond that, or never | no `EVT INV` at all — the board faults out of service |
+
+The third row is the important one. A fridge that cannot see its shelf does not
+know what it is selling, and going out of service is more honest than repeating
+a stale count as though it were current. There is no code path that invents a
+number.
+
 ---
 
 ## 6. Integration status
@@ -626,12 +663,22 @@ connected.
 | Theft tally | **Does not exist** |
 | Cloud dashboard | **Does not exist** |
 
-### 6.1 No RP2040 ↔ Pi4 link
+> **Section 6 below is stale and describes the project as it was before the
+> serial link, the checkout state machine, the TFT screens and the dashboard
+> were built.** 6.1 has been corrected; the rest has not been re-checked
+> line by line and should not be relied on. See `IMPLEMENTATION.md` for where
+> things actually stand.
 
-No UART, no I2C, no USB protocol on either side. `picapture` builds a packet
-string in `serialize_image()` and only `printf`s it every 30 frames; nothing
-reads it, and the RP2040 has no receive path. **This is the single biggest gap**
-— "waiting for picam → showing purchases" has no transport at all.
+### 6.1 RP2040 ↔ Pi4 link — **built**
+
+A framed line protocol over USB CDC, with a CRC and a shared codec pinned to
+golden frames at both ends (§4). Counts flow Pi → board as `EVT INV` in answer
+to `CMD SCAN`; everything else flows board → Pi.
+
+picapture no longer prints into the void: `fridged` runs it as a subprocess and
+reads its stdout (§5.3). What remains unproven is not the transport but the
+*counting* — the two scans of a door cycle are currently answered from whatever
+the newest frame said, with no settling, which is the subject of stage 4.
 
 ### 6.2 No state machine
 
