@@ -101,14 +101,54 @@ cmake --build build
 # copy build/labs.uf2 onto the RPI-RP2 drive (hold BOOTSEL while plugging in)
 ```
 
-Open a serial terminal at 115200:
+Open a serial terminal at 115200. `pyserial` is already installed for `fridged`,
+so this needs nothing extra:
 
 ```bash
-screen /dev/ttyACM0 115200      # Ctrl-A then K to quit
+python3 -m serial.tools.miniterm \
+    /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 115200    # Ctrl-] to quit
 ```
 
+`screen /dev/ttyACM0 115200` also works if you have it (`Ctrl-A` then `K`), but
+`screen` is not installed by default on Raspberry Pi OS.
+
+> **Use the `by-id` path, not `/dev/ttyACM0`.** The number changes between
+> replugs and reboots, and chasing it wastes more time than it sounds like it
+> should. `ls -l /dev/serial/by-id/` shows the stable name.
+
+> **Stop `fridged` first** — `sudo systemctl stop fridged`. It holds the port,
+> and the unit is `Restart=always`, so it comes back after a reboot. Keep it
+> stopped for the whole session.
+
+**Check the boot banner before doing anything else.** Reset the board with the
+terminal attached; it prints which backend is compiled in:
+
+```
+pi link backend: sim        ← what T2 needs
+pi link backend: serial     ← wrong build, reflash. See below.
+```
+
+**A serial build faults `002` (`FAULT_PI_UNREACHABLE`) about 30 s after boot**
+with nothing talking to it, which is correct behaviour and looks exactly like a
+hardware problem. The sim backend cannot produce that fault — its `is_healthy()`
+returns `true` unconditionally — so fault 002 on this stage means the wrong
+binary, every time.
+
+The firmware **cannot be built on the Pi** (no ARM cross-compiler; CMake refuses
+with "the active CMake kit is a host compiler"). Build on a machine with the
+arm-none-eabi toolchain, and flash by holding BOOTSEL, plugging into *that*
+machine, and dragging `labs.uf2` onto the `RPI-RP2` drive. **The drive
+disappearing is the success signal.** Going via the Pi and WinSCP adds two
+failure modes and no benefit.
+
+`sim` is the default in `CMakeLists.txt`, so a **clean** build directory gives
+the right thing — `rm -rf build` is the reliable fix when the cache holds
+`serial` from earlier. Confirm `-- Pi link backend: sim` in the configure output
+before flashing.
+
 With the **sim** backend, keys take effect immediately — no Enter needed.
-Press `?` for the key list.
+Press `?` for the key list; a serial build ignores stdin entirely, which is a
+second independent check on which binary is running.
 
 | Key | Does |
 | --- | --- |
@@ -477,7 +517,7 @@ need a single character **followed by Enter**, sent by `fake_pi.py`.
 ```bash
 sudo systemctl stop fridged        # only one process may own the port
 cd ~/CC3501-project-software/pi4-software/tools
-python3 fake_pi.py /dev/ttyACM0
+python3 fake_pi.py /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00
 ```
 
 Then, typing into fake_pi:
@@ -618,7 +658,8 @@ Board, Pi, camera, real serial link. Flash the `serial` backend as in T4.
 ```bash
 sudo systemctl stop fridged        # only one process may own the serial port
 cd ~/CC3501-project-software/pi4-software
-python3 -m fridged --port /dev/ttyACM0 --db /tmp/t5full.db --camera picapture
+python3 -m fridged --port /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 \
+    --db /tmp/t5full.db --camera picapture
 ```
 
 Then, at the fridge: open the door, take one can, close it.
@@ -697,7 +738,7 @@ The number `SETTLE_TIMEOUT_S` has to cover. Board connected, real serial link.
 ```bash
 sudo systemctl stop fridged
 cd ~/CC3501-project-software/pi4-software
-python3 -m fridged --port /dev/ttyACM0 --db /tmp/t6.db \
+python3 -m fridged --port /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 --db /tmp/t6.db \
     --camera picapture --log-level DEBUG 2>&1 | tee /tmp/t6-cycles.log
 ```
 
