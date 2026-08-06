@@ -79,12 +79,20 @@ bool parse_bool(const std::string &text, bool &out)
     return false;
 }
 
-/// `name | wire_key | lowH,highH,lowS,highS,lowV,highV`
+/// `name | wire_key | lowH,highH,lowS,highS,lowV,highV [| can_area]`
+///
+/// The fourth field is optional so that a config written before per-brand can
+/// areas existed still loads, with the area defaulting to "not calibrated".
+/// Refusing those files would mean everybody's tuning had to be redone to gain
+/// a feature that is itself opt-in.
 bool parse_brand(const std::string &value, Brand &out, std::string *error)
 {
     const std::vector<std::string> fields = split(value, '|');
-    if (fields.size() != 3) {
-        if (error) *error = "a brand needs 'name | wire_key | six HSV numbers'";
+    if (fields.size() != 3 && fields.size() != 4) {
+        if (error) {
+            *error = "a brand needs 'name | wire_key | six HSV numbers' and "
+                     "optionally '| can_area'";
+        }
         return false;
     }
 
@@ -102,6 +110,13 @@ bool parse_brand(const std::string &value, Brand &out, std::string *error)
     for (size_t i = 0; i < 6; i++) {
         if (!parse_int(hsv[i], *targets[i])) {
             if (error) *error = "'" + hsv[i] + "' is not a whole number";
+            return false;
+        }
+    }
+
+    if (fields.size() == 4 && !fields[3].empty()) {
+        if (!parse_int(fields[3], brand.can_area)) {
+            if (error) *error = "'" + fields[3] + "' is not a whole number";
             return false;
         }
     }
@@ -263,13 +278,20 @@ bool save(const std::string &path, const Config &config, std::string *error)
             "# Listing ANY brand replaces the whole built-in list, so all four\n"
             "# have to appear together. Their order is the order counts are\n"
             "# reported in, and it must match catalogue::Can on the RP2040.\n"
+            "#\n"
+            "#   name | wire key | lowH,highH,lowS,highS,lowV,highV | can area\n"
+            "#\n"
+            "# The can area is the size of ONE can in pixels, and is what lets\n"
+            "# two touching cans be counted as two rather than as one blob.\n"
+            "# Zero means uncalibrated: press 'c' with one can in view.\n"
             "\n";
 
     for (const Brand &brand : config.brands) {
         file << "brand = " << brand.name << " | " << brand.wire_key << " | "
              << brand.lowH << "," << brand.highH << ","
              << brand.lowS << "," << brand.highS << ","
-             << brand.lowV << "," << brand.highV << "\n";
+             << brand.lowV << "," << brand.highV << " | "
+             << brand.can_area << "\n";
     }
 
     file << "\n# Classification. Hue identifies the drink; saturation and value\n"
@@ -425,6 +447,21 @@ bool validate(const Config &config, std::string *error)
         }
         if (brand.lowV < 0 || brand.highV > 255 || brand.lowV > brand.highV) {
             return fail(where + ": value must be 0-255 with low <= high");
+        }
+
+        if (brand.can_area < 0) {
+            return fail(where + ": can_area cannot be negative");
+        }
+
+        // A can smaller than the smallest blob worth looking at is a
+        // contradiction, and a nasty one: every accepted blob would then
+        // divide to two or more cans and the shelf would appear to double.
+        if (brand.can_area > 0 && brand.can_area < config.contour_min_area) {
+            return fail(where + ": can_area (" +
+                        std::to_string(brand.can_area) +
+                        ") is below contour_min_area (" +
+                        std::to_string(config.contour_min_area) +
+                        "), so every blob would count as two or more cans");
         }
     }
 

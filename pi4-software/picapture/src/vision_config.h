@@ -54,6 +54,34 @@ struct Brand {
     int lowH = 0, highH = 179;
     int lowS = 0, highS = 255;
     int lowV = 0, highV = 255;
+
+    /// Area of ONE can of this drink, in pixels at the processing resolution.
+    /// Zero means "not calibrated", and counting falls back to one can per
+    /// blob.
+    ///
+    /// WHY COUNTING BLOBS IS NOT ENOUGH
+    /// --------------------------------
+    /// A blob is a connected region of one colour, and two cans of the same
+    /// drink standing against each other are one connected region. Counting
+    /// blobs reports them as one can.
+    ///
+    /// That is not a cosmetic error. The firmware charges for the DIFFERENCE
+    /// between the shelf before a door cycle and after it, so a merge that
+    /// appears or disappears between those two scans invents or hides a
+    /// purchase — and nothing anywhere reports a fault, because both counts
+    /// were perfectly well-formed.
+    ///
+    /// Tightening contour_max_area does not help: it makes a merged pair count
+    /// as zero rather than as two, which is further from the truth.
+    ///
+    /// Dividing by the area of one can does help, because area is very nearly
+    /// linear in the number of cans while blob count is not. Per brand rather
+    /// than global because the cans are the same size but the coloured PART of
+    /// each is not — a Coke is red nearly all over, a Mountain Dew has a wide
+    /// pale band.
+    ///
+    /// Calibrate with the `c` key: show exactly one can and press it.
+    int can_area = 0;
 };
 
 struct Config {
@@ -128,9 +156,23 @@ struct Config {
     int close_kernel = 3;
 
     /// Contour area bounds, in pixels, at the processing resolution below.
-    /// Anything smaller is noise; anything larger is two cans that have merged
-    /// into one blob, or a reflection of the whole shelf.
-    int contour_min_area = 500;
+    ///
+    /// `contour_min_area` is the single most effective stabiliser in the whole
+    /// pipeline, and it was set far too low. At 500 — under a tenth of a can —
+    /// every label fragment, reflection and sliver of the wrong-coloured edge
+    /// was counted, and the counts flickered constantly. Raising it to roughly
+    /// half a can removed nearly all of that.
+    ///
+    /// `contour_max_area` is a sanity bound, NOT a merge detector. Two touching
+    /// cans make one blob of about twice the area, and rejecting it counts them
+    /// as zero rather than as two. `Brand::can_area` is what handles merges;
+    /// leave this generous enough that a merged pair still gets through to be
+    /// divided up.
+    ///
+    /// Both are in pixels at the processing resolution, so both change if
+    /// process_width/height change, and both depend on how far the camera sits
+    /// from the shelf. Measure them with the `a` key rather than guessing.
+    int contour_min_area = 2500;
     int contour_max_area = 40000;
 
     /// Radius of the blur used to estimate the lighting across the scene, for
@@ -204,11 +246,22 @@ struct Config {
     /// what a pair is supposed to be. Anything wider is two different drinks.
     static constexpr int MAX_SAMPLE_HUE_SPREAD = 15;
 
-    /// How close two brand centres may sit, in weighted distance, before the
-    /// pair is too alike to tell apart reliably. Only a warning: two similar
-    /// drinks might genuinely be the best available, and refusing to save
-    /// would leave nowhere to go.
-    static constexpr double MIN_CENTRE_SEPARATION = 25.0;
+    /// How close two brand centres may sit before the pair is too alike to
+    /// separate reliably, as a fraction of `max_brand_dist`.
+    ///
+    /// Relative rather than absolute because `max_brand_dist` is the radius
+    /// within which a pixel is accepted as a brand at all: two centres closer
+    /// together than that have heavily overlapping acceptance regions, and the
+    /// pixels in the overlap go to whichever is marginally nearer — which
+    /// shadow and glare can flip.
+    ///
+    /// An absolute 25 was the first attempt and it was too lax to be useful.
+    /// It stayed silent while Mountain Dew's centre drifted to within 9 hue of
+    /// Solo's, which is exactly the situation it existed to catch.
+    ///
+    /// Only ever a warning. Two similar drinks may genuinely be what is being
+    /// stocked, and refusing to save would leave nowhere to go.
+    static constexpr double MIN_CENTRE_SEPARATION_FRACTION = 0.75;
 
     // --- "The picture is wrong, not the tuning" detector ---
     //

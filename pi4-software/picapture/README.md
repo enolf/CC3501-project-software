@@ -72,6 +72,7 @@ Retuning does not need a compiler:
 | `1`–`4` | Choose which drink the next two clicks tune |
 | click ×2 | Sample **one** can twice — its brightest part, then its dullest |
 | `a` | Print the size of every blob being counted right now |
+| `c` | With **one** can of the selected drink in view: record how big one can is |
 | `u` | Undo the last sample |
 | `r` | Reset the selected drink to its built-in colour |
 | `s` | Save the current tuning to `picapture.conf` |
@@ -214,15 +215,60 @@ cmake --build build --target config_tests
 
 Runs on any laptop, with or without OpenCV installed.
 
+### Blob size, and why it decides the count
+
+`contour_min_area` is the single most effective stabiliser here. Set too low it
+admits every label fragment, reflection and edge sliver, and the counts flicker
+constantly; raised to roughly half a can, most of that disappears. Measure it
+rather than guessing — press `a` with a known shelf and read the real numbers:
+
+```
+  picture: mean brightness 138 of 255, 21430 of 120000 pixels (17.9%) could be a drink
+  blob areas (min=2500 max=40000):
+    Coke           1 blob(s) -> 1 can(s) [one can = 5400]:  5380
+    Fanta          1 blob(s) -> 1 can(s) [uncalibrated: press c]:  5210
+```
+
+**A blob is not a can.** Two cans of the same drink standing against each other
+are one connected region of colour, so counting blobs reports them as *one*.
+That is not cosmetic: the firmware charges for the *difference* between the
+scan at door-open and the scan at door-close, so a merge that appears or
+disappears across a door cycle invents or hides a purchase — with both counts
+perfectly well-formed and nothing reporting a fault.
+
+Tightening `contour_max_area` does **not** fix it. A rejected merged blob counts
+as zero, which is further from the truth than one.
+
+What does fix it is dividing by the size of one can, because area is very nearly
+linear in the number of cans while blob count is not. Press `c` with exactly one
+can of the selected drink in view; the measured size goes in the fourth field of
+that drink's `brand` line:
+
+```
+brand = Coke | coke | 0,6,238,255,147,180 | 5400
+```
+
+Per drink rather than global, because the cans are the same size but the
+*coloured part* of each is not — a Coke is red nearly all over, a Mountain Dew
+has a wide pale band.
+
+Leave `can_area` at `0` and counting falls back to one-per-blob, which is the
+old behaviour. That is the default on purpose: an uncalibrated divisor would be
+a guess applied to every count.
+
+With areas calibrated, keep `contour_max_area` generous — a merged pair has to
+get *through* the filter to be divided up.
+
 ## Known limits
 
-**A contour is not a can.** The count is the number of blobs of a drink's
-colour, so two cans of the same drink touching each other merge into one blob
-and report as one. `contour_max_area` only rejects the merged blob, which makes
-it report as none instead. Because the firmware charges for the *difference*
-between two counts, a merge that appears or disappears between the baseline and
-the recount invents or hides a purchase. Separate the cans on the shelf, and
-test a full shelf before trusting any of this.
+**Area counting assumes cans are roughly the same distance from the camera.** A
+can at the back of a deep shelf projects to fewer pixels than one at the front,
+so a deep shelf will eventually need per-row calibration or a top-down view.
+
+**Two drinks with adjacent hues stay the hard case.** Coke and Fanta sit about
+7–10 hue apart. Saving warns when any two brand centres come closer than 75% of
+`max_brand_dist`, which is the signal that one has drifted — it caught Mountain
+Dew's centre sliding to within 9 hue of Solo's after a bad sampling session.
 
 **Lighting differs between the two scans.** The baseline is taken as the door
 opens and the recount after it shuts, with the fridge light and the room light

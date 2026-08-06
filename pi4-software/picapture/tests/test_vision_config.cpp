@@ -91,6 +91,21 @@ void test_defaults()
     check("the candidate floors are set",
           config.min_saturation > 0 && config.min_value > 0);
 
+    // 500 was under a tenth of a can, so every label fragment and reflection
+    // was counted and the counts flickered constantly. Raising it was the
+    // single most effective stabiliser found on real hardware.
+    check("the minimum blob area is a meaningful fraction of a can",
+          config.contour_min_area >= 1500);
+
+    // Uncalibrated by default: a divisor nobody measured would be a guess
+    // applied to every count, and one-per-blob is at least honest about what
+    // it is doing.
+    bool uncalibrated = true;
+    for (const vision::Brand &brand : config.brands) {
+        if (brand.can_area != 0) uncalibrated = false;
+    }
+    check("can areas start uncalibrated rather than guessed", uncalibrated);
+
     // The camera on this fridge produces an upright image. rotate_180 was
     // true, which flipped an already-correct frame.
     check("rotation is off for the camera as mounted", !config.rotate_180);
@@ -120,6 +135,7 @@ void test_round_trip()
     original.libcamerasrc_extra = "auto-focus-mode=manual ae-enable=false";
     original.brands[2].lowH = 44;
     original.brands[2].highH = 52;
+    original.brands[1].can_area = 5400;
 
     std::string error;
     check("saving succeeds", vision::save(file.path, original, &error));
@@ -155,9 +171,10 @@ void test_round_trip()
         brands_ok = a.name == b.name && a.wire_key == b.wire_key &&
                     a.lowH == b.lowH && a.highH == b.highH &&
                     a.lowS == b.lowS && a.highS == b.highS &&
-                    a.lowV == b.lowV && a.highV == b.highV;
+                    a.lowV == b.lowV && a.highV == b.highV &&
+                    a.can_area == b.can_area;
     }
-    check("every brand survives, name and band intact", brands_ok);
+    check("every brand survives, name, band and can area intact", brands_ok);
 
     // "Mountain Dew" has a space in it. The name is separated by '|' rather
     // than whitespace for exactly this reason, and a round trip is the only
@@ -198,6 +215,19 @@ void test_partial_and_missing()
                                                       &error));
     check("listing a brand REPLACES the built-in list rather than appending",
           config.brands.size() == 1);
+
+    // Per-brand can areas were added after people already had tuning files.
+    // Refusing a three-field brand line would mean everybody redoing their
+    // colour tuning to gain a feature that is itself opt-in.
+    check("a brand line written before can areas existed still loads",
+          config.brands.size() == 1 && config.brands[0].can_area == 0);
+
+    TempFile with_area("brand_area.conf");
+    with_area.write("brand = Coke | coke | 0,6,220,255,160,220 | 5400\n");
+    error.clear();
+    check("a brand line with a can area loads",
+          vision::load(with_area.path, config, &error) &&
+          config.brands.size() == 1 && config.brands[0].can_area == 5400);
 }
 
 void test_refusals()
@@ -283,6 +313,15 @@ void test_validation()
          [](vision::Config &c) { c.sat_weight = c.hue_weight; }},
         {"a saturation floor above 255 is rejected",
          [](vision::Config &c) { c.min_saturation = 300; }},
+        {"a negative can area is rejected",
+         [](vision::Config &c) { c.brands[0].can_area = -1; }},
+        // A can smaller than the smallest blob worth counting means every
+        // accepted blob divides to two or more cans, and the whole shelf
+        // silently doubles.
+        {"a can area below contour_min_area is rejected",
+         [](vision::Config &c) {
+             c.brands[0].can_area = c.contour_min_area - 1;
+         }},
         {"upscaling past the capture resolution is rejected",
          [](vision::Config &c) { c.process_width = c.capture_width * 2; }},
         {"a period near the board's recount budget is rejected",

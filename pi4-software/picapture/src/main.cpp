@@ -335,6 +335,35 @@ std::vector<Detection> find_cans(Frames &frames, const vision::Config &config,
     return found;
 }
 
+/// How many cans one brand's blobs represent.
+///
+/// NOT simply the number of blobs. Two cans of the same drink standing against
+/// each other are one connected region of colour, and counting blobs reports
+/// them as one can — silently, with a perfectly well-formed packet. Because the
+/// firmware charges for the difference between two scans, a merge that appears
+/// or disappears across a door cycle invents or hides a purchase.
+///
+/// Area is very nearly linear in the number of cans, so dividing by the area of
+/// one can recovers the count. Rounded rather than truncated, and floored at
+/// one, so a partly occluded can still counts as the one can it is.
+///
+/// Falls back to one-per-blob when the brand has not been calibrated, which is
+/// the previous behaviour and the right default: an uncalibrated divisor would
+/// be a guess applied to every count.
+int count_cans(const std::vector<Detection> &blobs, const vision::Brand &brand)
+{
+    if (brand.can_area <= 0) {
+        return (int)blobs.size();
+    }
+
+    int total = 0;
+    for (const Detection &blob : blobs) {
+        const int cans = (int)std::lround(blob.area / (double)brand.can_area);
+        total += std::max(1, cans);
+    }
+    return total;
+}
+
 /// `coke:5,fanta:4,mtndew:5,solo:3;`
 ///
 /// Wire keys rather than initials, so the reader needs no letter-to-drink table
@@ -345,7 +374,8 @@ std::string serialise(const std::vector<std::vector<Detection>> &per_brand,
     std::ostringstream out;
     for (size_t i = 0; i < per_brand.size(); i++) {
         if (i != 0) out << ",";
-        out << config.brands[i].wire_key << ":" << per_brand[i].size();
+        out << config.brands[i].wire_key << ":"
+            << count_cans(per_brand[i], config.brands[i]);
     }
     out << ";";
     return out.str();
@@ -532,10 +562,12 @@ void print_config(const vision::Config &config, int selected)
     printf("  tuning:\n");
     for (size_t i = 0; i < config.brands.size(); i++) {
         const vision::Brand &brand = config.brands[i];
-        printf("    %s %zu %-14s H %3d-%3d  S %3d-%3d  V %3d-%3d\n",
+        printf("    %s %zu %-14s H %3d-%3d  S %3d-%3d  V %3d-%3d  can=%s\n",
                (int)i == selected ? "->" : "  ", i + 1, brand.name.c_str(),
                brand.lowH, brand.highH, brand.lowS, brand.highS,
-               brand.lowV, brand.highV);
+               brand.lowV, brand.highV,
+               brand.can_area > 0 ? std::to_string(brand.can_area).c_str()
+                                  : "not set");
     }
     printf("    weights: hue=%.2f sat=%.2f val=%.2f   max_dist=%.1f\n",
            config.hue_weight, config.sat_weight, config.val_weight,
@@ -556,6 +588,8 @@ void print_debug_keys(const vision::Config &config)
     printf("  click  twice on ONE can - its brightest part, then its dullest\n");
     printf("         (the drink being tuned is shown on the camera window)\n");
     printf("  a      print the size of every blob being counted right now\n");
+    printf("  c      with ONE can of the selected drink in view: record how\n");
+    printf("         big a single can is, so touching cans count separately\n");
     printf("  u      undo the last sample\n");
     printf("  r      reset the selected drink to its built-in colour\n");
     printf("  s      save the current tuning to %s\n", CONFIG_PATH);
@@ -588,8 +622,15 @@ void print_areas(const std::vector<std::vector<Detection>> &per_brand,
     printf("  blob areas (min=%d max=%d):\n", config.contour_min_area,
            config.contour_max_area);
     for (size_t i = 0; i < per_brand.size(); i++) {
-        printf("    %-14s %zu blob(s):", config.brands[i].name.c_str(),
-               per_brand[i].size());
+        const vision::Brand &brand = config.brands[i];
+        printf("    %-14s %zu blob(s) -> %d can(s)", brand.name.c_str(),
+               per_brand[i].size(), count_cans(per_brand[i], brand));
+        if (brand.can_area > 0) {
+            printf(" [one can = %d]", brand.can_area);
+        } else {
+            printf(" [uncalibrated: press c]");
+        }
+        printf(":");
         if (per_brand[i].empty()) {
             printf("  -");
         }
@@ -599,6 +640,27 @@ void print_areas(const std::vector<std::vector<Detection>> &per_brand,
         printf("\n");
     }
     fflush(stdout);
+}
+
+/// Record the size of one can of the selected drink, from what is on screen.
+///
+/// Takes the LARGEST blob rather than an average of them. The instruction is to
+/// show exactly one can, so there should be one blob; if a reflection or a
+/// sliver of something else also got through, the can is the big one. An
+/// average would quietly be dragged down by the very noise the area filter
+/// exists to reject.
+bool calibrate_can_area(const std::vector<Detection> &blobs,
+                        vision::Brand &brand)
+{
+    double largest = 0.0;
+    for (const Detection &blob : blobs) {
+        largest = std::max(largest, blob.area);
+    }
+    if (largest <= 0.0) {
+        return false;
+    }
+    brand.can_area = (int)std::lround(largest);
+    return true;
 }
 
 /// Complain if two drinks are too alike to be told apart reliably.
@@ -618,7 +680,9 @@ void warn_about_close_centres(const vision::Config &config,
             const double dv = (centres[i].v - centres[j].v) * config.val_weight;
             const double dist = std::sqrt(dh * dh + ds * ds + dv * dv);
 
-            if (dist < vision::Config::MIN_CENTRE_SEPARATION) {
+            const double too_close = config.max_brand_dist *
+                                     vision::Config::MIN_CENTRE_SEPARATION_FRACTION;
+            if (dist < too_close) {
                 printf("  WARNING: %s and %s are only %.1f apart - expect one "
                        "to be counted as the other\n",
                        config.brands[i].name.c_str(),
@@ -877,6 +941,19 @@ int main(int argc, char *argv[])
                 print_config(config, sampling.brand_index);
             } else if (key == 'a') {
                 print_areas(per_brand, config, stats);
+            } else if (key == 'c') {
+                vision::Brand &brand = config.brands[sampling.brand_index];
+                undo_brand = brand;
+                undo_index = sampling.brand_index;
+                if (calibrate_can_area(per_brand[sampling.brand_index],
+                                       brand)) {
+                    printf("  one %s is %d pixels - two touching cans will now "
+                           "count as two\n",
+                           brand.name.c_str(), brand.can_area);
+                } else {
+                    printf("  no %s visible to measure\n", brand.name.c_str());
+                }
+                fflush(stdout);
             } else if (key == 'u') {
                 if (undo_index >= 0) {
                     config.brands[undo_index] = undo_brand;
