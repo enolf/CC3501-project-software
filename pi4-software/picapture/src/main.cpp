@@ -451,32 +451,18 @@ int main()
   cv::createTrackbar("ContourMinArea", "Control", &ContourMinSize, Trackbar::ContourMinArea.max_val);
   cv::createTrackbar("ContourMaxArea", "Control", &ContourMaxSize, Trackbar::ContourMaxArea.max_val);
 
-  // std::vector<Color_Config> colors_vec = {
-  //   {"Sunkist", 9, 16, 160, 255, 150, 255},    // orange
-  //   {"Solo", 25, 34, 150, 255, 150, 255},    // yellow
-  //   {"Fanta", 17, 24, 180, 255, 150, 255}, // deeper orange, higher sat than Fanta
-  //   {"Coke", 0, 8, 160, 255, 100, 255},      // red
-  //   {"Pepsi", 100, 120, 150, 255, 100, 255}, // blue
-  // };
 // std::vector<Color_Config> colors_vec = {
-//   {"Coke",   'C', 0,   8, 150, 255, 80,  255},  // red
-//   {"Fanta",  'F', 8,  20, 150, 255, 100, 255},  // orange
-//   {"Sprite", 'G', 45, 75, 100, 255, 80,  255},  // green — 'G' to avoid clashing with Solo's 'S'
-//   {"Solo",   'S', 22, 35, 130, 255, 130, 255},  // yellow
+//   {"Coke",   'C', 3,  15, 190, 255, 130, 255},  // red
+//   {"Fanta",  'F', 8,  20, 230, 255, 185, 205},  // orange — not yet sampled, placeholder
+//   {"Sprite", 'G', 44, 60, 140, 255, 110, 255},  // green
+//   {"Solo",   'S', 23, 35, 190, 255, 150, 255},  // yellow
 // };
 std::vector<Color_Config> colors_vec = {
-  {"Coke",   'C', 3,  15, 190, 255, 130, 255},  // red
-  {"Fanta",  'F', 8,  20, 230, 255, 185, 205},  // orange — not yet sampled, placeholder
-  {"Sprite", 'G', 44, 60, 140, 255, 110, 255},  // green
-  {"Solo",   'S', 23, 35, 190, 255, 150, 255},  // yellow
+  {"Coke",   'C', 0,   6,  240, 255, 209, 240},  // red
+  {"Fanta",  'F', 3,  17,  236, 255, 130, 165},  // orange
+  {"Sprite", 'G', 41, 55,  133, 255, 66,  103},  // green — widened S ceiling to 255 for headroom
+  {"Solo",   'S', 21, 34,  231, 255, 71,  103},  // yellow
 };
-// std::vector<Color_Config> colors_vec = {
-//   {"Coke",    0,   8, 150, 255, 80,  255},  // red
-//   {"Fanta",   8,  20, 150, 255, 100, 255},  // orange
-//   {"Passito", 130, 155, 60, 255, 60,  255},  // purple
-//   {"Solo",   22,  35, 130, 255, 130, 255},  // yellow
-// };
-
   // NEW: precompute the brand HSV centres once. These drive the per-pixel
   // classification below and only need to be rebuilt if colors_vec changes.
   std::vector<Brand_Centre> brand_centres = build_brand_centres(colors_vec);
