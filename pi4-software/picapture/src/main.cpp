@@ -458,11 +458,17 @@ int main()
   //   {"Coke", 0, 8, 160, 255, 100, 255},      // red
   //   {"Pepsi", 100, 120, 150, 255, 100, 255}, // blue
   // };
+// std::vector<Color_Config> colors_vec = {
+//   {"Coke",   'C', 0,   8, 150, 255, 80,  255},  // red
+//   {"Fanta",  'F', 8,  20, 150, 255, 100, 255},  // orange
+//   {"Sprite", 'G', 45, 75, 100, 255, 80,  255},  // green — 'G' to avoid clashing with Solo's 'S'
+//   {"Solo",   'S', 22, 35, 130, 255, 130, 255},  // yellow
+// };
 std::vector<Color_Config> colors_vec = {
-  {"Coke",   'C', 0,   8, 150, 255, 80,  255},  // red
-  {"Fanta",  'F', 8,  20, 150, 255, 100, 255},  // orange
-  {"Sprite", 'G', 45, 75, 100, 255, 80,  255},  // green — 'G' to avoid clashing with Solo's 'S'
-  {"Solo",   'S', 22, 35, 130, 255, 130, 255},  // yellow
+  {"Coke",   'C', 3,  15, 190, 255, 130, 255},  // red
+  {"Fanta",  'F', 8,  20, 150, 255, 100, 255},  // orange — not yet sampled, placeholder
+  {"Sprite", 'G', 44, 60, 140, 255, 110, 255},  // green
+  {"Solo",   'S', 23, 35, 190, 255, 150, 255},  // yellow
 };
 // std::vector<Color_Config> colors_vec = {
 //   {"Coke",    0,   8, 150, 255, 80,  255},  // red
