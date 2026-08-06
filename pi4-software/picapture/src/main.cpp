@@ -26,7 +26,7 @@ Can distance thresholding
 
 // #define USE_FLAT_IMAGE
 #define TESTING
-// #define PI_CAMERA_MODULE
+#define PI_CAMERA_MODULE
 
 constexpr const char* pipeline = "libcamerasrc"
   " ! video/x-raw, width=800, height=600" // camera needs to capture at a higher resolution
@@ -477,6 +477,7 @@ int main()
   pf.original = pf.bgr_img.clone();
 #endif
 
+
   onMouse_UserData mouse_click_data;
   mouse_click_data.p_frame = &pf.original;
 
@@ -495,9 +496,8 @@ int main()
 
     next += kPeriod;
 
-
 #ifdef PI_CAMERA_MODULE
-    if (!cap.read(frame)) {
+    if (!cap.read(pf.original)) {
       printf("Could not read a frame.\n");
       return 1;
     }
@@ -505,6 +505,7 @@ int main()
     pf.original = pf.bgr_img.clone();
 #endif
     /* At this point in the code we have 'frame' regardless of NO_PI_CAMERA_MODULE flag */
+
 
 #ifdef USE_FLAT_IMAGE
     flat_frame = removeHighlightsShadows(frame);
