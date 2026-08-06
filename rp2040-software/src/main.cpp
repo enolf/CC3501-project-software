@@ -487,10 +487,16 @@ int main()
     // the display, so a slow or faulty card cannot delay the screen coming up,
     // and deliberately non-fatal: if there is no card the fridge trades exactly
     // as before, with logging going to the serial monitor only.
-    if (sd_log::init()) {
-        sd_log::write_linef("BOOT fw=%s door=%s", FIRMWARE_VERSION,
-                            switches::is_door_closed() ? "closed" : "open");
-    }
+    //
+    // The BOOT line is written whether or not the mount succeeded, and that is
+    // the whole point of the RAM buffer: with no card in the slot it still goes
+    // into memory, so a card pushed in later and dumped with the panel button
+    // gets a log that starts at power-on rather than at whatever happened to
+    // occur after somebody found a card. Writing it inside the `if` — which is
+    // what this was — produced a dump whose first line was a transaction.
+    (void)sd_log::init();
+    sd_log::write_linef("BOOT fw=%s door=%s", FIRMWARE_VERSION,
+                        switches::is_door_closed() ? "closed" : "open");
 
     // Start the state machine last, so it draws the idle screen over whatever
     // startup produced and everything it depends on is already up.

@@ -8,6 +8,7 @@
 
 #include "ff.h"
 #include "drivers/logging/logging.h"
+#include "drivers/sd_card/sd_card.h"
 
 namespace sd_log {
 
@@ -236,6 +237,27 @@ unsigned long dropped_lines()
 
 bool dump_to_card()
 {
+    // Re-run the card's initialisation handshake, unconditionally.
+    //
+    // NOT redundant with the f_mount below. FatFs asks disk_initialize() to
+    // bring the card up, and that function short-circuits when
+    // sd_card_is_ready() is already true — a sensible optimisation that costs
+    // nearly a second when it applies, and exactly the wrong behaviour here.
+    // The card in the slot NOW may not be the card that was probed: it may have
+    // been pushed in after boot, or pulled out, taken to a laptop and put back.
+    // A reinserted card has powered down and forgotten its state, so talking to
+    // it on the strength of a probe from before it was removed fails in ways
+    // that look like a corrupt filesystem rather than an uninitialised card.
+    //
+    // Probing every time costs up to a second on a button press nobody is
+    // timing, which is the cheapest part of this whole operation.
+    SdCardInfo info;
+    if (!sd_card_probe(info)) {
+        log(LogLevel::WARNING, "sd_log: no card responded to the probe");
+        mounted = false;
+        return false;
+    }
+
     // Mounted here rather than trusting init(): the card is expected to have
     // been pushed in seconds ago, long after boot, so whatever happened at
     // startup says nothing about what is in the slot now.
