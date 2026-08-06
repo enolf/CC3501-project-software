@@ -162,15 +162,26 @@ inline bool is_candidate(const cv::Vec3b &px, const vision::Config &config)
     return px[1] >= config.min_saturation && px[2] >= config.min_value;
 }
 
+/// What the frame looked like, for telling a dark picture from an empty shelf.
+struct FrameStats {
+    long candidates = 0;    ///< Pixels that passed the saturation/value floors
+    long pixels = 0;
+    double mean_value = 0.0;
+};
+
 /// Assign every pixel to its nearest brand, or to the background.
 ///
 /// One pass covering all brands rather than one pass per brand: cheaper, and —
 /// the reason it was written this way — it is what guarantees a pixel has a
 /// single owner.
 cv::Mat classify(const cv::Mat &hsv, const std::vector<BrandCentre> &centres,
-                 const vision::Config &config)
+                 const vision::Config &config, FrameStats &stats)
 {
     cv::Mat labels(hsv.size(), CV_8SC1, cv::Scalar(BACKGROUND_LABEL));
+
+    stats = FrameStats{};
+    stats.pixels = (long)hsv.rows * hsv.cols;
+    long value_total = 0;
 
     for (int y = 0; y < hsv.rows; ++y) {
         const cv::Vec3b *row = hsv.ptr<cv::Vec3b>(y);
@@ -178,7 +189,10 @@ cv::Mat classify(const cv::Mat &hsv, const std::vector<BrandCentre> &centres,
 
         for (int x = 0; x < hsv.cols; ++x) {
             const cv::Vec3b &px = row[x];
+            value_total += px[2];
+
             if (!is_candidate(px, config)) continue;   // shelf, shadow, glare
+            stats.candidates++;
 
             double best = std::numeric_limits<double>::max();
             int best_label = BACKGROUND_LABEL;
@@ -195,6 +209,10 @@ cv::Mat classify(const cv::Mat &hsv, const std::vector<BrandCentre> &centres,
                 out[x] = (signed char)best_label;
             }
         }
+    }
+
+    if (stats.pixels > 0) {
+        stats.mean_value = (double)value_total / (double)stats.pixels;
     }
     return labels;
 }
@@ -560,8 +578,13 @@ void print_debug_keys(const vision::Config &config)
 /// twice that. It is also how contour_min_area and contour_max_area get set
 /// from measurements rather than from guesses.
 void print_areas(const std::vector<std::vector<Detection>> &per_brand,
-                 const vision::Config &config)
+                 const vision::Config &config, const FrameStats &stats)
 {
+    // Exposure first, because if this is wrong nothing below means anything.
+    printf("  picture: mean brightness %.0f of 255, %ld of %ld pixels "
+           "(%.1f%%) could be a drink\n",
+           stats.mean_value, stats.candidates, stats.pixels,
+           stats.pixels > 0 ? 100.0 * stats.candidates / stats.pixels : 0.0);
     printf("  blob areas (min=%d max=%d):\n", config.contour_min_area,
            config.contour_max_area);
     for (size_t i = 0; i < per_brand.size(); i++) {
@@ -741,6 +764,9 @@ int main(int argc, char *argv[])
     /// Last packet printed, for the debug modes' print-on-change.
     std::string last_packet;
 
+    /// Consecutive frames with almost nothing bright enough to be a drink.
+    int dark_frames = 0;
+
     using clock = std::chrono::steady_clock;
     auto next_due = clock::now();
     const auto period = std::chrono::milliseconds(config.period_ms);
@@ -762,7 +788,35 @@ int main(int argc, char *argv[])
             cv::cvtColor(frames.original, frames.hsv, cv::COLOR_BGR2HSV);
         }
 
-        frames.classification = classify(frames.hsv, centres, config);
+        FrameStats stats;
+        frames.classification = classify(frames.hsv, centres, config, stats);
+
+        // A nearly-empty frame and a nearly-black one produce identical output:
+        // all zeros. Saying which it is turns an afternoon of retuning
+        // something that was never wrong into one line on stderr.
+        if (stats.candidates <
+            (long)(stats.pixels * vision::Config::DARK_FRAME_CANDIDATE_FRACTION)) {
+            dark_frames++;
+            if (dark_frames == vision::Config::DARK_FRAME_WARN_AFTER ||
+                (dark_frames > vision::Config::DARK_FRAME_WARN_AFTER &&
+                 dark_frames % vision::Config::DARK_FRAME_WARN_REPEAT == 0)) {
+                fprintf(stderr,
+                        "picapture: almost nothing in the picture is bright or "
+                        "colourful enough to be a drink\n"
+                        "  (%ld of %ld pixels pass the floors; mean brightness "
+                        "%.0f of 255, min_value=%d min_saturation=%d)\n"
+                        "  An empty shelf looks like this. So does an "
+                        "underexposed camera - if the mean brightness is low,\n"
+                        "  suspect the exposure, NOT the colour tuning. Setting "
+                        "ae-enable=false without also giving\n"
+                        "  exposure-time and analogue-gain leaves the sensor in "
+                        "manual mode with no values to use.\n",
+                        stats.candidates, stats.pixels, stats.mean_value,
+                        config.min_value, config.min_saturation);
+            }
+        } else {
+            dark_frames = 0;
+        }
 
         // Drawing is the largest per-frame cost after classification, and
         // headless has nobody to show it to.
@@ -822,7 +876,7 @@ int main(int argc, char *argv[])
             } else if (key == 'p') {
                 print_config(config, sampling.brand_index);
             } else if (key == 'a') {
-                print_areas(per_brand, config);
+                print_areas(per_brand, config, stats);
             } else if (key == 'u') {
                 if (undo_index >= 0) {
                     config.brands[undo_index] = undo_brand;

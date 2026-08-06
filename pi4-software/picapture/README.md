@@ -144,21 +144,44 @@ seconds at a time, which no amount of frame averaging downstream can fix,
 because the measurement itself is moving.
 
 `libcamerasrc_extra` is appended to the `libcamerasrc` element verbatim so you
-can lock them without a rebuild:
+can lock them without a rebuild. It is a **line in `picapture.conf`**, not a
+shell command:
 
 ```
-libcamerasrc_extra = ae-enable=false awb-mode=daylight
+libcamerasrc_extra = awb-mode=daylight
 ```
 
 The properties available differ between libcamera versions, so check yours
-first:
+first with `gst-inspect-1.0 libcamerasrc`.
 
-```
-gst-inspect-1.0 libcamerasrc
-```
+> **`ae-enable=false` on its own will black out the picture.** Setting it puts
+> both `ExposureTimeMode` and `AnalogueGainMode` into *manual*, and
+> `exposure-time` and `analogue-gain` both default to `0`. Since auto-exposure
+> never ran, there is no last-known-good value to fall back on and the sensor
+> uses a best-effort default — in practice, nearly black. Every count then goes
+> to zero, which looks exactly like broken colour tuning.
+>
+> If you disable AE you **must** supply both values:
+>
+> ```
+> libcamerasrc_extra = awb-mode=daylight ae-enable=false exposure-time=20000 analogue-gain=2.0
+> ```
+>
+> Get sensible starting numbers by letting auto-exposure settle and reading
+> what it chose:
+>
+> ```
+> rpicam-still -n -o /tmp/shot.jpg --metadata /tmp/meta.json
+> grep -iE "exposuretime|analoguegain" /tmp/meta.json
+> ```
 
-Tune the exposure once, with the fridge lit as it will be in service, and lock
-it there.
+picapture detects this case rather than leaving you guessing: if almost nothing
+in the frame passes the saturation and value floors for a few seconds, it prints
+the mean brightness to stderr and says to suspect the exposure rather than the
+tuning. The `a` key reports the same figures on demand.
+
+`awb-mode=daylight` alone is safe — it only constrains which illuminants the
+white-balance search considers, and does not disable anything.
 
 A missing `picapture.conf` is not an error — it just means this machine has
 never been tuned. A file that exists but cannot be parsed **is** an error and

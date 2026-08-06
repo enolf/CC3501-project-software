@@ -210,6 +210,30 @@ struct Config {
     /// would leave nowhere to go.
     static constexpr double MIN_CENTRE_SEPARATION = 25.0;
 
+    // --- "The picture is wrong, not the tuning" detector ---
+    //
+    // A dark frame and an empty shelf produce the SAME output: all zeros. That
+    // is a genuinely bad failure mode, because the natural reading is that
+    // detection has broken and the natural response is to retune — which
+    // cannot help and quietly makes the tuning worse.
+    //
+    // It is not hypothetical. Setting `ae-enable=false` on libcamerasrc without
+    // also supplying `exposure-time` and `analogue-gain` puts the sensor into
+    // manual mode with no values to use, and the picture goes nearly black.
+    // Every count went to zero and nothing said why.
+
+    /// Below this fraction of pixels passing the floors, the frame is
+    /// effectively empty.
+    static constexpr double DARK_FRAME_CANDIDATE_FRACTION = 0.005;
+
+    /// How many consecutive such frames before saying so. A few seconds' worth,
+    /// so genuinely closing the fridge on an empty shelf does not trip it.
+    static constexpr int DARK_FRAME_WARN_AFTER = 20;
+
+    /// How often to repeat the warning while it persists. Often enough not to
+    /// be missed, rarely enough not to become the log.
+    static constexpr int DARK_FRAME_WARN_REPEAT = 240;
+
     // --- Slider ranges for the debug UI ---
     //
     // Here rather than in the UI code so that a value loaded from a file which
