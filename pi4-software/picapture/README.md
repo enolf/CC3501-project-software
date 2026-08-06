@@ -78,6 +78,67 @@ Retuning does not need a compiler:
 The sliders and the clicks write straight into the live config, so the effect
 shows on the very next frame. `s` writes exactly what you are looking at.
 
+**Every click also prints why that pixel classified the way it did** — the
+distance to each drink, broken down by channel:
+
+```
+  sample 1 of 2: H=4 S=241 V=178
+      -> Coke           dist   18.3  (hue  12.0  sat   1.8  val  13.5)
+         Fanta          dist   31.7  (hue  24.0  sat   2.3  val  20.4)
+         Mountain Dew   dist  151.2  (hue 148.0  sat  27.0  val  22.1)
+         Solo           dist   72.4  (hue  68.0  sat   2.5  val  22.8)
+```
+
+This is the tool for separating two drinks that keep swapping. "Coke sometimes
+reads as Fanta" is not actionable; a 13-unit margin with the value term nearly
+as large as the hue term tells you exactly what to change. Click the same can in
+shade and in glare and watch how much the margin moves.
+
+### How a pixel is classified
+
+Two separate questions, and keeping them separate is load-bearing:
+
+1. **Is this a drink at all?** Global `min_saturation` and `min_value` floors.
+   Grey shelf, dark shadow and blown-out highlights are background.
+2. **Which drink?** Nearest brand centre, with hue weighted well above
+   saturation and value.
+
+These floors used to be **per brand**, and that caused the exact fault it looked
+like it was preventing. Coke floored value at 160 and Fanta at 130, so a Coke can
+in shadow at V=150 was not rejected as unknown — it was refused by Coke,
+accepted by Fanta, and *became a Fanta*. A floor may decide whether something is
+a drink; it must never decide which drink.
+
+`sat_weight` and `val_weight` exist for the same reason. With saturation and
+value contributing their raw difference, the value gap between Coke and Fanta
+(43) exceeded the weighted hue gap (28) — so the channel that tracks the
+lighting was out-voting the channel that identifies the drink. `validate()`
+refuses a config where either outweighs hue.
+
+### If counts drift with nothing moving
+
+Almost certainly the camera's own auto-exposure and auto-white-balance. As they
+adjust, every hue in the frame shifts and classification wanders — for tens of
+seconds at a time, which no amount of frame averaging downstream can fix,
+because the measurement itself is moving.
+
+`libcamerasrc_extra` is appended to the `libcamerasrc` element verbatim so you
+can lock them without a rebuild:
+
+```
+libcamerasrc_extra = ae-enable=false awb-mode=daylight
+```
+
+The properties available differ between libcamera versions, so check yours
+first:
+
+```
+gst-inspect-1.0 libcamerasrc
+```
+
+Tune the exposure once, with the fridge lit as it will be in service, and lock
+it there.
+
 A missing `picapture.conf` is not an error — it just means this machine has
 never been tuned. A file that exists but cannot be parsed **is** an error and
 the program refuses to start, because running with tuning nobody chose looks

@@ -74,6 +74,26 @@ void test_defaults()
     // fed ragged noise to the contour finder. It reported counts happily.
     check("morphological cleanup is on by default",
           config.open_kernel > 0 && config.close_kernel > 0);
+
+    // Hue is the only channel that identifies a drink rather than the light
+    // falling on it. When saturation and value were unweighted, the value term
+    // between Coke and Fanta (43) exceeded the weighted hue term (28), so a can
+    // in shadow changed drink. The ordering below is the fix.
+    check("hue outweighs both saturation and value",
+          config.hue_weight > config.sat_weight &&
+          config.hue_weight > config.val_weight);
+
+    // Value is the channel that moves most with lighting and says least about
+    // which drink it is, so it should be the least trusted of the three.
+    check("value is trusted least of all",
+          config.val_weight <= config.sat_weight);
+
+    check("the candidate floors are set",
+          config.min_saturation > 0 && config.min_value > 0);
+
+    // The camera on this fridge produces an upright image. rotate_180 was
+    // true, which flipped an already-correct frame.
+    check("rotation is off for the camera as mounted", !config.rotate_180);
 }
 
 void test_round_trip()
@@ -88,9 +108,16 @@ void test_round_trip()
     original.contour_min_area = 1234;
     original.contour_max_area = 23456;
     original.hue_weight = 3.5;
+    original.sat_weight = 0.75;
+    original.val_weight = 0.125;
     original.max_brand_dist = 61.25;
-    original.rotate_180 = false;
+    original.min_saturation = 77;
+    original.min_value = 44;
+    original.rotate_180 = true;
     original.period_ms = 400;
+    // A GStreamer fragment: spaces, equals signs and all. It has to survive
+    // verbatim or locking the camera's exposure silently stops working.
+    original.libcamerasrc_extra = "auto-focus-mode=manual ae-enable=false";
     original.brands[2].lowH = 44;
     original.brands[2].highH = 52;
 
@@ -106,10 +133,20 @@ void test_round_trip()
                               reloaded.close_kernel == 7 &&
                               reloaded.contour_min_area == 1234 &&
                               reloaded.contour_max_area == 23456 &&
+                              reloaded.min_saturation == 77 &&
+                              reloaded.min_value == 44 &&
                               reloaded.period_ms == 400);
     check("doubles survive", reloaded.hue_weight == 3.5 &&
+                             reloaded.sat_weight == 0.75 &&
+                             reloaded.val_weight == 0.125 &&
                              reloaded.max_brand_dist == 61.25);
-    check("booleans survive", reloaded.rotate_180 == false);
+    check("booleans survive", reloaded.rotate_180 == true);
+
+    // Written last on the line and containing both spaces and '=', so it is
+    // the field most likely to be mangled by a naive parser.
+    check("a GStreamer fragment survives verbatim, spaces and all",
+          reloaded.libcamerasrc_extra ==
+              "auto-focus-mode=manual ae-enable=false");
 
     bool brands_ok = reloaded.brands.size() == original.brands.size();
     for (size_t i = 0; brands_ok && i < original.brands.size(); i++) {
@@ -235,6 +272,17 @@ void test_validation()
          [](vision::Config &c) { c.flat_field_blur = 50; }},
         {"a zero hue weight is rejected",
          [](vision::Config &c) { c.hue_weight = 0.0; }},
+        {"a negative weight is rejected",
+         [](vision::Config &c) { c.val_weight = -1.0; }},
+        // The exact configuration that made Coke read as Fanta in shadow.
+        // Rejected rather than allowed as a tuning choice, because it defeats
+        // the one principle the whole classifier rests on.
+        {"value outweighing hue is rejected",
+         [](vision::Config &c) { c.val_weight = c.hue_weight + 1.0; }},
+        {"saturation outweighing hue is rejected",
+         [](vision::Config &c) { c.sat_weight = c.hue_weight; }},
+        {"a saturation floor above 255 is rejected",
+         [](vision::Config &c) { c.min_saturation = 300; }},
         {"upscaling past the capture resolution is rejected",
          [](vision::Config &c) { c.process_width = c.capture_width * 2; }},
         {"a period near the board's recount budget is rejected",

@@ -92,9 +92,14 @@ struct Detection {
 };
 
 /// A brand's HSV centre, precomputed from its configured box.
+///
+/// No per-brand floors any more. They used to live here and they caused the
+/// bug they were meant to prevent: Coke floored value at 160 and Fanta at 130,
+/// so a Coke can in shadow was refused by Coke and accepted by Fanta. Whether a
+/// pixel is a drink is now a global question; which drink is settled purely by
+/// distance.
 struct BrandCentre {
     double h, s, v;
-    int min_s, min_v;   ///< Below these a pixel is too grey or dark to be this
 };
 
 /// Click-to-sample: two clicks on a can set that drink's colour band.
@@ -105,6 +110,11 @@ struct SampleState {
     cv::Vec3b first{};
     cv::Vec3b second{};
     bool pair_ready = false;
+
+    // For the per-click diagnostic. Pointers rather than copies so the readout
+    // reflects tuning as it is edited, not as it was when the window opened.
+    const vision::Config *config = nullptr;
+    const std::vector<BrandCentre> *centres = nullptr;
 };
 
 // ---------------------------------------------------------------------------
@@ -120,8 +130,6 @@ std::vector<BrandCentre> build_centres(const vision::Config &config)
             (brand.lowH + brand.highH) / 2.0,
             (brand.lowS + brand.highS) / 2.0,
             (brand.lowV + brand.highV) / 2.0,
-            brand.lowS,
-            brand.lowV,
         });
     }
     return centres;
@@ -138,13 +146,38 @@ inline double hue_distance(double a, double b)
     return std::min(d, 180.0 - d);
 }
 
+/// How far one pixel is from one brand.
+///
+/// Factored out so the classifier and the click diagnostic can never disagree
+/// about it. A tuning readout that computed the distance slightly differently
+/// from the classifier would be worse than no readout at all.
+inline double brand_distance(const cv::Vec3b &px, const BrandCentre &centre,
+                             const vision::Config &config)
+{
+    const double dh = hue_distance(px[0], centre.h) * config.hue_weight;
+    const double ds = ((double)px[1] - centre.s) * config.sat_weight;
+    const double dv = ((double)px[2] - centre.v) * config.val_weight;
+    return std::sqrt(dh * dh + ds * ds + dv * dv);
+}
+
+/// Is this pixel a drink at all?
+///
+/// Global, and deliberately answered before any brand is considered. Asking it
+/// per brand is what let a shadow rename a can: two brands with different value
+/// floors meant a dimmed Coke failed Coke's floor, passed Fanta's, and became a
+/// Fanta rather than becoming unknown.
+inline bool is_candidate(const cv::Vec3b &px, const vision::Config &config)
+{
+    return px[1] >= config.min_saturation && px[2] >= config.min_value;
+}
+
 /// Assign every pixel to its nearest brand, or to the background.
 ///
 /// One pass covering all brands rather than one pass per brand: cheaper, and —
 /// the reason it was written this way — it is what guarantees a pixel has a
 /// single owner.
 cv::Mat classify(const cv::Mat &hsv, const std::vector<BrandCentre> &centres,
-                 double hue_weight, double max_dist)
+                 const vision::Config &config)
 {
     cv::Mat labels(hsv.size(), CV_8SC1, cv::Scalar(BACKGROUND_LABEL));
 
@@ -154,27 +187,22 @@ cv::Mat classify(const cv::Mat &hsv, const std::vector<BrandCentre> &centres,
 
         for (int x = 0; x < hsv.cols; ++x) {
             const cv::Vec3b &px = row[x];
+            if (!is_candidate(px, config)) continue;   // shelf, shadow, glare
+
             double best = std::numeric_limits<double>::max();
             int best_label = BACKGROUND_LABEL;
 
             for (size_t i = 0; i < centres.size(); ++i) {
-                const BrandCentre &centre = centres[i];
-                if (px[1] < centre.min_s || px[2] < centre.min_v) {
-                    continue;   // too washed out or too dark to be this drink
-                }
-
-                const double dh = hue_distance(px[0], centre.h) * hue_weight;
-                const double ds = (double)px[1] - centre.s;
-                const double dv = (double)px[2] - centre.v;
-                const double dist = std::sqrt(dh * dh + ds * ds + dv * dv);
-
+                const double dist = brand_distance(px, centres[i], config);
                 if (dist < best) {
                     best = dist;
                     best_label = (int)i;
                 }
             }
 
-            if (best <= max_dist) out[x] = (signed char)best_label;
+            if (best <= config.max_brand_dist) {
+                out[x] = (signed char)best_label;
+            }
         }
     }
     return labels;
@@ -343,6 +371,57 @@ void on_mouse(int event, int x, int y, int /*flags*/, void *userdata)
         state->pair_ready = true;
         printf("  sample 2 of 2: H=%d S=%d V=%d\n", hsv[0], hsv[1], hsv[2]);
     }
+
+    // --- Why this pixel classified the way it did ---
+    //
+    // The readout that makes two similar drinks tunable. "Coke sometimes reads
+    // as Fanta" is not actionable; "this pixel is 31.2 from Coke and 33.8 from
+    // Fanta" says exactly how much margin there is and which channel spent it.
+    // Printing the per-channel contributions matters as much as the total —
+    // that is how the original fault was visible at a glance, with the value
+    // term larger than the hue term for two drinks that differ only in hue.
+    if (state->config != nullptr && state->centres != nullptr) {
+        const vision::Config &config = *state->config;
+
+        if (!is_candidate(hsv, config)) {
+            printf("      background: S=%d V=%d is below the floor "
+                   "(min_saturation=%d min_value=%d)\n",
+                   hsv[1], hsv[2], config.min_saturation, config.min_value);
+        } else {
+            double best = std::numeric_limits<double>::max();
+            size_t winner = 0;
+            for (size_t i = 0; i < state->centres->size(); i++) {
+                const double dist = brand_distance(hsv, (*state->centres)[i],
+                                                   config);
+                if (dist < best) {
+                    best = dist;
+                    winner = i;
+                }
+            }
+
+            for (size_t i = 0; i < state->centres->size(); i++) {
+                const BrandCentre &centre = (*state->centres)[i];
+                const double dh = hue_distance(hsv[0], centre.h) *
+                                  config.hue_weight;
+                const double ds = ((double)hsv[1] - centre.s) *
+                                  config.sat_weight;
+                const double dv = ((double)hsv[2] - centre.v) *
+                                  config.val_weight;
+                const double dist = brand_distance(hsv, centre, config);
+
+                printf("      %s %-14s dist %6.1f  (hue %5.1f  sat %5.1f  "
+                       "val %5.1f)\n",
+                       (i == winner && dist <= config.max_brand_dist) ? "->"
+                                                                      : "  ",
+                       config.brands[i].name.c_str(), dist,
+                       dh, std::fabs(ds), std::fabs(dv));
+            }
+            if (best > config.max_brand_dist) {
+                printf("      -> background (nearest is %.1f, over "
+                       "max_brand_dist=%.1f)\n", best, config.max_brand_dist);
+            }
+        }
+    }
     fflush(stdout);
 }
 
@@ -394,6 +473,12 @@ void create_windows(Mode mode, vision::Config &config, SampleState &sampling)
                        vision::Config::MAX_AREA);
     cv::createTrackbar("max area", WIN_CONTROL, &config.contour_max_area,
                        vision::Config::MAX_AREA);
+
+    // The two floors are on sliders because they are the fastest way to see
+    // what is being thrown away: wind min_saturation up until the shelf goes
+    // black in the classified view, then back off.
+    cv::createTrackbar("min sat", WIN_CONTROL, &config.min_saturation, 255);
+    cv::createTrackbar("min val", WIN_CONTROL, &config.min_value, 255);
 }
 
 void show_windows(Mode mode, const Frames &frames)
@@ -422,9 +507,14 @@ void print_config(const vision::Config &config, int selected)
                brand.lowH, brand.highH, brand.lowS, brand.highS,
                brand.lowV, brand.highV);
     }
-    printf("    open=%d close=%d area=%d-%d hue_weight=%.1f max_dist=%.1f\n",
+    printf("    weights: hue=%.2f sat=%.2f val=%.2f   max_dist=%.1f\n",
+           config.hue_weight, config.sat_weight, config.val_weight,
+           config.max_brand_dist);
+    printf("    floors:  min_saturation=%d min_value=%d\n",
+           config.min_saturation, config.min_value);
+    printf("    mask:    open=%d close=%d area=%d-%d\n",
            config.open_kernel, config.close_kernel, config.contour_min_area,
-           config.contour_max_area, config.hue_weight, config.max_brand_dist);
+           config.contour_max_area);
     fflush(stdout);
 }
 
@@ -462,8 +552,11 @@ std::string build_pipeline(const vision::Config &config)
     // Captured high and processed low on purpose: the sensor gives a better
     // image downsampled than it does asked for a small one directly, and every
     // stage after this is per-pixel work.
-    out << "libcamerasrc"
-        << " ! video/x-raw, width=" << config.capture_width
+    out << "libcamerasrc";
+    if (!config.libcamerasrc_extra.empty()) {
+        out << " " << config.libcamerasrc_extra;
+    }
+    out << " ! video/x-raw, width=" << config.capture_width
         << ", height=" << config.capture_height
         << " ! videoconvert"
         << " ! videoscale"
@@ -535,6 +628,11 @@ int main(int argc, char *argv[])
 
     // --- Camera ---
     const std::string pipeline = build_pipeline(config);
+    // Always printed, not just on failure: when counts drift for no visible
+    // reason the first question is what the camera was actually asked for, and
+    // libcamerasrc_extra makes that a per-machine answer.
+    fprintf(stderr, "picapture: %s\n", pipeline.c_str());
+
     cv::VideoCapture camera;
     camera.open(pipeline, cv::CAP_GSTREAMER);
     if (!camera.isOpened()) {
@@ -550,6 +648,8 @@ int main(int argc, char *argv[])
     Frames frames;
     SampleState sampling;
     sampling.frame = &frames.original;
+    sampling.config = &config;
+    sampling.centres = &centres;
 
     create_windows(mode, config, sampling);
     if (mode != Mode::Headless) {
@@ -578,8 +678,7 @@ int main(int argc, char *argv[])
             cv::cvtColor(frames.original, frames.hsv, cv::COLOR_BGR2HSV);
         }
 
-        frames.classification = classify(frames.hsv, centres, config.hue_weight,
-                                         config.max_brand_dist);
+        frames.classification = classify(frames.hsv, centres, config);
 
         // Drawing is the largest per-frame cost after classification, and
         // headless has nobody to show it to.

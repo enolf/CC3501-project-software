@@ -183,8 +183,20 @@ bool load(const std::string &path, Config &out, std::string *error)
             if (ok) config.brands.push_back(brand);
         } else if (key == "hue_weight") {
             ok = parse_double(value, config.hue_weight);
+        } else if (key == "sat_weight") {
+            ok = parse_double(value, config.sat_weight);
+        } else if (key == "val_weight") {
+            ok = parse_double(value, config.val_weight);
         } else if (key == "max_brand_dist") {
             ok = parse_double(value, config.max_brand_dist);
+        } else if (key == "min_saturation") {
+            ok = parse_int(value, config.min_saturation);
+        } else if (key == "min_value") {
+            ok = parse_int(value, config.min_value);
+        } else if (key == "libcamerasrc_extra") {
+            // Taken verbatim, including spaces: it is a fragment of a GStreamer
+            // pipeline, not a scalar. Empty is valid and means "add nothing".
+            config.libcamerasrc_extra = value;
         } else if (key == "open_kernel") {
             ok = parse_int(value, config.open_kernel);
         } else if (key == "close_kernel") {
@@ -260,9 +272,16 @@ bool save(const std::string &path, const Config &config, std::string *error)
              << brand.lowV << "," << brand.highV << "\n";
     }
 
-    file << "\n# Classification\n"
+    file << "\n# Classification. Hue identifies the drink; saturation and value\n"
+            "# mostly describe the lighting, so they are weighted well below it.\n"
          << "hue_weight = " << config.hue_weight << "\n"
+         << "sat_weight = " << config.sat_weight << "\n"
+         << "val_weight = " << config.val_weight << "\n"
          << "max_brand_dist = " << config.max_brand_dist << "\n"
+         << "\n# What counts as a drink at all, rather than shelf or shadow.\n"
+            "# Global on purpose: these must never decide WHICH drink.\n"
+         << "min_saturation = " << config.min_saturation << "\n"
+         << "min_value = " << config.min_value << "\n"
          << "\n# Mask cleanup\n"
          << "open_kernel = " << config.open_kernel << "\n"
          << "close_kernel = " << config.close_kernel << "\n"
@@ -275,7 +294,10 @@ bool save(const std::string &path, const Config &config, std::string *error)
          << "process_width = " << config.process_width << "\n"
          << "process_height = " << config.process_height << "\n"
          << "rotate_180 = " << (config.rotate_180 ? "true" : "false") << "\n"
-         << "period_ms = " << config.period_ms << "\n";
+         << "period_ms = " << config.period_ms << "\n"
+         << "# Appended to libcamerasrc verbatim. Chiefly for locking exposure\n"
+            "# and white balance - see `gst-inspect-1.0 libcamerasrc`.\n"
+         << "libcamerasrc_extra = " << config.libcamerasrc_extra << "\n";
 
     file.flush();
     if (!file) {
@@ -394,9 +416,31 @@ bool validate(const Config &config, std::string *error)
         return fail("hue_weight must be positive - hue is the only thing that "
                     "reliably separates these drinks");
     }
+    if (config.sat_weight < 0.0 || config.val_weight < 0.0) {
+        return fail("sat_weight and val_weight cannot be negative - a negative "
+                    "weight rewards being the wrong colour");
+    }
+
+    // The whole design rests on hue deciding and the other two only nudging.
+    // A config that inverts that is not a tuning choice, it is the bug this
+    // was written to fix: value out-voting hue is what made a Coke in shadow
+    // classify as a Fanta.
+    if (config.sat_weight >= config.hue_weight ||
+        config.val_weight >= config.hue_weight) {
+        return fail("hue_weight must exceed both sat_weight and val_weight - "
+                    "saturation and value move with the lighting, so letting "
+                    "either outweigh hue makes a can change drink when a "
+                    "shadow crosses it");
+    }
+
     if (config.max_brand_dist <= 0.0) {
         return fail("max_brand_dist must be positive, or nothing is ever "
                     "classified");
+    }
+
+    if (config.min_saturation < 0 || config.min_saturation > 255 ||
+        config.min_value < 0 || config.min_value > 255) {
+        return fail("min_saturation and min_value must be 0-255");
     }
 
     if (config.capture_width <= 0 || config.capture_height <= 0 ||

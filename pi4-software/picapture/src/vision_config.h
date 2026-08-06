@@ -39,11 +39,16 @@ struct Brand {
     // The HSV box this drink occupies, in OpenCV's ranges: H is 0-179 (not
     // 0-359 — OpenCV halves it to fit a byte), S and V are 0-255.
     //
-    // NOT used as a threshold. The midpoint of each box is the brand's centre,
-    // and a pixel is assigned to whichever centre is nearest; lowS and lowV are
-    // used as hard floors below which a pixel is too grey or too dark to be
-    // this drink at all. See classify_by_nearest_brand() in main.cpp for why
-    // nearest-centre replaced per-brand thresholding.
+    // NOT a threshold. Only the MIDPOINT of each box is used: it is the brand's
+    // centre, and a pixel is assigned to whichever centre is nearest. The
+    // width of the box affects nothing on its own.
+    //
+    // These were per-brand hard floors as well, and that was actively harmful.
+    // Coke's box floored value at 160 and Fanta's at 130, so a Coke can in
+    // shadow at V=150 was not merely rejected as Coke — it was refused by Coke
+    // and accepted by Fanta, and dimming the light turned one drink into
+    // another. The floors are now global (see min_saturation / min_value) and
+    // decide only whether a pixel is a drink at all, never which drink.
     int lowH = 0, highH = 179;
     int lowS = 0, highS = 255;
     int lowV = 0, highV = 255;
@@ -53,18 +58,56 @@ struct Config {
     // --- What the camera is looking for ---
     std::vector<Brand> brands;
 
-    /// How much more a hue mismatch counts than a saturation or value one.
-    ///
-    /// Hue is the only reliable discriminator between these four drinks: S and
-    /// V move with glare and shadow across a single can, while hue barely
-    /// shifts. Weighting it up is what stops the lit side of a Coke and the
-    /// shadowed side of a Fanta from swapping identities.
+    // --- How the three channels are traded off against each other ---
+    //
+    // ALL THREE WEIGHTS MATTER, NOT JUST THE HUE ONE. This was hue_weight
+    // alone, with saturation and value contributing their raw difference, and
+    // the arithmetic did the opposite of what the comment claimed:
+    //
+    //     Coke centre  H 3   V 190
+    //     Fanta centre H 10  V 147
+    //
+    //     hue term    (10 - 3) * 4    = 28
+    //     value term   190 - 147      = 43
+    //
+    // So value out-voted hue, and value is precisely the channel that moves
+    // when a can is in shadow. Coke and Fanta swapped identities with the
+    // lighting. Weighting S and V DOWN is what makes hue actually decide.
+
+    /// Hue's multiplier. The channel that genuinely identifies a drink.
     double hue_weight = 4.0;
+
+    /// Saturation's multiplier. Below 1 because saturation drops off towards
+    /// the curved edge of every can, whatever colour it is.
+    double sat_weight = 0.5;
+
+    /// Value's multiplier. The lowest of the three: it is almost entirely a
+    /// statement about the lighting rather than about the drink.
+    double val_weight = 0.25;
 
     /// How far a pixel may sit from the nearest brand centre and still be
     /// called that brand. Beyond this it is background — the shelf, the door,
     /// a hand. Raise it and the fridge lining starts being counted as a drink.
-    double max_brand_dist = 70.0;
+    ///
+    /// Tied to the weights above: lowering sat_weight and val_weight shrinks
+    /// every distance, so this came down with them.
+    double max_brand_dist = 60.0;
+
+    // --- What counts as a drink at all ---
+    //
+    // Global, NOT per brand. These decide whether a pixel is coloured enough
+    // and lit enough to be any drink; which drink is then settled entirely by
+    // distance. Keeping the two questions separate is what stops a shadow from
+    // renaming a can — see the note on Brand's HSV box.
+
+    /// Below this saturation a pixel is grey: the shelf, the door seal, a
+    /// white label, a specular highlight.
+    int min_saturation = 90;
+
+    /// Below this value a pixel is too dark to have a trustworthy hue. Hue is
+    /// meaningless in near-black, and quantisation noise there is what
+    /// produces speckle in the mask.
+    int min_value = 50;
 
     // --- Cleaning up the mask ---
 
@@ -104,11 +147,30 @@ struct Config {
     int process_width = 400;
     int process_height = 300;
 
-    /// Whether the camera is mounted upside-down. It is easier to fix here than
-    /// to remount the camera, and it has to be fixed somewhere — a flipped
-    /// image still detects cans perfectly well, so this is not self-correcting
-    /// and nothing downstream would ever complain.
-    bool rotate_180 = true;
+    /// Whether the camera is mounted upside-down. Easier to fix here than to
+    /// remount the camera, and it has to be fixed somewhere — a flipped image
+    /// still detects cans perfectly well, so nothing downstream will ever
+    /// complain and it is not self-correcting.
+    ///
+    /// False for the camera as actually mounted on this fridge. It was true,
+    /// which double-flipped an already-upright image.
+    bool rotate_180 = false;
+
+    /// Extra properties appended to the `libcamerasrc` element, verbatim.
+    ///
+    /// EXISTS FOR ONE JOB: turning off the camera's own automatic exposure and
+    /// white balance. With them running, the sensor quietly re-white-balances
+    /// as the scene changes, every hue in the frame shifts, and counts wander
+    /// for tens of seconds at a time with nothing in front of the camera
+    /// having moved. That is not noise a settling filter can average away —
+    /// it is the measurement itself drifting.
+    ///
+    /// A passthrough rather than named settings because the properties
+    /// `libcamerasrc` accepts differ between libcamera versions, and a
+    /// hardcoded name that this build does not recognise is a startup failure
+    /// on somebody else's Pi. Run `gst-inspect-1.0 libcamerasrc` to see what
+    /// yours takes.
+    std::string libcamerasrc_extra;
 
     /// How often to look, in milliseconds. Not a frame rate to maximise: this
     /// runs beside `fridged` and Grafana on the same Pi, and the only deadline
