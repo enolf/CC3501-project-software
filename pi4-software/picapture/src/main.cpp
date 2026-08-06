@@ -135,16 +135,7 @@ std::vector<BrandCentre> build_centres(const vision::Config &config)
     return centres;
 }
 
-/// Distance between two hues, the short way round.
-///
-/// OpenCV's hue wraps at 180, not 360. Red sits at both ends of that range, so
-/// a plain subtraction makes hue 2 and hue 178 look 176 apart when they are 4
-/// apart and both Coke.
-inline double hue_distance(double a, double b)
-{
-    const double d = std::fabs(a - b);
-    return std::min(d, 180.0 - d);
-}
+using vision::hue_distance;
 
 /// How far one pixel is from one brand.
 ///
@@ -425,26 +416,19 @@ void on_mouse(int event, int x, int y, int /*flags*/, void *userdata)
     fflush(stdout);
 }
 
-/// Widen a brand's HSV box to cover two sampled pixels, with padding.
+/// Set the selected brand's band from the two clicked pixels.
 ///
-/// Sample the brightest and dullest part of the same can: two clicks bracket
-/// the range the classifier has to tolerate, and the padding covers the rest.
+/// A thin adapter: the arithmetic lives in vision_config so that the hue
+/// wrap-around it has to get right can be tested without a camera.
 void apply_sample(vision::Brand &brand, const cv::Vec3b &a, const cv::Vec3b &b)
 {
-    // Hue barely moves between the lit and shadowed side of one can, so two
-    // samples under-report its true spread and it is padded proportionally
-    // harder. Saturation and value move a great deal more on their own, so
-    // their padding is there to absorb noise rather than to widen the band.
-    constexpr int HUE_PAD = 6;
-    constexpr int SAT_PAD = 15;
-    constexpr int VAL_PAD = 15;
+    vision::apply_sample(brand, a[0], a[1], a[2], b[0], b[1], b[2]);
+}
 
-    brand.lowH = std::max(0, std::min(a[0], b[0]) - HUE_PAD);
-    brand.highH = std::min(179, std::max(a[0], b[0]) + HUE_PAD);
-    brand.lowS = std::max(0, std::min(a[1], b[1]) - SAT_PAD);
-    brand.highS = std::min(255, std::max(a[1], b[1]) + SAT_PAD);
-    brand.lowV = std::max(0, std::min(a[2], b[2]) - VAL_PAD);
-    brand.highV = std::min(255, std::max(a[2], b[2]) + VAL_PAD);
+/// Could these two samples plausibly have come from the same can?
+bool sample_pair_is_consistent(const cv::Vec3b &a, const cv::Vec3b &b)
+{
+    return vision::samples_agree(a[0], b[0]);
 }
 
 void create_windows(Mode mode, vision::Config &config, SampleState &sampling)
@@ -479,6 +463,34 @@ void create_windows(Mode mode, vision::Config &config, SampleState &sampling)
     // black in the classified view, then back off.
     cv::createTrackbar("min sat", WIN_CONTROL, &config.min_saturation, 255);
     cv::createTrackbar("min val", WIN_CONTROL, &config.min_value, 255);
+}
+
+/// Say on the picture which drink the next clicks will retune.
+///
+/// ON THE PICTURE, not in the console, and that distinction is the whole point.
+/// The armed brand was announced once, to a console that scrolls a count line
+/// several times a second — so by the time anyone clicked, the message naming
+/// what they were about to overwrite had long gone. Solo was silently retuned
+/// onto a Coke, a Fanta and a Mountain Dew that way.
+void draw_tuning_overlay(cv::Mat &frame, const vision::Config &config,
+                         const SampleState &sampling)
+{
+    if (frame.empty() || config.brands.empty()) return;
+    if (sampling.brand_index < 0 ||
+        (size_t)sampling.brand_index >= config.brands.size()) {
+        return;
+    }
+
+    const std::string label =
+        "TUNING: " + config.brands[sampling.brand_index].name +
+        (sampling.clicks == 1 ? "   [click 2 of 2]" : "   [click 1 of 2]");
+
+    // Drawn twice, dark then light, so it stays readable against both a bright
+    // can and the dark inside of the fridge.
+    cv::putText(frame, label, cv::Point(8, 22), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                cv::Scalar(0, 0, 0), 4);
+    cv::putText(frame, label, cv::Point(8, 22), cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                cv::Scalar(255, 255, 255), 1);
 }
 
 void show_windows(Mode mode, const Frames &frames)
@@ -523,11 +535,43 @@ void print_debug_keys(const vision::Config &config)
     printf("\n--- tuning keys (the camera window must have focus) ---\n");
     printf("  1-%zu   choose which drink the next two clicks tune\n",
            config.brands.size());
-    printf("  click  twice on one can - its brightest part, then its dullest\n");
+    printf("  click  twice on ONE can - its brightest part, then its dullest\n");
+    printf("         (the drink being tuned is shown on the camera window)\n");
+    printf("  u      undo the last sample\n");
+    printf("  r      reset the selected drink to its built-in colour\n");
     printf("  s      save the current tuning to %s\n", CONFIG_PATH);
     printf("  p      print the current tuning\n");
     printf("  q      quit\n\n");
+    printf("  counts print only when they CHANGE, so a steady shelf is quiet\n"
+           "  and a wandering one is obvious.\n\n");
     fflush(stdout);
+}
+
+/// Complain if two drinks are too alike to be told apart reliably.
+///
+/// A warning rather than a refusal: two similar drinks may genuinely be the
+/// best available, and blocking the save would leave nowhere to go. But it is
+/// worth saying out loud, because the symptom downstream is not "these two are
+/// confusable" — it is one drink's count quietly appearing on the other.
+void warn_about_close_centres(const vision::Config &config,
+                              const std::vector<BrandCentre> &centres)
+{
+    for (size_t i = 0; i < centres.size(); i++) {
+        for (size_t j = i + 1; j < centres.size(); j++) {
+            const double dh = hue_distance(centres[i].h, centres[j].h) *
+                              config.hue_weight;
+            const double ds = (centres[i].s - centres[j].s) * config.sat_weight;
+            const double dv = (centres[i].v - centres[j].v) * config.val_weight;
+            const double dist = std::sqrt(dh * dh + ds * ds + dv * dv);
+
+            if (dist < vision::Config::MIN_CENTRE_SEPARATION) {
+                printf("  WARNING: %s and %s are only %.1f apart - expect one "
+                       "to be counted as the other\n",
+                       config.brands[i].name.c_str(),
+                       config.brands[j].name.c_str(), dist);
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -657,6 +701,15 @@ int main(int argc, char *argv[])
         print_config(config, sampling.brand_index);
     }
 
+    // The last band a sample overwrote, so a misclick costs one keystroke
+    // rather than a retune. Only one level deep on purpose: the recovery that
+    // matters is undoing the click you just watched go wrong.
+    vision::Brand undo_brand;
+    int undo_index = -1;
+
+    /// Last packet printed, for the debug modes' print-on-change.
+    std::string last_packet;
+
     using clock = std::chrono::steady_clock;
     auto next_due = clock::now();
     const auto period = std::chrono::milliseconds(config.period_ms);
@@ -696,8 +749,25 @@ int main(int argc, char *argv[])
         // because stdout is a PIPE here, not a terminal: a block-buffered pipe
         // would hold counts back until the buffer filled, which at one short
         // line per period is minutes.
-        std::cout << serialise(per_brand, config) << std::endl;
+        //
+        // Headless emits every period, because that is the protocol and a
+        // reader needs to know the counts are still current. The debug modes
+        // print only on CHANGE: a count line several times a second scrolls
+        // every diagnostic off the screen faster than it can be read, which is
+        // exactly how a tuning session goes wrong without anybody noticing.
+        // Printing on change also makes instability visible rather than
+        // something to spot in a wall of identical lines.
+        const std::string packet = serialise(per_brand, config);
+        if (mode == Mode::Headless) {
+            std::cout << packet << std::endl;
+        } else if (packet != last_packet) {
+            std::cout << packet << std::endl;
+            last_packet = packet;
+        }
 
+        if (mode != Mode::Headless) {
+            draw_tuning_overlay(frames.original, config, sampling);
+        }
         show_windows(mode, frames);
 
         if (mode != Mode::Headless) {
@@ -713,12 +783,47 @@ int main(int argc, char *argv[])
                 if (vision::validate(config, &error) &&
                     vision::save(CONFIG_PATH, config, &error)) {
                     printf("  saved to %s\n", CONFIG_PATH);
+                    warn_about_close_centres(config, centres);
                 } else {
                     printf("  NOT saved: %s\n", error.c_str());
                 }
                 fflush(stdout);
             } else if (key == 'p') {
                 print_config(config, sampling.brand_index);
+            } else if (key == 'u') {
+                if (undo_index >= 0) {
+                    config.brands[undo_index] = undo_brand;
+                    centres = build_centres(config);
+                    printf("  undone: %s is back to its previous colour\n",
+                           undo_brand.name.c_str());
+                    undo_index = -1;
+                    print_config(config, sampling.brand_index);
+                } else {
+                    printf("  nothing to undo\n");
+                    fflush(stdout);
+                }
+            } else if (key == 'r') {
+                // Matched by wire key rather than by position: a config that
+                // reordered its brands would otherwise reset the wrong drink,
+                // which is the same class of mistake this whole change is about.
+                const vision::Config built_in = vision::defaults();
+                const std::string &key_wanted =
+                    config.brands[sampling.brand_index].wire_key;
+                bool found = false;
+                for (const vision::Brand &brand : built_in.brands) {
+                    if (brand.wire_key == key_wanted) {
+                        undo_brand = config.brands[sampling.brand_index];
+                        undo_index = sampling.brand_index;
+                        config.brands[sampling.brand_index] = brand;
+                        centres = build_centres(config);
+                        found = true;
+                        break;
+                    }
+                }
+                printf(found ? "  reset to the built-in colour\n"
+                             : "  no built-in colour for this drink\n");
+                if (found) print_config(config, sampling.brand_index);
+                fflush(stdout);
             } else if (key >= '1' && key <= '9') {
                 const size_t chosen = (size_t)(key - '1');
                 if (chosen < config.brands.size()) {
@@ -736,10 +841,31 @@ int main(int argc, char *argv[])
             // window rather than by editing the file.
             if (sampling.pair_ready) {
                 sampling.pair_ready = false;
-                apply_sample(config.brands[sampling.brand_index],
-                             sampling.first, sampling.second);
-                centres = build_centres(config);
-                print_config(config, sampling.brand_index);
+
+                // Two clicks are meant to be the lit and shadowed sides of ONE
+                // can. Hues this far apart are two different drinks, and
+                // applying them would drag this brand's centre to a colour
+                // halfway between two others — where it starts claiming both.
+                // Refused rather than warned about: the pair carries no usable
+                // information either way, and a warning in a scrolling console
+                // is what failed last time.
+                if (!sample_pair_is_consistent(sampling.first,
+                                               sampling.second)) {
+                    printf("  IGNORED: those two clicks are %.0f apart in hue, "
+                           "so they are not the same can.\n"
+                           "  %s was left alone. Check the drink named on the "
+                           "camera window, then click twice on ONE can.\n",
+                           hue_distance(sampling.first[0], sampling.second[0]),
+                           config.brands[sampling.brand_index].name.c_str());
+                    fflush(stdout);
+                } else {
+                    undo_brand = config.brands[sampling.brand_index];
+                    undo_index = sampling.brand_index;
+                    apply_sample(config.brands[sampling.brand_index],
+                                 sampling.first, sampling.second);
+                    centres = build_centres(config);
+                    print_config(config, sampling.brand_index);
+                }
             }
 
             // Sliders write straight into the config, so an even kernel can

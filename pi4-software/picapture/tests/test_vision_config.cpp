@@ -347,6 +347,73 @@ void test_normalise()
     if (!note.empty()) printf("        %s\n", note.c_str());
 }
 
+void test_hue_arithmetic()
+{
+    suite("hue arithmetic");
+
+    // OpenCV's hue is 0-179 and wraps. Red straddles the join, so this is not
+    // a corner case for this project - it is Coke.
+    check("distance goes the short way round the wrap",
+          vision::hue_distance(178, 2) == 4.0);
+    check("distance is symmetric", vision::hue_distance(2, 178) == 4.0);
+    check("distance within the range is plain subtraction",
+          vision::hue_distance(40, 55) == 15.0);
+    check("opposite hues are 90 apart, the maximum possible",
+          vision::hue_distance(0, 90) == 90.0);
+
+    check("the mean of two ordinary hues is between them",
+          vision::circular_hue_mean(40, 50) == 45.0);
+
+    // The arithmetic mean of 178 and 2 is 90 - cyan, the opposite side of the
+    // wheel from the red that was actually sampled. Saving that as Coke's
+    // identity would make Coke unrecognisable AND make it claim Mountain Dew.
+    const double wrapped = vision::circular_hue_mean(178, 2);
+    check("the mean across the wrap is red, not the cyan an average gives",
+          wrapped >= 179.0 || wrapped <= 1.0);
+
+    check("the mean across the wrap is symmetric",
+          vision::circular_hue_mean(2, 178) == vision::circular_hue_mean(178, 2));
+
+    // --- Two clicks becoming a band ---
+    vision::Brand brand;
+    vision::apply_sample(brand, 10, 240, 200, 12, 250, 180);
+    check("an ordinary pair produces a band containing both hues",
+          brand.lowH <= 10 && brand.highH >= 12);
+    check("the band is the right way round",
+          brand.lowH <= brand.highH && brand.lowS <= brand.highS &&
+          brand.lowV <= brand.highV);
+    check("saturation and value span both samples",
+          brand.lowS <= 240 && brand.highS >= 250 &&
+          brand.lowV <= 180 && brand.highV >= 200);
+
+    // The wrap case has to produce a VALID band, not lowH=172/highH=8. That
+    // is not merely wrong, it is a band validate() refuses - so the symptom
+    // was a save that failed for a reason nowhere near the actual click.
+    vision::Brand wrapping;
+    vision::apply_sample(wrapping, 178, 250, 190, 2, 250, 170);
+    check("a pair straddling the wrap still produces a valid band",
+          wrapping.lowH <= wrapping.highH);
+    check("...and it stays inside OpenCV's 0-179 hue range",
+          wrapping.lowH >= 0 && wrapping.highH <= 179);
+
+    vision::Config config = vision::defaults();
+    config.brands[0] = wrapping;
+    std::string error;
+    check("...and a config built from it validates",
+          vision::validate(config, &error));
+    if (!error.empty()) printf("        %s\n", error.c_str());
+
+    // --- The guard that would have prevented the wrecked Solo band ---
+    check("two clicks on one can agree", vision::samples_agree(27, 30));
+    check("the lit and shadowed sides of one can still agree",
+          vision::samples_agree(46, 48));
+    check("a Coke and a Fanta do NOT agree", !vision::samples_agree(0, 40));
+    check("a Solo and a Mountain Dew do NOT agree",
+          !vision::samples_agree(28, 47));
+    check("agreement respects the wrap, so one red can is not two drinks",
+          vision::samples_agree(178, 3));
+}
+
 } // namespace
 
 int main()
@@ -354,6 +421,7 @@ int main()
     printf("\n=== picapture vision_config tests ===\n");
 
     test_defaults();
+    test_hue_arithmetic();
     test_round_trip();
     test_partial_and_missing();
     test_refusals();

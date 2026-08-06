@@ -307,6 +307,53 @@ bool save(const std::string &path, const Config &config, std::string *error)
     return true;
 }
 
+double circular_hue_mean(double a, double b)
+{
+    double diff = b - a;
+    if (diff > 90.0) diff -= 180.0;
+    if (diff < -90.0) diff += 180.0;
+
+    double mean = a + diff / 2.0;
+    if (mean < 0.0) mean += 180.0;
+    if (mean >= 180.0) mean -= 180.0;
+    return mean;
+}
+
+bool samples_agree(int hue_a, int hue_b)
+{
+    return hue_distance(hue_a, hue_b) <= Config::MAX_SAMPLE_HUE_SPREAD;
+}
+
+void apply_sample(Brand &brand, int h1, int s1, int v1,
+                  int h2, int s2, int v2)
+{
+    // Hue barely moves between the lit and shadowed side of one can, so two
+    // samples under-report its true spread and it is padded proportionally
+    // harder. Saturation and value move a great deal more on their own, so
+    // their padding is there to absorb noise rather than to widen the band.
+    constexpr int HUE_PAD = 6;
+    constexpr int SAT_PAD = 15;
+    constexpr int VAL_PAD = 15;
+
+    // Built from the circular midpoint outwards, NOT from min to max. A
+    // min/max band cannot represent a colour straddling the wrap point:
+    // samples of 178 and 2 would give lowH=172, highH=8, which is not a band
+    // at all and which validate() then rejects on save. Only the midpoint is
+    // read by the classifier, so building outwards from it is both correct and
+    // sufficient.
+    const double mean = circular_hue_mean(h1, h2);
+    const double half_spread = hue_distance(h1, h2) / 2.0;
+    const int pad = HUE_PAD + (int)std::ceil(half_spread);
+
+    brand.lowH = std::max(0, (int)std::lround(mean) - pad);
+    brand.highH = std::min(179, (int)std::lround(mean) + pad);
+
+    brand.lowS = std::max(0, std::min(s1, s2) - SAT_PAD);
+    brand.highS = std::min(255, std::max(s1, s2) + SAT_PAD);
+    brand.lowV = std::max(0, std::min(v1, v2) - VAL_PAD);
+    brand.highV = std::min(255, std::max(v1, v2) + VAL_PAD);
+}
+
 bool normalise(Config &config, std::string *note)
 {
     std::ostringstream changes;

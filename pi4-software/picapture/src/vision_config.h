@@ -1,5 +1,7 @@
 #pragma once
 
+#include <algorithm>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -189,6 +191,25 @@ struct Config {
     /// at the front of the shelf and one at the back.
     static constexpr double APPROX_EPSILON_FRACTION = 0.02;
 
+    /// The most two click-samples may differ in hue and still be believed to
+    /// come from the same can.
+    ///
+    /// A guard against the tuning UI's easiest mistake, which is not
+    /// hypothetical: with Solo still armed, four clicks across a Coke, a Fanta
+    /// and a Mountain Dew moved Solo's centre to hue 37 — between Solo and
+    /// Dew — and it began claiming part of the Dew can. Nothing complained,
+    /// and the result was saved.
+    ///
+    /// Generous enough for the lit and shadowed sides of one can, which is
+    /// what a pair is supposed to be. Anything wider is two different drinks.
+    static constexpr int MAX_SAMPLE_HUE_SPREAD = 15;
+
+    /// How close two brand centres may sit, in weighted distance, before the
+    /// pair is too alike to tell apart reliably. Only a warning: two similar
+    /// drinks might genuinely be the best available, and refusing to save
+    /// would leave nowhere to go.
+    static constexpr double MIN_CENTRE_SEPARATION = 25.0;
+
     // --- Slider ranges for the debug UI ---
     //
     // Here rather than in the UI code so that a value loaded from a file which
@@ -221,6 +242,46 @@ bool load(const std::string &path, Config &out, std::string *error = nullptr);
 /// hardcode it back into the source — which is where it started.
 bool save(const std::string &path, const Config &config,
           std::string *error = nullptr);
+
+// --- Hue arithmetic -------------------------------------------------------
+//
+// Here rather than in main.cpp because hue wraps, and every mistake that
+// follows from forgetting so is silent. Being OpenCV-free, these are also the
+// only part of the colour handling that can be tested without a camera.
+
+/// Distance between two hues, the short way round.
+///
+/// OpenCV's hue wraps at 180, not 360. Red sits at both ends of that range, so
+/// a plain subtraction makes hue 2 and hue 178 look 176 apart when they are 4
+/// apart and both Coke.
+///
+/// Inline because the classifier calls it for every pixel of every frame
+/// against every brand.
+inline double hue_distance(double a, double b)
+{
+    const double d = std::fabs(a - b);
+    return std::min(d, 180.0 - d);
+}
+
+/// The hue halfway between two hues, going the short way round.
+///
+/// NOT the arithmetic mean. Coke sits at hue 0, so its pixels land on both
+/// sides of the wrap point: samples of 178 and 2 are 4 apart and their true
+/// midpoint is 0, but averaging gives 90 — a completely different colour, and
+/// one that would then be saved as Coke's identity.
+double circular_hue_mean(double a, double b);
+
+/// Could two sampled hues have come from the same can?
+///
+/// The guard on the tuning UI's easiest mistake. See MAX_SAMPLE_HUE_SPREAD.
+bool samples_agree(int hue_a, int hue_b);
+
+/// Set a brand's HSV box from two sampled pixels, with padding.
+///
+/// Takes plain integers rather than an OpenCV type so this file stays
+/// camera-free and the wrap-around behaviour above can be tested directly.
+void apply_sample(Brand &brand, int h1, int s1, int v1,
+                  int h2, int s2, int v2);
 
 /// Snap the values that have to take a particular shape, and say what changed.
 ///

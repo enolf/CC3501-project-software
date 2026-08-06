@@ -70,13 +70,33 @@ Retuning does not need a compiler:
 | Key | What it does |
 | --- | --- |
 | `1`–`4` | Choose which drink the next two clicks tune |
-| click ×2 | Sample one can twice — its brightest part, then its dullest |
+| click ×2 | Sample **one** can twice — its brightest part, then its dullest |
+| `u` | Undo the last sample |
+| `r` | Reset the selected drink to its built-in colour |
 | `s` | Save the current tuning to `picapture.conf` |
 | `p` | Print the current tuning |
 | `q` | Quit |
 
+**The drink you are tuning is shown on the camera window.** Check it before
+every pair of clicks. The selection persists until you change it, so it is
+entirely possible to press `4` for Solo, tune it, then keep clicking on other
+cans and quietly retune Solo onto all of them — which drags its centre to a
+colour between two drinks, where it starts claiming both.
+
+Two guards exist because that is exactly what happened once:
+
+- Two clicks more than 15 apart in hue **are rejected**, because they cannot be
+  the same can. The brand is left alone and the console says so.
+- `u` undoes the last sample, one level deep. `r` puts one drink back to its
+  built-in colour if it has drifted badly.
+
+In the debug modes, **counts print only when they change** — a steady shelf is
+silent, and a wandering one is obvious. Headless still emits every period,
+because that is the protocol.
+
 The sliders and the clicks write straight into the live config, so the effect
-shows on the very next frame. `s` writes exactly what you are looking at.
+shows on the very next frame. `s` writes exactly what you are looking at, and
+warns if two drinks have ended up too close together to separate.
 
 **Every click also prints why that pixel classified the way it did** — the
 distance to each drink, broken down by channel:
