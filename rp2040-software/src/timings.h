@@ -160,13 +160,25 @@ constexpr uint32_t NFC_POLL_INTERVAL_MS = 250;
 constexpr uint32_t NFC_RETRY_INTERVAL_MS = 5000;
 
 /// How often the DS18B20s are read. This is the resolution of the dashboard's
-/// temperature graph, so lowering it makes the graph coarser, not just quieter.
-constexpr uint32_t TEMP_SAMPLE_INTERVAL_MS = 30000;
+/// temperature graph, so RAISING it makes the graph coarser, not just quieter.
+///
+/// THIS IS THE CEILING ON DASHBOARD FRESHNESS, not Grafana's refresh setting.
+/// A browser polling every second still sees a reading that the board only
+/// produces every interval; turning Grafana up without turning this down just
+/// re-queries the same rows.
+///
+/// Floor is around 2 s: a DS18B20 conversion takes 750 ms, and three sensors
+/// sampled much faster than that starts costing real superloop time.
+constexpr uint32_t TEMP_SAMPLE_INTERVAL_MS = 10000;
 
-/// How often the board reports its own condition to the Pi. Matched to the
-/// temperature sample rate so the dashboard gets one coherent picture per
-/// interval rather than two that disagree by a few seconds.
-constexpr uint32_t HEALTH_INTERVAL_MS = 30000;
+/// How often the board reports its own condition to the Pi — die temperature,
+/// money-box mass, fault count.
+///
+/// Matched to the temperature sample rate so the dashboard gets one coherent
+/// picture per interval rather than two that disagree by a few seconds. Change
+/// them together, and change `SELF_METRIC_INTERVAL_S` in `fridged/config.py`
+/// with them — that is the Pi recording ITS half of the same health row.
+constexpr uint32_t HEALTH_INTERVAL_MS = 10000;
 
 // --- Diagnostics ------------------------------------------------------------
 

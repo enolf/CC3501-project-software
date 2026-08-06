@@ -126,9 +126,14 @@ SQLITE_BUSY_TIMEOUT_MS = 5000
 LOOP_SLEEP_S = 0.01
 
 #: How often the service records metrics about *itself* — link age, bad-frame
-#: count, host SoC temperature. Matched to the board's own 30 s telemetry cadence
-#: so the health row updates at one rate rather than two.
-SELF_METRIC_INTERVAL_S = 30.0
+#: count, host SoC temperature.
+#:
+#: Matched to the board's own telemetry cadence so the health row updates at one
+#: rate rather than two. The board's half is `HEALTH_INTERVAL_MS` and
+#: `TEMP_SAMPLE_INTERVAL_MS` in `rp2040-software/src/timings.h`; if you change
+#: this, change those, and vice versa. Half the health row arriving three times
+#: as often as the other half looks like a fault in whichever half is slower.
+SELF_METRIC_INTERVAL_S = 10.0
 
 #: A drop in the board's `ms` field this large means it rebooted without us
 #: seeing the `BOOT` frame — the counter restarting is the signal
