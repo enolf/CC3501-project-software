@@ -158,8 +158,12 @@ void request_scan()
          (unsigned)SIM_SCAN_DELAY_MS);
 }
 
-void request_square_link(uint32_t cents, uint32_t transaction_id)
+void request_square_link(uint32_t cents, uint32_t transaction_id,
+                         const basket::Basket &/*basket*/)
 {
+    // The basket is ignored here on purpose. It exists to name the line item on
+    // a real Square receipt, and this backend never reaches Square — the URL it
+    // hands back is a fixed literal.
     square_amount_cents = cents;
     square_link_pending = true;
     square_link_due_ms = now_ms() + SIM_SQUARE_LINK_DELAY_MS;

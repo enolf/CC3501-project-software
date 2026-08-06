@@ -259,10 +259,19 @@ void run_debug_input()
             pi_link::request_scan();
             break;
 
-        case 'L':
+        case 'L': {
             // Ask for a Square payment link, as choosing "Online" will.
-            pi_link::request_square_link(200, 1);
+            //
+            // Sent with a real basket rather than an empty one so the receipt
+            // this produces is the same shape as a genuine sale's — an empty
+            // basket exercises only the "Drinks" fallback, which is the one
+            // case that is NOT what a customer would see.
+            basket::Basket example;
+            example.taken[static_cast<uint8_t>(catalogue::Can::Coke)] = 1;
+            pi_link::request_square_link(basket::total_cents(example), 1,
+                                         example);
             break;
+        }
 
         case 'T': {
             // Preview the outbound frames the state machine will send once it

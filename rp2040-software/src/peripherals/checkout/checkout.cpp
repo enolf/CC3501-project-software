@@ -512,7 +512,8 @@ void handle_event(const events::Event &event)
                 enter(State::PayCash);
             } else if (event.kind == events::Kind::TouchOnline) {
                 method = PaymentMethod::Online;
-                pi_link::request_square_link(owed_cents, transaction_id);
+                pi_link::request_square_link(owed_cents, transaction_id,
+                                             current_basket);
                 enter(State::PayOnlineLink);
             }
             break;

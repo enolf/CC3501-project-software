@@ -90,6 +90,41 @@ void send(frame::Prefix prefix, const char *type, const char *payload)
     fflush(stdout);
 }
 
+/// Room for the comma-separated item list two messages both need.
+///
+/// Sized from the worst real case rather than picked round: four drink types,
+/// the longest name being "Sprite", counts that cannot exceed a shelf —
+/// "Coke:5,Sprite:5,Fanta:5,Pasito:5" is 32 characters. 40 leaves room and,
+/// crucially, leaves the whole payload provably inside frame::MAX_PAYLOAD_LEN
+/// once the id, total and method are added.
+constexpr size_t ITEM_TEXT_MAX = 40;
+
+/// Render a basket as "Coke:2,Fanta:1". Returns the number of characters
+/// written, so an empty basket (0) can be told from a full one.
+///
+/// Shared by SQUARE_LINK and TXN_START because both name the same sale, and two
+/// copies of this loop would be two chances for the receipt and the transaction
+/// record to disagree about what was bought.
+size_t format_items(const basket::Basket &basket, char *out, size_t length)
+{
+    size_t used = 0;
+    out[0] = '\0';
+    for (uint8_t i = 0; i < catalogue::CAN_COUNT; i++) {
+        if (basket.taken[i] == 0) {
+            continue;
+        }
+        const int written = snprintf(out + used, length - used, "%s%s:%u",
+                                     used > 0 ? "," : "",
+                                     catalogue::name(catalogue::from_index(i)),
+                                     basket.taken[i]);
+        if (written < 0 || (size_t)written >= length - used) {
+            break;
+        }
+        used += (size_t)written;
+    }
+    return used;
+}
+
 /// A complete, CRC-checked frame arrived from the Pi.
 void handle_frame(const frame::Frame &f)
 {
@@ -263,11 +298,19 @@ void request_scan()
     send(frame::Prefix::Command, "SCAN", nullptr);
 }
 
-void request_square_link(uint32_t cents, uint32_t transaction_id)
+void request_square_link(uint32_t cents, uint32_t transaction_id,
+                         const basket::Basket &basket)
 {
-    char payload[48];
-    snprintf(payload, sizeof(payload), "cents=%" PRIu32 " id=%" PRIu32,
-             cents, transaction_id);
+    // The item list contains no spaces — the separator is a comma — which is
+    // what lets it be the LAST field in a space-separated payload without the
+    // Pi's field parser splitting it across several keys.
+    char items[ITEM_TEXT_MAX];
+    const size_t used = format_items(basket, items, sizeof(items));
+
+    char payload[frame::MAX_PAYLOAD_LEN];
+    snprintf(payload, sizeof(payload),
+             "cents=%" PRIu32 " id=%" PRIu32 " desc=%s",
+             cents, transaction_id, used > 0 ? items : "Drinks");
     send(frame::Prefix::Command, "SQUARE_LINK", payload);
 }
 
@@ -328,27 +371,8 @@ bool poll_square_error()
 void notify_sale(const basket::Basket &basket, uint32_t cents,
                  checkout::PaymentMethod method, uint32_t transaction_id)
 {
-    // Sized from the worst real case rather than picked round: four drink
-    // types, the longest name being "Sprite", counts that cannot exceed a
-    // shelf — "Coke:5,Sprite:5,Fanta:5,Pasito:5" is 32 characters. 40 leaves
-    // room and, crucially, leaves the whole payload provably inside
-    // frame::MAX_PAYLOAD_LEN once the id, total and method are added.
-    char items[40];
-    size_t used = 0;
-    items[0] = '\0';
-    for (uint8_t i = 0; i < catalogue::CAN_COUNT; i++) {
-        if (basket.taken[i] == 0) {
-            continue;
-        }
-        const int written = snprintf(items + used, sizeof(items) - used,
-                                     "%s%s:%u", used > 0 ? "," : "",
-                                     catalogue::name(catalogue::from_index(i)),
-                                     basket.taken[i]);
-        if (written < 0 || (size_t)written >= sizeof(items) - used) {
-            break;
-        }
-        used += (size_t)written;
-    }
+    char items[ITEM_TEXT_MAX];
+    const size_t used = format_items(basket, items, sizeof(items));
 
     char payload[frame::MAX_PAYLOAD_LEN];
     snprintf(payload, sizeof(payload),

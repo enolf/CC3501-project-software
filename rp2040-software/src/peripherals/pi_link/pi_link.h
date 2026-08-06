@@ -63,7 +63,14 @@ void request_scan();
 
 /// Ask the Pi to create a Square payment link for `cents`.
 /// The answer arrives later as SquareUrlReady, or SquareError.
-void request_square_link(uint32_t cents, uint32_t transaction_id);
+///
+/// `basket` is sent as `desc=` and becomes the line item on the customer's
+/// receipt, so it says what they actually bought rather than a generic string
+/// (decision D20). Without it the Pi has nothing to name the sale and falls
+/// back to "Fridge drinks" — which is what every receipt said before this
+/// argument existed.
+void request_square_link(uint32_t cents, uint32_t transaction_id,
+                         const basket::Basket &basket);
 
 /// Ask the Pi to kill the payment link for `transaction_id`.
 ///
