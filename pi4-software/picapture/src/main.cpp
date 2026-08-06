@@ -118,46 +118,41 @@ int load_test_image(cv::Mat &bgr_out) {
 
 #ifdef USE_FLAT_IMAGE
 cv::Mat removeHighlightsShadows(const cv::Mat& bgr_input, int blurRadius = 51) {
-  cv::Mat base;
-  bgr_input.convertTo(base, CV_32F, 1.0 / 255.0);
+  // Flat-field correction: estimate local illumination as a heavily blurred
+  // grayscale version of the image, then divide the image by it. This
+  // normalises away large-scale lighting variation (highlights/shadows)
+  // while preserving hue, which is what the downstream HSV classification
+  // actually needs.
+  cv::Mat bgrF;
+  bgr_input.convertTo(bgrF, CV_32F, 1.0 / 255.0);
 
   cv::Mat gray;
   cv::cvtColor(bgr_input, gray, cv::COLOR_BGR2GRAY);
 
-  // Blur BEFORE inverting — this is the.c_str() step that was missing.
-  // It's what turns "harsh local contrast" into "smooth lighting removal".
-  int k = blurRadius | 1;  // GaussianBlur requires an odd kernel size
-  cv::Mat blurred;
-  cv::GaussianBlur(gray, blurred, cv::Size(k, k), 0);
+  int k = blurRadius | 1; // GaussianBlur requires an odd kernel size
+  cv::Mat illumination;
+  cv::GaussianBlur(gray, illumination, cv::Size(k, k), 0);
+  illumination.convertTo(illumination, CV_32F, 1.0 / 255.0);
+  illumination += 0.05f; // avoid divide-by-zero in near-black regions
 
-  cv::Mat blurredF;
-  blurred.convertTo(blurredF, CV_32F, 1.0 / 255.0);
-  cv::Mat inverted = 1.0f - blurredF;
+  std::vector<cv::Mat> channels;
+  cv::split(bgrF, channels);
+  for (auto& ch : channels) {
+    cv::divide(ch, illumination, ch);
+  }
+  cv::Mat flattened;
+  cv::merge(channels, flattened);
 
-  cv::Mat blend;
-  cv::cvtColor(inverted, blend, cv::COLOR_GRAY2BGR);
-
-  // Single soft-light application — no iteration
-  cv::Mat base2, sqrtBase;
-  cv::multiply(base, base, base2);
-  cv::sqrt(base, sqrtBase);
-
-  cv::Mat lowResult  = 2 * base.mul(blend) + base2.mul(1.0 - 2 * blend);
-  cv::Mat highResult = 2 * base.mul(1.0 - blend) + sqrtBase.mul(2 * blend - 1.0);
-
-  std::vector<cv::Mat> blendChannels;
-  cv::split(blend, blendChannels);
-  cv::Mat mask1c;
-  cv::compare(blendChannels[0], 0.5, mask1c, cv::CMP_LE);
-
-  cv::Mat result = base.clone();
-  lowResult.copyTo(result, mask1c);
-  highResult.copyTo(result, ~mask1c);
+  // Division can push bright pixels above 1.0 — rescale back into range.
+  double maxVal;
+  cv::minMaxLoc(flattened, nullptr, &maxVal);
+  if (maxVal > 1.0) flattened /= maxVal;
 
   cv::Mat output;
-  result.convertTo(output, CV_8U, 255.0);
+  flattened.convertTo(output, CV_8U, 255.0);
   return output;
 }
+
 #endif
 void show_all(const Pipeline_Frames& pf){
   cv::imshow("Camera", pf.original);
