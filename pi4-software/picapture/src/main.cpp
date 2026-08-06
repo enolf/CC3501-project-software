@@ -466,7 +466,7 @@ int main()
 // };
 std::vector<Color_Config> colors_vec = {
   {"Coke",   'C', 3,  15, 190, 255, 130, 255},  // red
-  {"Fanta",  'F', 8,  20, 150, 255, 100, 255},  // orange — not yet sampled, placeholder
+  {"Fanta",  'F', 8,  20, 230, 255, 185, 205},  // orange — not yet sampled, placeholder
   {"Sprite", 'G', 44, 60, 140, 255, 110, 255},  // green
   {"Solo",   'S', 23, 35, 190, 255, 150, 255},  // yellow
 };
