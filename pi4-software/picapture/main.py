@@ -1,3 +1,4 @@
+import argparse
 import subprocess
 import sys
 import threading
@@ -9,6 +10,18 @@ from serial import SerialException, SerialTimeoutException
 # Pico/RP2040 default USB vendor ID (Raspberry Pi Foundation) is 0x2E8A.
 # If you're using a custom board with your own VID/PID, swap this out.
 RP2040_VID = 0x2E8A
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument("--debug", action="store_true",
+                             help="Run PiCapture in headless debug mode")
+    mode_group.add_argument("--debug-camera", action="store_true",
+                             help="Show camera debug window")
+    mode_group.add_argument("--debug-all", action="store_true",
+                             help="Show all debug windows")
+    return parser.parse_args()
 
 
 def find_rp2040_port():
@@ -32,6 +45,8 @@ def read_from_rp2040(ser, stop_event):
 
 
 def main():
+    args = parse_args()
+
     port = find_rp2040_port()
     if port is None:
         print("No RP2040 device found. Available ports:")
@@ -54,8 +69,16 @@ def main():
     )
     reader_thread.start()
 
+    cmd = ["./build/PiCapture"]
+    if args.debug:
+        cmd.append("--debug")
+    elif args.debug_camera:
+        cmd.append("--debug-camera")
+    elif args.debug_all:
+        cmd.append("--debug-all")
+
     proc = subprocess.Popen(
-        ["./build/PiCapture"], stdout=subprocess.PIPE, text=True, bufsize=1
+        cmd, stdout=subprocess.PIPE, text=True, bufsize=1
     )
     if proc.stdout is None:
         stop_event.set()

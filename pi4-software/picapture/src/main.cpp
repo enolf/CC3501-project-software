@@ -28,6 +28,10 @@ Can distance thresholding
 #define TESTING
 #define PI_CAMERA_MODULE
 
+constexpr int MODE_HEADLESS = 0;
+constexpr int MODE_DEBUG_CAMERA = 1;
+constexpr int MODE_DEBUG_ALL = 2;
+
 constexpr const char* pipeline = "libcamerasrc"
   " ! video/x-raw, width=800, height=600" // camera needs to capture at a higher resolution
   " ! videoconvert"
@@ -155,13 +159,24 @@ cv::Mat removeHighlightsShadows(const cv::Mat& bgr_input, int blurRadius = 51) {
 }
 
 #endif
-void show_all(const Pipeline_Frames& pf){
-  cv::imshow("Camera", pf.original);
-  cv::imshow("Camera - Thresholded", pf.thresholded);
-  cv::imshow("Camera - Morphology", pf.morphology);
+void show_all(const Pipeline_Frames &pf, int mode) {
+  switch (mode) {
+  case MODE_HEADLESS:
+    break;
+  case MODE_DEBUG_CAMERA:
+    cv::imshow("Camera", pf.original);
+    break;
+  case MODE_DEBUG_ALL:
+    cv::imshow("Camera", pf.original);
+    cv::imshow("Camera - Thresholded", pf.thresholded);
+    cv::imshow("Camera - Morphology", pf.morphology);
 #ifdef USE_FLAT_IMAGE
-  cv::imshow("Camera - Flattend", pf.flattened);
+    cv::imshow("Camera - Flattend", pf.flattened);
 #endif
+    break;
+    default:
+    break;
+  }
 }
 // void show_all(const std::vector<cv::Mat>& fs){
 //         for (const auto& f : fs){ cv::imshow("", f);}
@@ -392,8 +407,23 @@ void process_contours(int color_idx, Pipeline_Frames *pf, Trackbar_State *tb, cv
 using clk = std::chrono::steady_clock;
 constexpr auto kPeriod = std::chrono::milliseconds(250);
 
-int main()
+int main(int argc, char* argv[])
 {
+  int program_mode = 0;
+
+  for (int i = 1; i < argc; ++i) {
+    if (strcmp(argv[i], "--debug") == 0) {
+      program_mode = MODE_HEADLESS;
+    }
+    if (strcmp(argv[i], "--debug-camera") == 0){
+      program_mode = MODE_DEBUG_CAMERA;
+    }
+    if (strcmp(argv[i], "--headless") == 0){
+      program_mode = MODE_DEBUG_ALL;
+    }
+  }
+
+  printf("debug_mode = %d\n", program_mode);
 
   // Measure the frame rate - initialise variables
   int frame_id = 0;
@@ -549,21 +579,22 @@ std::vector<Color_Config> colors_vec = {
     //   cv::putText(pf.original, "Sampling: 1", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
     // }else{
     //   cv::putText(pf.original, "Sampling: 2", cv::Point2i(100,100) , cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 0, 255), 2);
-    // } 
+    // }
 
-    show_all(pf);
-    cv::waitKey(1);
+      show_all(pf, program_mode);
+      cv::waitKey(1);
 
-    // Measure the frame rate
-    frame_id++;
-    if (frame_id >= 30) {
-      gettimeofday(&end, NULL);
-      double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec)/1000000.0;
-      printf("[FPS:%f] \n", 30/diff);
-      frame_id = 0;
-      gettimeofday(&start, NULL);
+      // Measure the frame rate
+      frame_id++;
+      if (frame_id >= 30)
+      {
+        gettimeofday(&end, NULL);
+        double diff = end.tv_sec - start.tv_sec + (end.tv_usec - start.tv_usec) / 1000000.0;
+        printf("[FPS:%f] \n", 30 / diff);
+        frame_id = 0;
+        gettimeofday(&start, NULL);
+      }
     }
-  }
 
 #ifdef PI_CAMERA_MODULE
   // Free the camera 
