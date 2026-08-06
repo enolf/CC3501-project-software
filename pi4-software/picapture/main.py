@@ -1,5 +1,6 @@
 
 import argparse
+import logging
 import subprocess
 import sys
 import threading
@@ -7,6 +8,13 @@ import threading
 import serial
 import serial.tools.list_ports
 from serial import SerialException, SerialTimeoutException
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger(__name__)
 
 # Pico/RP2040 default USB vendor ID (Raspberry Pi Foundation) is 0x2E8A.
 # If you're using a custom board with your own VID/PID, swap this out.
@@ -34,12 +42,12 @@ def find_rp2040_port():
 
 
 def read_from_rp2040(ser, stop_event):
-    """Background thread: print anything the RP2040 sends back."""
+    """Background thread: log anything the RP2040 sends back."""
     while not stop_event.is_set():
         try:
             line = ser.readline()
             if line:
-                print("RP2040 >>", line.decode(errors="replace").strip())
+                log.info("RP2040 >> %s", line.decode(errors="replace").strip())
         except SerialException:
             # Port closed out from under us — expected during shutdown.
             break
@@ -50,18 +58,18 @@ def main():
 
     port = find_rp2040_port()
     if port is None:
-        print("No RP2040 device found. Available ports:")
+        log.error("No RP2040 device found. Available ports:")
         for p in serial.tools.list_ports.comports():
             vidpid = f" (VID:PID {p.vid:04x}:{p.pid:04x})" if p.vid else ""
-            print(f"  {p.device} — {p.description}{vidpid}")
+            log.error("  %s — %s%s", p.device, p.description, vidpid)
         sys.exit(1)
 
-    print(f"Found RP2040 on {port}")
+    log.info("Found RP2040 on %s", port)
 
     try:
         ser = serial.Serial(port, 115200, timeout=1, write_timeout=1)
     except SerialException as e:
-        print(f"Could not open {port}: {e}")
+        log.error("Could not open %s: %s", port, e)
         sys.exit(1)
 
     stop_event = threading.Event()
@@ -91,30 +99,30 @@ def main():
             line = line.strip()
             if not line:
                 continue
-            print("Forwarding:", line)
+            log.info("Forwarding: %s", line)
             try:
                 ser.write((line + "\n").encode())
             except SerialTimeoutException:
-                print("Serial write timed out - RP2040 not draining buffer")
+                log.warning("Serial write timed out - RP2040 not draining buffer")
                 break
     except KeyboardInterrupt:
-        print("Keyboard interrupt, shutting down")
+        log.info("Keyboard interrupt, shutting down")
     finally:
-        print("Cleaning up...")
+        log.info("Cleaning up...")
         stop_event.set()
 
         proc.terminate()
         try:
             proc.wait(timeout=2)
         except subprocess.TimeoutExpired:
-            print("PiCapture didn't exit in time, killing it")
+            log.warning("PiCapture didn't exit in time, killing it")
             proc.kill()
             proc.wait()
 
         reader_thread.join(timeout=2)
 
         ser.close()
-        print("Shutdown complete.")
+        log.info("Shutdown complete.")
 
 
 if __name__ == "__main__":

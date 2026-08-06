@@ -1,0 +1,8 @@
+LICENSE.md
+README.md
+pyproject.toml
+src/picapture.egg-info/PKG-INFO
+src/picapture.egg-info/SOURCES.txt
+src/picapture.egg-info/dependency_links.txt
+src/picapture.egg-info/requires.txt
+src/picapture.egg-info/top_level.txt
