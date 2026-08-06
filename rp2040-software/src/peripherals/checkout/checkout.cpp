@@ -26,6 +26,7 @@
 
 #include "sim_config.h"
 #include "drivers/logging/logging.h"
+#include "peripherals/access_control/access_control.h"
 #include "peripherals/basket/basket.h"
 #include "peripherals/catalogue/catalogue.h"
 #include "peripherals/events/events.h"
@@ -60,6 +61,12 @@ double   paid_grams = 0.0;
 PaymentMethod method = PaymentMethod::None;
 uint32_t transaction_id = 0;
 uint16_t fault_code = FAULT_NONE;
+
+/// Who tapped in, for the greeting screen. A pointer into the compile-time
+/// table in access_control.cpp, never an owned string, so there is nothing to
+/// copy and nothing to free. nullptr means "nobody has tapped", which is also
+/// the greeting shown if a UID stops resolving to a name.
+const char *greeted_name = nullptr;
 
 char square_url[pi_link::URL_MAX_LEN] = {};
 
@@ -126,6 +133,8 @@ void enter(State next)
     // transition rather than scattered through the event handling.
     switch (next) {
         case State::Idle:          Display::show_idle();          break;
+        case State::Greeting:      Display::show_greeting(greeted_name); break;
+        case State::AccessDenied:  Display::show_access_denied(); break;
         case State::Selecting:     Display::show_selecting();     break;
         case State::Recount:       Display::show_recount();       break;
         case State::PaymentSelect:
@@ -158,7 +167,22 @@ void finish_transaction()
     method = PaymentMethod::None;
     transaction_id = 0;
     square_url[0] = '\0';
+    greeted_name = nullptr;
     enter(State::Idle);
+}
+
+/// Render a UID as hex, for the log and the SD card.
+void format_uid(char *out, size_t length, const uint8_t *uid, uint8_t uid_len)
+{
+    size_t used = 0;
+    out[0] = '\0';
+    for (uint8_t i = 0; i < uid_len && i < events::EVENT_UID_MAX_LEN; i++) {
+        const int written = snprintf(out + used, length - used, "%02X", uid[i]);
+        if (written < 0 || (size_t)written >= length - used) {
+            break;
+        }
+        used += (size_t)written;
+    }
 }
 
 uint32_t faults_raised = 0;
@@ -178,6 +202,60 @@ void begin_selecting()
     transaction_id = now_ms();
     pi_link::request_scan();
     enter(State::Selecting);
+}
+
+/// An approved card was tapped: greet the holder and wait for the door.
+void begin_greeting(const events::Event &event)
+{
+    // The event carries the UID and not the name, so the name is fetched from
+    // the module that owns the policy rather than being copied through the
+    // queue. That is the pattern events.h describes at length: payloads stay
+    // small and identical in size, and the state machine asks the owning module
+    // for anything bigger. It also means the approved list is read at the one
+    // moment it is acted on, so a card revoked between the tap and here is
+    // greeted anonymously rather than by a name captured earlier.
+    greeted_name = access_lookup(event.card.uid, event.card.len);
+
+    char uid_text[2 * events::EVENT_UID_MAX_LEN + 1];
+    format_uid(uid_text, sizeof(uid_text), event.card.uid, event.card.len);
+
+    if (greeted_name != nullptr) {
+        logf(LogLevel::INFORMATION, "checkout: %s tapped in (%s)",
+             greeted_name, uid_text);
+    } else {
+        // Approved by the reader, unknown to the lookup. In a bench build this
+        // is usually the SIM_NFC key with an empty approved list; on hardware
+        // it would mean the two disagree, which is worth seeing.
+        logf(LogLevel::WARNING,
+             "checkout: card %s approved but has no name in the list", uid_text);
+    }
+
+    // BLOCKS, up to a couple of hundred milliseconds on a card mid-erase (see
+    // sd_log.h). Accepted here for the same reason it is accepted for TXN_END
+    // and FAULT: who got in and who did not is exactly the history worth having
+    // on the card, and a tap is nowhere near a time-critical path. Moving this
+    // after enter() would not help — LVGL does not render until Display::run()
+    // later in the same pass, so the screen changes after the write regardless.
+    sd_log::write_linef("ACCESS granted uid=%s name=%s", uid_text,
+                        greeted_name != nullptr ? greeted_name : "unknown");
+    enter(State::Greeting);
+}
+
+/// A card that is not on the approved list. Say so, and change nothing else.
+///
+/// Nothing is prevented here, and that is not an oversight: the fridge has no
+/// lock, so the door is still a perfectly good way in and a denied card must
+/// not leave the terminal unusable. What this buys is an honest message to the
+/// person holding the card, and a line in the log for whoever enrols them.
+void deny_access(const events::Event &event)
+{
+    char uid_text[2 * events::EVENT_UID_MAX_LEN + 1];
+    format_uid(uid_text, sizeof(uid_text), event.card.uid, event.card.len);
+
+    logf(LogLevel::WARNING, "checkout: card %s refused - not on the list",
+         uid_text);
+    sd_log::write_linef("ACCESS denied uid=%s", uid_text);
+    enter(State::AccessDenied);
 }
 
 /// The drinks were taken and not paid for. Record it and go back to Idle.
@@ -346,11 +424,52 @@ void handle_event(const events::Event &event)
 
     switch (state) {
         case State::Idle:
-            // Two ways in: the door opens, or an approved card is tapped.
-            // Everything after this point is identical for both.
-            if (event.kind == events::Kind::DoorOpened ||
-                event.kind == events::Kind::CardApproved) {
+            // Two ways in, and they are no longer the same way.
+            //
+            // The door opening means a customer is already at the shelf, so
+            // the transaction starts immediately. A card tap means somebody has
+            // identified themselves but has not opened anything yet, so it goes
+            // to Greeting and waits for the door — which is what Idle was doing
+            // anyway, only now with their name on the screen.
+            if (event.kind == events::Kind::DoorOpened) {
                 begin_selecting();
+            } else if (event.kind == events::Kind::CardApproved) {
+                begin_greeting(event);
+            } else if (event.kind == events::Kind::CardDenied) {
+                deny_access(event);
+            }
+            break;
+
+        case State::Greeting:
+            // The greeting is a waiting room, so it accepts exactly what Idle
+            // accepts. A second approved card re-greets whoever tapped last and
+            // restarts the timeout, which is what happens when two people
+            // arrive together.
+            if (event.kind == events::Kind::DoorOpened) {
+                begin_selecting();
+            } else if (event.kind == events::Kind::CardApproved) {
+                begin_greeting(event);
+            }
+            // CardDenied is deliberately ignored here. Somebody approved is
+            // already standing at the fridge; wiping their greeting because a
+            // stranger waved an unknown card at the reader would punish the
+            // wrong person. The refusal is already logged and sent to the Pi by
+            // the common handling above.
+            break;
+
+        case State::AccessDenied:
+            // Leaves on its own after DENIED_MS, but must not ignore the world
+            // meanwhile: the door still works, and a second tap of a good card
+            // should be believed immediately rather than after the timer.
+            if (event.kind == events::Kind::DoorOpened) {
+                begin_selecting();
+            } else if (event.kind == events::Kind::CardApproved) {
+                begin_greeting(event);
+            } else if (event.kind == events::Kind::CardDenied) {
+                // Re-entering redraws the screen and restarts the timer, so
+                // somebody trying a second card gets an answer to that card
+                // rather than a screen that vanishes mid-tap.
+                deny_access(event);
             }
             break;
 
@@ -461,9 +580,27 @@ void check_timeouts()
         case State::Idle:
             break;   // nothing in progress, nothing to time out
 
+        case State::Greeting:
+            // Tapped in and then walked away, or tapped out of curiosity.
+            // Nothing was started, so there is nothing to abandon or record —
+            // this is just the screen going back to sleep.
+            if (elapsed_ms() >= GREETING_TIMEOUT_MS) {
+                logf(LogLevel::INFORMATION,
+                     "checkout: %s tapped in but never opened the door",
+                     greeted_name != nullptr ? greeted_name : "somebody");
+                greeted_name = nullptr;
+                enter(State::Idle);
+            }
+            break;
+
+        case State::AccessDenied:
+            if (elapsed_ms() >= DENIED_MS) {
+                enter(State::Idle);
+            }
+            break;
+
         case State::Selecting:
-            // Reached by a card tap with the door never opening, or by someone
-            // leaving the fridge door standing open.
+            // Reached by someone leaving the fridge door standing open.
             if (elapsed_ms() >= SELECT_TIMEOUT_MS) {
                 log(LogLevel::INFORMATION, "checkout: nobody took anything");
                 enter(State::Idle);
@@ -535,6 +672,7 @@ void init()
     paid_grams = 0.0;
     method = PaymentMethod::None;
     fault_code = FAULT_NONE;
+    greeted_name = nullptr;
 
     // previous_inventory starts empty, so the very first scan reports every
     // drink as newly arrived and is classified as a restock. That is the

@@ -33,6 +33,17 @@ public:
     /// Nothing in progress. Black, by decision; see checkout::IDLE_SCREEN_STYLE.
     static void show_idle();
 
+    /// An approved card was tapped: greet the holder and ask for the door.
+    ///
+    /// `holder_name` may be nullptr, which greets them without a name rather
+    /// than printing "(null)". That is not a defensive nicety — it is the
+    /// screen a CardApproved event gets when its UID no longer resolves to a
+    /// row in the approved list.
+    static void show_greeting(const char *holder_name);
+
+    /// A card was read that is not on the approved list.
+    static void show_access_denied();
+
     /// The fridge is open and the customer is choosing.
     static void show_selecting();
 

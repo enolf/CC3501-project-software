@@ -13,6 +13,13 @@
 //   door opens -> customer takes drinks -> door closes -> the Pi recounts ->
 //   the difference is the basket -> pay by cash or QR -> thank you -> idle.
 //
+// A card tap is the other way in, and it goes through Greeting first: the
+// holder is named on screen and the machine then waits for the door exactly as
+// Idle does. An unrecognised card lands on AccessDenied, which says so and
+// times out. Neither state locks anything — there is no lock — so the door on
+// its own still starts a transaction; the card just makes the terminal greet
+// someone it knows.
+//
 // The door is what gates progress. Nothing advances toward payment until the
 // door is shut, because that is the only moment the camera can see a stable,
 // unobstructed shelf (dashboard.md section 4.2).
@@ -23,6 +30,23 @@ namespace checkout {
 enum class State : uint8_t {
     /// Waiting. Screen is black. Woken by the door opening or an approved card.
     Idle,
+
+    /// An approved card was tapped. The holder is greeted by name and the
+    /// machine waits for the door, which is the same thing Idle was doing —
+    /// this state exists so that "somebody has identified themselves but has
+    /// not opened the door yet" is visible on screen and in the log, rather
+    /// than being indistinguishable from a customer already choosing.
+    ///
+    /// Deliberately does NOT ask the Pi to scan. The scan is requested when the
+    /// door opens, exactly as it is from Idle, so both ways in produce the same
+    /// sequence of requests and there is only one scan-timing behaviour to
+    /// reason about.
+    Greeting,
+
+    /// A card was read that is not on the approved list. Says so for a few
+    /// seconds, then returns to Idle. Nothing is prevented: there is no lock,
+    /// so this is a message, not an enforcement point.
+    AccessDenied,
 
     /// The customer is at the open fridge. The Pi has been asked to scan.
     /// Waiting for the door to close.
@@ -97,6 +121,8 @@ inline const char *state_name(State state)
 {
     switch (state) {
         case State::Idle:          return "Idle";
+        case State::Greeting:      return "Greeting";
+        case State::AccessDenied:  return "AccessDenied";
         case State::Selecting:     return "Selecting";
         case State::Recount:       return "Recount";
         case State::PaymentSelect: return "PaymentSelect";
@@ -115,8 +141,18 @@ inline const char *state_name(State state)
 // can be entered must be able to leave on its own, or a customer walking away
 // would strand the terminal until someone opened the door.
 
-/// Selecting -> Idle. Covers a card tapped with the door never opened.
+/// Selecting -> Idle. Covers a door left standing open.
 constexpr uint32_t SELECT_TIMEOUT_MS = 30000;
+
+/// Greeting -> Idle. Someone tapped their card and then walked away, or tapped
+/// it out of curiosity. Generous compared with the 3 s screens below because a
+/// person who has just identified themselves is usually about to open the door,
+/// and cutting the greeting short mid-reach reads as the terminal ignoring them.
+constexpr uint32_t GREETING_TIMEOUT_MS = 30000;
+
+/// AccessDenied -> Idle. Long enough to read a two-line message, short enough
+/// that a rejected card cannot leave a red screen up for the next customer.
+constexpr uint32_t DENIED_MS = 3000;
 
 /// Recount -> Fault. How long the Pi gets to stabilise and report.
 constexpr uint32_t RECOUNT_TIMEOUT_MS = 8000;

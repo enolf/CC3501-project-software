@@ -35,9 +35,14 @@ static const ApprovedUser approved_users[] = {
     // { "Spare Fob",  4, { 0xDE, 0xAD, 0xBE, 0xEF } },
 };
 
+/// How many rows the table above has. Everything else sizes itself from this,
+/// so adding or removing a person needs no other change.
+constexpr size_t APPROVED_COUNT =
+    sizeof(approved_users) / sizeof(approved_users[0]);
+
 const char *access_lookup(const uint8_t *uid, uint8_t uid_len)
 {
-    const size_t count = sizeof(approved_users) / sizeof(approved_users[0]);
+    const size_t count = APPROVED_COUNT;
     for (size_t i = 0; i < count; i++) {
         // A match needs the same length AND the same bytes. Checking the length
         // first means a 4-byte card can never accidentally match the first four
@@ -48,4 +53,17 @@ const char *access_lookup(const uint8_t *uid, uint8_t uid_len)
         }
     }
     return nullptr;   // not on the list -> access denied
+}
+
+bool access_first(uint8_t *uid_out, uint8_t *uid_len_out)
+{
+    // An empty approved list is a legitimate state — a fridge nobody has been
+    // enrolled on yet — so this reports "nothing to give" rather than asserting.
+    if (APPROVED_COUNT == 0) {
+        return false;
+    }
+
+    memcpy(uid_out, approved_users[0].uid, approved_users[0].uid_len);
+    *uid_len_out = approved_users[0].uid_len;
+    return true;
 }

@@ -23,6 +23,7 @@
 #include "board.h"
 #include "sim_config.h"
 #include "drivers/logging/logging.h"
+#include "peripherals/access_control/access_control.h"
 #include "peripherals/events/events.h"
 #include "peripherals/checkout/checkout.h"
 #include "peripherals/switches/switches.h"
@@ -138,7 +139,8 @@ void print_help()
 #endif
     printf("  b        user button pressed\n");
 #if SIM_NFC
-    printf("  n        FAKE approved card tapped\n");
+    printf("  n        FAKE approved card tapped -> greeting, by name\n");
+    printf("  m        FAKE unknown card tapped  -> access denied\n");
 #endif
 #if SIM_TOUCH
     printf(" Touch stand-ins (the real touchscreen works too):\n");
@@ -282,8 +284,26 @@ void run_debug_input()
 
 #if SIM_NFC
         case 'n': {
+            // Tap in as the FIRST person on the approved list, rather than with
+            // an invented UID. The state machine looks the name up again from
+            // that UID to draw the greeting screen, so a made-up one would be
+            // announced as approved here and then found to be nameless there —
+            // exercising the fallback path instead of the normal one, which is
+            // the opposite of what this key is for.
             events::Event e(events::Kind::CardApproved);
-            // A plausible 4-byte UID, so the payload path is exercised too.
+            if (!access_first(e.card.uid, &e.card.len)) {
+                printf("no approved cards in the list - add one in "
+                       "access_control.cpp\n");
+                break;
+            }
+            events::push(e);
+            break;
+        }
+
+        case 'm': {
+            // A UID chosen to be absent from any real approved list, so the
+            // lookup refuses it and the denied screen is what appears.
+            events::Event e(events::Kind::CardDenied);
             e.card.uid[0] = 0xDE; e.card.uid[1] = 0xAD;
             e.card.uid[2] = 0xBE; e.card.uid[3] = 0xEF;
             e.card.len = 4;

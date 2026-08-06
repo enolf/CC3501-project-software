@@ -199,7 +199,7 @@ constexpr uint32_t COLOUR_FAULT      = 0xB71C1C;   // red
 /// Which screen is currently built, so the cash screen can be updated in place
 /// rather than rebuilt on every coin.
 enum class Screen : uint8_t {
-    None, Idle, Selecting, Recount, PaymentSelect,
+    None, Idle, Greeting, Denied, Selecting, Recount, PaymentSelect,
     Cash, OnlineWait, Qr, Thanks, Cancelled, Fault,
 };
 
@@ -303,6 +303,56 @@ void Display::show_idle()
 #else
     (void)scr;
 #endif
+}
+
+void Display::show_greeting(const char *holder_name)
+{
+    lv_obj_t *scr = begin_screen(Screen::Greeting);
+
+    if (holder_name != nullptr && holder_name[0] != '\0') {
+        make_label(scr, "Welcome back", &lv_font_montserrat_20, COLOUR_DIM,
+                   LV_ALIGN_CENTER, 0, -50);
+
+        // The only label on any screen whose text comes from a table a human
+        // edits, so it is the only one given an explicit width. Everything else
+        // here is a fixed string that was checked against the panel once; a
+        // name is however long somebody types it, and without this a long one
+        // would run off both edges instead of wrapping onto a second line.
+        lv_obj_t *name = make_label(scr, holder_name, &lv_font_montserrat_28,
+                                    COLOUR_TEXT, LV_ALIGN_CENTER, 0, -10);
+        lv_obj_set_width(name, DISP_HOR_RES - 20);
+        lv_obj_set_style_text_align(name, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
+        lv_obj_align(name, LV_ALIGN_CENTER, 0, -10);
+    } else {
+        // A CardApproved event whose UID no longer matches a row in the
+        // approved list. Greeting them anonymously is right: the tap was
+        // approved when it was read, and arguing with the customer about it on
+        // screen would help nobody. The mismatch is in the serial log.
+        make_label(scr, "Welcome", &lv_font_montserrat_28, COLOUR_TEXT,
+                   LV_ALIGN_CENTER, 0, -20);
+    }
+
+    make_label(scr, "Open the door to start", &lv_font_montserrat_20,
+               COLOUR_TEXT, LV_ALIGN_CENTER, 0, 45);
+}
+
+void Display::show_access_denied()
+{
+    // The same red as the fault screen. They are different things, but both are
+    // "stop, this did not work", and the wording is what tells them apart —
+    // a customer should never have to decode a colour.
+    lv_obj_t *scr = begin_screen(Screen::Denied, COLOUR_FAULT);
+
+    make_label(scr, "ACCESS DENIED", &lv_font_montserrat_28, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, -30);
+    make_label(scr, "This card is not registered", &lv_font_montserrat_20,
+               COLOUR_TEXT, LV_ALIGN_CENTER, 0, 10);
+    make_label(scr, "See a committee member to be added",
+               &lv_font_montserrat_14, COLOUR_TEXT, LV_ALIGN_CENTER, 0, 48);
+
+    // The UID is deliberately NOT shown. Decision D14: customers get one clear
+    // message and diagnostics go to the serial log, which is where whoever
+    // enrols the card needs to read it from anyway.
 }
 
 void Display::show_selecting()
