@@ -98,6 +98,7 @@ const char *name(Kind kind)
         case Kind::DoorOpened:       return "DoorOpened";
         case Kind::DoorClosed:       return "DoorClosed";
         case Kind::UserButtonPressed: return "UserButtonPressed";
+        case Kind::UserButtonHeld:    return "UserButtonHeld";
         case Kind::CardApproved:     return "CardApproved";
         case Kind::CardDenied:       return "CardDenied";
         case Kind::InventoryUpdated: return "InventoryUpdated";

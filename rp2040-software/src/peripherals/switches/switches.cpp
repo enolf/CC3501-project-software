@@ -1,5 +1,7 @@
 #include "peripherals/switches/switches.h"
 
+#include "pico/stdlib.h"
+
 #include "board.h"
 #include "drivers/DigitalSwitch/DigitalSwitch.h"
 #include "drivers/logging/logging.h"
@@ -18,6 +20,15 @@ namespace {
 // from board.h; nothing about the wiring is repeated here.
 DigitalSwitch door(LIMIT_SWITCH_PIN, LIMIT_SWITCH_ACTIVE_HIGH);
 DigitalSwitch user_button(USER_SWITCH_PIN, USER_SWITCH_ACTIVE_HIGH);
+
+/// How long the user button must be held to count as a hold rather than a
+/// press. Long enough that nobody triggers an SD write by leaning on the panel,
+/// short enough that three seconds of nothing happening does not read as a dead
+/// button — which is why the screen appears the instant it qualifies.
+constexpr uint32_t HOLD_MS = 3000;
+
+uint32_t pressed_at_ms = 0;
+bool hold_fired = false;
 
 } // namespace
 
@@ -68,15 +79,36 @@ void run_switches()
         events::push(events::Kind::DoorOpened);
     }
 
-    // Only the press edge is reported. Nothing in the system cares how long the
-    // button is held, and raising an event on release too would mean every
-    // consumer had to filter one out.
+    // The button now has two meanings, so neither can be reported on the press
+    // edge:
+    //
+    //   a short press  ->  UserButtonPressed, raised on RELEASE
+    //   a long hold    ->  UserButtonHeld, raised the moment it crosses 3 s,
+    //                      while the finger is still down
+    //
+    // A short press CANNOT be reported on the press edge, because at that
+    // instant it is not yet known which of the two this is — every hold begins
+    // with a press, so doing it that way would fire both actions for one
+    // gesture. Waiting for the release is what tells them apart.
+    //
+    // The hold fires as soon as it qualifies rather than on release, so the
+    // person gets their feedback at three seconds instead of whenever they
+    // happen to let go. `hold_fired` then suppresses the release, so a long
+    // hold produces exactly one event.
     if (user_button.wasPressed()) {
+        pressed_at_ms = to_ms_since_boot(get_absolute_time());
+        hold_fired = false;
+    }
+
+    if (user_button.isPressed() && !hold_fired &&
+        (to_ms_since_boot(get_absolute_time()) - pressed_at_ms) >= HOLD_MS) {
+        hold_fired = true;
+        events::push(events::Kind::UserButtonHeld);
+    }
+
+    if (user_button.wasReleased() && !hold_fired) {
         events::push(events::Kind::UserButtonPressed);
     }
-    // Release edge is consumed and discarded, so the one-shot flag inside the
-    // driver cannot go stale and fire spuriously later.
-    (void)user_button.wasReleased();
 }
 
 bool is_door_closed()

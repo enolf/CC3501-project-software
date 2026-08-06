@@ -201,6 +201,7 @@ constexpr uint32_t COLOUR_FAULT      = 0xB71C1C;   // red
 enum class Screen : uint8_t {
     None, Idle, Greeting, Denied, Selecting, Recount, PaymentSelect,
     Cash, OnlineWait, Qr, Thanks, Cancelled, Fault,
+    SdWriting, SdResult, Useless,
 };
 
 Screen current_screen = Screen::None;
@@ -549,6 +550,55 @@ void Display::show_thanks(uint32_t paid_cents, uint32_t owed_cents)
                LV_ALIGN_CENTER, 0, -8);
     make_label(scr, line, &lv_font_montserrat_20, COLOUR_TEXT,
                LV_ALIGN_CENTER, 0, 38);
+}
+
+void Display::show_sd_writing()
+{
+    lv_obj_t *scr = begin_screen(Screen::SdWriting);
+    make_label(scr, "Writing log", &lv_font_montserrat_28, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, -30);
+    make_label(scr, "to SD card", &lv_font_montserrat_28, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, 6);
+    make_label(scr, "Do not remove the card", &lv_font_montserrat_14,
+               COLOUR_DIM, LV_ALIGN_CENTER, 0, 48);
+
+    // Forces the frame out to the panel NOW. Everything else on this display
+    // can wait for the next superloop pass to be flushed; this cannot, because
+    // the caller is about to block on the card and would otherwise leave the
+    // previous screen up for the whole write.
+    lv_refr_now(nullptr);
+}
+
+void Display::show_sd_result(bool ok, unsigned long lines)
+{
+    lv_obj_t *scr = begin_screen(Screen::SdResult);
+
+    char detail[40];
+    if (ok) {
+        snprintf(detail, sizeof(detail), "%lu lines written", lines);
+    } else {
+        // No card, wrong format, full, or write-protected all land here. The
+        // distinguishing detail is in the serial log; the panel gets one clear
+        // message, the same rule the fault screen follows (decision D14).
+        snprintf(detail, sizeof(detail), "Check the card and try again");
+    }
+
+    make_label(scr, ok ? "Write successful" : "Write failed",
+               &lv_font_montserrat_28, ok ? COLOUR_GOOD : COLOUR_FAULT,
+               LV_ALIGN_CENTER, 0, -30);
+    make_label(scr, "Remove SD card", &lv_font_montserrat_20, COLOUR_TEXT,
+               LV_ALIGN_CENTER, 0, 10);
+    make_label(scr, detail, &lv_font_montserrat_14, COLOUR_DIM,
+               LV_ALIGN_CENTER, 0, 48);
+}
+
+void Display::show_useless_button()
+{
+    lv_obj_t *scr = begin_screen(Screen::Useless);
+    make_label(scr, "This is a useless button", &lv_font_montserrat_20,
+               COLOUR_TEXT, LV_ALIGN_CENTER, 0, -10);
+    make_label(scr, "Hold it for 3 seconds to write the log",
+               &lv_font_montserrat_14, COLOUR_DIM, LV_ALIGN_CENTER, 0, 30);
 }
 
 void Display::show_cancelled()

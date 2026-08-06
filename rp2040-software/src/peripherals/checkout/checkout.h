@@ -78,6 +78,19 @@ enum class State : uint8_t {
     /// Not fit to trade (the Pi is unreachable, the scale has failed). Shows a
     /// generic out-of-service screen with a code; details go to the log.
     Fault,
+
+    /// Showing the outcome of an SD log write, and telling somebody they can
+    /// take the card out. Reached only from Idle, by holding the panel button.
+    ///
+    /// There is no state for the write ITSELF. `sd_log::dump_to_card()` blocks
+    /// the superloop from start to finish, so no state machine pass could
+    /// observe one — the "Writing…" screen is drawn and forced out to the panel
+    /// immediately before the call instead.
+    SdResult,
+
+    /// Telling somebody the panel button does nothing. Reached only from Idle,
+    /// by a short press.
+    UselessButton,
 };
 
 /// How a transaction was paid for. Reported to the Pi so the dashboard can
@@ -132,6 +145,8 @@ inline const char *state_name(State state)
         case State::ThankYou:      return "ThankYou";
         case State::Abandoned:     return "Abandoned";
         case State::Fault:         return "Fault";
+        case State::SdResult:      return "SdResult";
+        case State::UselessButton: return "UselessButton";
     }
     return "Unknown";
 }
@@ -170,6 +185,17 @@ constexpr uint32_t THANK_YOU_MS = 3000;
 
 /// How long the cancellation message stays up before returning to Idle.
 constexpr uint32_t ABANDONED_MS = 3000;
+
+/// How long "Write successful / failed — remove SD card" stays up.
+///
+/// Longer than the other confirmations because it is an INSTRUCTION, not just
+/// feedback: somebody has to read it, reach over and pull the card out. Three
+/// seconds is enough to read "Thank you"; it is not enough to act on.
+constexpr uint32_t SD_RESULT_MS = 8000;
+
+/// How long the useless-button message stays up. Short — it is a joke, and the
+/// fridge should not be out of service for it.
+constexpr uint32_t USELESS_BUTTON_MS = 2000;
 
 /// Minimum time on the fault screen, so an intermittent fault cannot strobe
 /// the display by clearing and re-asserting.

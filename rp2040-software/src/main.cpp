@@ -232,7 +232,10 @@ void run_debug_input()
     }
 
     switch (key) {
+        // The panel button's two gestures, so both can be exercised without
+        // standing at the fridge holding a button for three seconds.
         case 'b': events::push(events::Kind::UserButtonPressed); break;
+        case 'B': events::push(events::Kind::UserButtonHeld);    break;
 
 #if SIM_DOOR
         case 'o': events::push(events::Kind::DoorOpened); break;

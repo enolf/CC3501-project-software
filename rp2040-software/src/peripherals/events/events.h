@@ -36,7 +36,10 @@ enum class Kind : uint8_t {
     // --- Switches (peripherals/switches, on real hardware via DigitalSwitch) ---
     DoorOpened,
     DoorClosed,
-    UserButtonPressed,  ///< The panel button. Purpose not yet assigned.
+    UserButtonPressed,  ///< Panel button, short press. Raised on RELEASE, so it
+                        ///< can be told apart from the start of a hold.
+    UserButtonHeld,     ///< Panel button, held past the hold threshold. Raised
+                        ///< while still down; suppresses the release event.
 
     // --- RFID (peripherals/nfc_task, real from stage 10) ---
     CardApproved,   ///< UID matched the approved list. Payload: card

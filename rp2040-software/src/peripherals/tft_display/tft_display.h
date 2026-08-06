@@ -78,4 +78,21 @@ public:
     /// Out of service, with a numeric code. Diagnostics go to the serial log,
     /// not the screen — customers get one clear message (decision D14).
     static void show_fault(uint16_t code);
+
+    // --- The panel button ---------------------------------------------------
+
+    /// "Writing log to SD card". Put up BEFORE the write starts.
+    ///
+    /// The write blocks the superloop for as long as the card takes, so this
+    /// has to be drawn and flushed before it begins — a screen queued behind a
+    /// blocking write appears only after it has finished, which is precisely
+    /// when it is no longer true.
+    static void show_sd_writing();
+
+    /// The outcome, and permission to take the card out.
+    static void show_sd_result(bool ok, unsigned long lines);
+
+    /// A short press. The button does nothing else, and saying so is better
+    /// than a button that appears broken.
+    static void show_useless_button();
 };

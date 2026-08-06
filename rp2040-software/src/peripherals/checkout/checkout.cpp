@@ -56,6 +56,10 @@ uint32_t owed_cents = 0;
 /// whether the customer has paid (see basket::check_mass); `paid_cents` is the
 /// running tally, which is only ever shown to the customer.
 uint32_t paid_cents = 0;
+
+/// Outcome of the last SD log dump, for the screen that reports it.
+bool sd_write_ok = false;
+unsigned long sd_write_lines = 0;
 double   paid_grams = 0.0;
 
 PaymentMethod method = PaymentMethod::None;
@@ -155,6 +159,9 @@ void enter(State next)
                                                         owed_cents);   break;
         case State::Abandoned:     Display::show_cancelled();      break;
         case State::Fault:         Display::show_fault(fault_code); break;
+        case State::SdResult:      Display::show_sd_result(sd_write_ok,
+                                                           sd_write_lines); break;
+        case State::UselessButton: Display::show_useless_button(); break;
     }
 }
 
@@ -271,6 +278,40 @@ void abandon()
     sd_log::write_linef("TXN_END id=%" PRIu32 " outcome=stolen owed=%" PRIu32
                         " paid=%" PRIu32, transaction_id, owed_cents, paid_cents);
     enter(State::Abandoned);
+}
+
+/// Dump the buffered log to whatever card is in the slot. Idle only.
+///
+/// WHY THIS BLOCKS, AND WHY THAT IS ACCEPTABLE HERE
+/// -----------------------------------------------
+/// `dump_to_card()` mounts, writes every buffered line and unmounts, and holds
+/// the superloop for the whole time — hundreds of milliseconds, seconds on a
+/// slow card. Nothing else in this file is allowed to do that.
+///
+/// It is allowed here because of WHERE it is called from. In Idle there is no
+/// transaction, no coin settling window, no payment timeout and no customer
+/// waiting on a screen. The one thing that does suffer is the Pi link: no
+/// heartbeat goes out while this runs, and at `LINK_TIMEOUT_MS` of 30 s there
+/// is ample margin for a write that takes even a few seconds.
+///
+/// This is the same reasoning `sd_log.h` records for confining writes to Idle,
+/// and it is the reason the panel button does nothing in any other state —
+/// which is also what was asked for, so the constraint and the requirement
+/// happen to agree.
+void write_log_to_card()
+{
+    // Drawn and flushed BEFORE the write starts. Queued behind it, this screen
+    // would appear only once the write had finished, announcing something that
+    // was no longer happening.
+    Display::show_sd_writing();
+
+    sd_write_ok = sd_log::dump_to_card();
+    sd_write_lines = sd_log::buffered_lines();
+
+    logf(LogLevel::INFORMATION, "checkout: SD log write %s (%lu lines)",
+         sd_write_ok ? "succeeded" : "FAILED", sd_write_lines);
+
+    enter(State::SdResult);
 }
 
 /// Payment is complete.
@@ -438,6 +479,10 @@ void handle_event(const events::Event &event)
                 begin_greeting(event);
             } else if (event.kind == events::Kind::CardDenied) {
                 deny_access(event);
+            } else if (event.kind == events::Kind::UserButtonHeld) {
+                write_log_to_card();
+            } else if (event.kind == events::Kind::UserButtonPressed) {
+                enter(State::UselessButton);
             }
             break;
 
@@ -556,8 +601,16 @@ void handle_event(const events::Event &event)
 
         case State::ThankYou:
         case State::Abandoned:
+        case State::SdResult:
+        case State::UselessButton:
             // Leaving on a timer. Nothing a customer does should cut these
             // short or extend them.
+            //
+            // The two button states are here rather than anywhere else because
+            // that is the whole requirement: the panel button does something
+            // ONLY from Idle. Listing them explicitly, and leaving -Wswitch on,
+            // means a state added later cannot quietly inherit "ignores the
+            // button" by falling through a default.
             break;
 
         case State::Fault:
@@ -644,6 +697,18 @@ void check_timeouts()
         case State::Abandoned:
             if (elapsed_ms() >= ABANDONED_MS) {
                 finish_transaction();
+            }
+            break;
+
+        case State::SdResult:
+            if (elapsed_ms() >= SD_RESULT_MS) {
+                enter(State::Idle);
+            }
+            break;
+
+        case State::UselessButton:
+            if (elapsed_ms() >= USELESS_BUTTON_MS) {
+                enter(State::Idle);
             }
             break;
 

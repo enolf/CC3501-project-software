@@ -40,4 +40,42 @@ bool is_available();
 /// Bytes written to the log file since it was opened.
 unsigned long bytes_written();
 
+// --- On-demand export -------------------------------------------------------
+//
+// Every line is ALSO kept in a RAM ring buffer, whether or not a card is
+// mounted. That is what makes the panel button useful: the card can be absent
+// for the whole session and inserted only to collect the log, which is how
+// somebody actually uses this. Write-through to a card present at boot is
+// unchanged, so the crash-survival property above still holds.
+//
+// When the buffer fills, the OLDEST WHOLE LINES are dropped rather than the
+// newest. A log that stops recording once it is full is a log that misses the
+// thing you went looking for, and dropping part of a line would produce a file
+// with a corrupt row in the middle of it.
+
+/// Mount whatever card is in the slot now and append the whole buffer to it.
+///
+/// BLOCKS, for as long as it takes to write every buffered line — hundreds of
+/// milliseconds is normal and a slow card can take seconds. Call it only from
+/// a state where nothing is waiting on the superloop; `checkout` confines it
+/// to Idle for exactly that reason.
+///
+/// Mounts here rather than relying on `init()` because the card is expected to
+/// have been inserted long after boot. Unmounts afterwards, so the card is safe
+/// to pull the moment the screen says so — which also means write-through stops
+/// until the next `init()`, since the card is on its way out of the slot.
+///
+/// The buffer is NOT cleared. A dump can therefore be repeated onto a second
+/// card, and a failed one loses nothing; the cost is that dumping twice onto
+/// the same card writes the lines twice, which the BEGIN/END markers make
+/// visible rather than mysterious.
+bool dump_to_card();
+
+/// How many whole lines are waiting in the RAM buffer.
+unsigned long buffered_lines();
+
+/// How many lines have been discarded to make room since boot. Non-zero means
+/// the buffer wrapped and the oldest history is gone.
+unsigned long dropped_lines();
+
 } // namespace sd_log
