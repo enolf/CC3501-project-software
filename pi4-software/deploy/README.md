@@ -52,16 +52,29 @@ together give a failure with three possible causes; done separately, each has
 one. This is the same reasoning as plan.md stage 15.5, which insisted on a
 laptop run before a Pi run for exactly this reason.
 
+**The camera comes second, not third.** It is the swap that can fail on
+*permissions* rather than on wiring, and a permission failure under systemd
+looks like a crash loop rather than an error. Prove it before real money is in
+the picture.
+
 ### 1. The real board
 
-Requires the firmware built with `PI_LINK_BACKEND=serial`.
+Requires the firmware built with `PI_LINK_BACKEND=serial`. The default is `sim`,
+whose `is_healthy()` returns true unconditionally — flash the wrong one and the
+board sits on **fault 002**, unreachable, with the Pi connected and fine.
 
 ```bash
 sudo apt install python3-serial       # not pip: PEP 668
-ls -l /dev/ttyACM0                    # appears when the board is plugged in
+ls -l /dev/serial/by-id/              # the board, under a name that persists
 ```
 
-Set `FRIDGED_ARGS=--port /dev/ttyACM0 --square fake`, restart, then watch:
+**Use the `by-id` path, not `/dev/ttyACM0`.** The number is assigned in
+enumeration order, so it moves whenever the board is replugged or reset while
+the Pi is up — which is constantly during testing. The `by-id` name is built
+from the RP2040's serial number and never changes.
+
+Set `FRIDGED_ARGS=--port /dev/serial/by-id/usb-Raspberry_Pi_Pico_XXXX-if00
+--square fake`, restart, then watch:
 
 ```bash
 journalctl -u fridged -f
@@ -71,36 +84,59 @@ journalctl -u fridged -f
 with `bad=0` and `link=up`. `bad` climbing means framing trouble — the offending
 bytes are in `raw_line`, which is what that table is for.
 
+**If the port is busy,** the answer is almost never the cable. A detached
+`screen` session holds a serial port open forever and survives closing the
+terminal; `fuser -v /dev/ttyACM*` names the culprit. Prefer `miniterm`, which
+does not detach.
+
 **What to check afterwards:** the temperature tiles are showing the real
 sensors' ROM codes, which will be different from the simulated ones and will
 therefore appear **unnamed**. Name them as in [../grafana/README.md](../grafana/README.md).
 
-### 2. Real Square
+### 2. The camera
+
+Needs `picapture/build/PiCapture` built on the Pi — it links OpenCV and
+GStreamer, so it cannot be cross-compiled from the laptop the way the firmware
+can.
+
+Add `--camera picapture`, restart, and watch for the startup banner:
+
+```
+WARNING fridged: REAL CAMERA - counting a physical shelf with .../PiCapture
+INFO    fridged.camera: picapture started (pid NNNN) in .../picapture
+INFO    fridged.camera: [picapture] picapture: tuning loaded from picapture.conf
+```
+
+All three matter. **That third line is the one to check** — without it picapture
+is running on compiled-in defaults rather than the areas and hues measured on
+this fridge, and it will still produce plausible-looking counts.
+
+**If it dies immediately with a permission error,** see `SupplementaryGroups=`
+in `fridged.service`. `Group=grafana` replaces the primary group and drops
+`video` along with it, so the service can be perfectly able to open the camera
+from your shell and unable to under systemd.
+
+Expect **one low-confidence baseline per service start**, logged as `answered
+from an unsettled picture`. That is correct — the first scan after startup has
+a frame or two and cannot settle — but it means a climbing "Scans nobody should
+trust" may be counting restarts. Check `systemctl show fridged -p NRestarts`
+before reading it as bad counts.
+
+### 3. Real Square
 
 Needs `online-payment/tokens.py` and `sudo apt install python3-requests`.
 
 Set `--square real`, restart, and walk a purchase: take a drink, close the door,
 tap ONLINE, scan the QR, pay with the sandbox test card `4111 1111 1111 1111`.
+`RealSquare` logs `Square: SANDBOX` or `Square: PRODUCTION` on startup — read it
+rather than assuming.
 
 It stays on the **sandbox** permanently — this project will never take real
 money, so `SANDBOX = True` in `square.py` is the final state, not a step.
 
-### 3. The camera
-
-**Not ready, and it is not a `fridged` change.** `picapture` currently:
-
-- prints its packet wrapped in debug text every 30 frames rather than on demand;
-- calls `cv::imshow`, so it needs a display and cannot run under systemd;
-- never writes `latest.jpg`;
-- detects only one colour (documentation.md §7 issue 6).
-
-Until those are fixed, `fridged` answers `CMD SCAN` from its simulated shelf and
-everything downstream — stock, burn-down, reconciliation — is running on that.
-It is honest data about a simulated shelf, not a broken camera.
-
-When picapture is ready, the `fridged` side is a `PiCapture` class beside
-`SimCamera` with the same two methods, plus the `/latest.jpg` endpoint that
-stage D4 was deferred waiting for.
+**Rotate the token before this step.** An earlier sandbox token was committed
+and is still reachable in git history. It is harmless while everything runs
+`--square fake` and stops being harmless here.
 
 ---
 

@@ -40,6 +40,38 @@ if ! id -nG "${USER}" | tr ' ' '\n' | grep -qx grafana; then
     exit 1
 fi
 
+# --- 0. The devices the service will need ------------------------------------
+# fridged.service names `dialout` and `video` in SupplementaryGroups=. Checked
+# here rather than discovered at boot, because the failure is a bare EACCES
+# inside a five-second restart loop and reads like a flaky cable.
+#
+# A warning, not an error: --port sim with a simulated shelf needs neither, and
+# refusing to install would be wrong for that entirely valid setup.
+
+check_device_group() {
+    local want="$1" path
+    for path in "${@:2}"; do
+        [[ -e "${path}" ]] || continue
+        local owner
+        owner="$(stat -c '%G' "${path}")"
+        if [[ "${owner}" != "${want}" ]]; then
+            echo "    WARNING: ${path} is group '${owner}', not '${want}'." >&2
+            echo "             Add '${owner}' to SupplementaryGroups= in" >&2
+            echo "             ${UNIT_DIR}/fridged.service or the service" >&2
+            echo "             cannot open it." >&2
+        fi
+        return 0
+    done
+    echo "    note: no ${want} device present yet (${*:2})"
+}
+
+say "Devices"
+check_device_group dialout /dev/ttyACM0 /dev/ttyACM1 /dev/ttyUSB0
+check_device_group video   /dev/video0 /dev/media0
+# The one people forget: libcamera allocates through dma_heap, and a Pi that can
+# open /dev/video0 but not this fails later, during streaming, not at open.
+check_device_group video   /dev/dma_heap/vc4 /dev/dma_heap/linux,cma
+
 # --- 1. Runtime configuration -----------------------------------------------
 # Never overwritten. Once it exists it holds local choices — which port, which
 # Square backend — and clobbering those on every deploy would be its own bug.
@@ -103,7 +135,10 @@ fridged now starts at boot and restarts if it crashes. It is no longer tied to
 your terminal, so close the tmux session if you were using one.
 
 NEXT, one at a time, checking each before the next (deploy/README.md):
-  1. the board       --port sim     -> --port /dev/ttyACM0
-  2. card payments   --square fake  -> --square real
-  3. the camera      simulated      -> picapture, once it can run headless
+  1. the board       --port sim     -> --port /dev/serial/by-id/...
+  2. the camera      simulated      -> --camera picapture
+  3. card payments   --square fake  -> --square real
+
+  Use the by-id path, not /dev/ttyACM0 — the number moves when the board is
+  reset. See ${DEFAULTS} and \`ls -l /dev/serial/by-id/\`.
 EOF

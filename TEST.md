@@ -25,7 +25,9 @@ right expectations.
 | Refusing to answer a scan (decision D1) | Tested with a fake clock, **never run with a real camera** |
 | Baseline latch and recount settling (stage 4) | **PASSED on the fridge** — 15/15 door cycles, T6 |
 | The four settling constants | **Measured and confirmed**, T6 2026-08-07 |
-| Confidence + trigger stored, dashboard panels (stage 5) | T7.1 **passed on the fridge 2026-08-07** (40 scans, 40 readings, both triggers). T7.2 panels + T7.3 low-confidence dip still outstanding |
+| Confidence + trigger stored, dashboard panels (stage 5) | **Passed on the fridge 2026-08-07** — T7.1, T7.2, T7.3 all green |
+| The service under systemd with real board + camera (stage 6) | **Never run.** Every hardware test so far was a foreground process with a terminal attached — T8 |
+| Surviving a power cut | **Never tried** — T8.4 |
 
 Record which commit you tested, so the results can be matched to the code:
 
@@ -1004,6 +1006,9 @@ scroll to the stock row.
 | **Camera confidence** | Two series, **Baseline** and **Recount**, stepped, 0-100. Not one line, not empty. |
 | **Scans nobody should trust** | A number. Green at 0. |
 
+> **Result, 2026-08-07:** passed. Both series drew, and the stat went 0 -> 1 when
+> T7.3 provoked a bad scan.
+
 **Fail if:** either panel says "No data" — the query is wrong, and
 `python3 tests/test_fridged.py` should have caught it, so tell me.
 
@@ -1053,10 +1058,182 @@ nothing, since a healthy fridge reads 0 too.
 has drifted from `LOW_CONFIDENCE_THRESHOLD` in `fridged/config.py`. Grafana
 cannot read Python, so the 50 is written in both places by hand.
 
+> **Result, 2026-08-07:** passed, by a route worth writing down.
+>
+> ```
+> 11:45:34 INFO    fridged.camera: baseline answered from an unsettled picture; confidence 29
+> 11:45:34 WARNING fridged.ingest: door_open scan answered at confidence 29 (below 50) - ...
+> ```
+>
+> Note **"unsettled picture"**, not "old count", and note the timestamp: 12 s
+> after a fresh start. The freeze did not cause this — the camera's COLD START
+> did. The first baseline after startup has a frame or two, cannot reach
+> `SETTLE_FRAMES`, and is halved by `UNSETTLED_CONFIDENCE_SCALE`. 58 -> 29.
+>
+> So the settling path is proven on hardware and the **ageing ramp still is
+> not** (covered by unit tests, and T5.2 exercises camera death). If you want
+> the ageing line specifically, freeze for **3 s, not 6** — six is past
+> `CAMERA_DEAD_S` and the count goes dead rather than stale.
+>
+> The consequence to remember: **every service start logs one low-confidence
+> baseline** and adds one to the stat. That is correct — the first count really
+> is untrustworthy — but under `Restart=always` a crash loop inflates it, so a
+> climbing "Scans nobody should trust" may mean restarts rather than bad counts.
+> Check `systemctl show fridged -p NRestarts` before believing the panel.
+
 > **Prompt to send me:**
 > `Results from TEST.md T7 (confidence on the dashboard). Commit: <hash>`
 > then paste: the three SQL results from T7.1, whether both panels rendered with
 > two series, and what happened when you provoked a bad scan.
+
+---
+
+# T8 — It comes back on its own. Pi + camera + board, under systemd.
+
+Stage 6. Everything so far has been run **by hand, in the foreground, with a
+terminal attached**. This is the first test of the thing that will actually be
+in the fridge: started by systemd, as a user with no supplementary groups except
+the two the unit names, with the checkout's working directory rather than
+whatever shell you happened to be in.
+
+**The failure this stage exists to catch:** `Group=grafana` replaces the primary
+group and drops `dialout` and `video`. Everything works from your shell and
+nothing works from systemd, and the symptom is a five-second restart loop with a
+bare EACCES in it.
+
+## T8.1 — The devices are in the groups the unit names
+
+Before installing anything. Thirty seconds, and it tells you whether the unit's
+`SupplementaryGroups=dialout video` is right for *this* image.
+
+```bash
+stat -c '%n  %G' /dev/ttyACM* /dev/video0 /dev/media0 /dev/dma_heap/* 2>/dev/null
+```
+
+**Expect:** `dialout` for the ACM device, `video` for the rest.
+
+**Fail if:** any of them says something else — tell me what, and the unit needs
+that group adding. `/dev/dma_heap/*` is the one that surprises people: a Pi that
+can open `/dev/video0` and not this fails during streaming, not at open, so it
+looks like a camera fault rather than a permission one.
+
+## T8.2 — Install, with the real everything
+
+```bash
+cd ~/CC3501-project-software/pi4-software
+git pull
+bash deploy/install.sh
+```
+
+`install.sh` now checks T8.1 for you and warns rather than failing, since
+`--port sim` needs neither group.
+
+Then point it at the real hardware. **One line, three swaps** — acceptable only
+because each has already been proven separately in T2, T6 and T7:
+
+```bash
+ls -l /dev/serial/by-id/          # confirm the by-id name
+sudoedit /etc/default/fridged
+```
+
+Set:
+
+```
+FRIDGED_ARGS=--port /dev/serial/by-id/usb-Raspberry_Pi_Pico_E46570978F401029-if00 --camera picapture --square fake
+```
+
+Leave `--square fake` for now — the token needs rotating first, and mixing a
+credentials problem into a permissions test is how you get an hour of confusion.
+
+```bash
+sudo systemctl restart fridged
+journalctl -u fridged -f
+```
+
+**Expect**, in order:
+
+```
+REAL CAMERA - counting a physical shelf with .../PiCapture
+picapture started (pid NNNN) in .../picapture
+[picapture] picapture: tuning loaded from picapture.conf
+opening /dev/serial/by-id/... at 115200 baud
+running - Ctrl-C to stop
+```
+
+then a status line every 10 s with `bad=0 link=up`.
+
+**Fail if:** `Permission denied` on the serial port or the camera — T8.1 was
+wrong, or `daemon-reload` did not run.
+
+**Fail if:** `tuning loaded from picapture.conf` is missing. picapture is
+running on compiled-in defaults, not the areas measured in T3, and it will
+produce confident wrong counts. The cause is the working directory — fridged
+sets picapture's cwd to `PICAPTURE_DIR` itself, so this failing means that path
+resolved somewhere unexpected.
+
+## T8.3 — The sandbox does not break libcamera
+
+`PrivateTmp` and `ProtectSystem=full` are reasoned about in the unit's comments
+but had never been run with a camera attached. T8.2 passing IS this test — the
+camera either came up under the sandbox or it did not.
+
+If it did not, bisect rather than guess:
+
+```bash
+sudo systemctl edit fridged        # add [Service] then ProtectSystem=
+sudo systemctl restart fridged     # one directive at a time
+```
+
+and tell me which one it was. Drop the override afterwards with
+`sudo systemctl revert fridged`.
+
+## T8.4 — The actual test: pull the power
+
+Not a reboot. **Pull the plug**, wait ten seconds, plug it back in. A clean
+shutdown flushes and unmounts; a power cut is what actually happens to a fridge
+in a corridor, and it is the case where a WAL database and a half-written row
+matter.
+
+Walk away for two minutes, then:
+
+```bash
+systemctl status fridged --no-pager
+systemctl show fridged -p NRestarts
+sqlite3 /var/lib/fridge/fridge.db "PRAGMA integrity_check;"
+sqlite3 -header -column /var/lib/fridge/fridge.db "
+  SELECT datetime(MAX(ts),'unixepoch','localtime') AS newest,
+         COUNT(*) AS rows FROM measurement WHERE ts > strftime('%s','now')-120;"
+```
+
+**Expect:** `active (running)`, `NRestarts=0`, `ok`, and rows from the last two
+minutes. Then take a can and buy it — the whole point is that nobody had to log
+in and start anything.
+
+**Fail if:** `integrity_check` is anything but `ok`. That is the one result here
+that is not recoverable by restarting, and I want to see it immediately.
+
+**Fail if:** `NRestarts` is climbing. Something is crash-looping; the camera's
+one-low-confidence-baseline-per-start means the dashboard will quietly
+misattribute this to bad counts, so check the counter rather than the panel.
+
+## T8.5 — Grafana came back too
+
+Grafana is a separate unit and nothing in stage 6 touches it. Worth thirty
+seconds because a dashboard that needs a manual start is not deployed.
+
+```bash
+systemctl is-enabled grafana-server
+systemctl is-active grafana-server
+```
+
+Then load the dashboard from a phone on the same network. **Expect:** both
+`enabled` and `active`, and live data.
+
+> **Prompt to send me:**
+> `Results from TEST.md T8 (deployment). Commit: <hash>`
+> then paste: T8.1's device groups, the startup lines from T8.2, and everything
+> from T8.4. Say explicitly whether you had to touch anything after the power
+> came back — that is the result, and "it worked but I had to..." is a fail.
 
 ---
 

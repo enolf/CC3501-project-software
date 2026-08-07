@@ -413,11 +413,21 @@ so the panel hardcodes it and a test asserts the two agree.
 
 Done off-hardware: 359 fridged checks, up from 340. A 25 s simulated run
 produces 97 baselines, 97 recounts and 194 confidence readings spanning 73–100.
-**Still needs the dashboard rendered on the Pi** — `TEST.md` T7.
+**Confirmed on the fridge 2026-08-07** (`TEST.md` T7, all three parts): 40 scans
+paired one-for-one with 40 confidence readings, both triggers recorded, both
+panel series drawing, and a provoked bad scan (confidence 29) landing in the log
+and in the stat together.
+
+One thing the hardware taught that the tests could not: **a hand held across the
+shelf scores 76 and reports cans taken.** Confidence measures how sure the
+vision is of its own decisions, not whether they are right — a still hand is
+three identical frames, well exposed, colours near a brand centre. Recorded next
+to the penalty constants in `vision_config.h`, because that is where someone
+will go to ask why a wrong count scored well.
 
 ---
 
-# Stage 6 — Deployment
+# Stage 6 — Deployment ✅ machinery built, T8 outstanding
 
 **Goal:** it comes back on its own after a power cut.
 
@@ -429,6 +439,42 @@ subprocess needs:
   service silently runs on compiled-in defaults that nobody tuned.
 - Check whether `PrivateTmp=true` and `ProtectSystem=full` interfere with
   libcamera. They may not; find out deliberately rather than by outage.
+
+### What building it found
+
+**`dialout` was missing too, and that is the bigger one.** The note above worried
+about the camera; `Group=` drops *every* supplementary group, so the service also
+loses access to `/dev/ttyACM*` — the board itself. It went unnoticed because the
+unit has only ever run `--port sim`, and every real-hardware test to date has
+been a foreground process with the login user's full group list. Now
+`SupplementaryGroups=dialout video`.
+
+**The working directory was already handled.** `fridged` sets picapture's cwd to
+`config.PICAPTURE_DIR` when it spawns it, so `picapture.conf` is found regardless
+of where the unit starts. The unit's own `WorkingDirectory=` is for
+`python3 -m fridged` to find the package, which is a different problem. Nothing
+to change — but `tuning loaded from picapture.conf` is now called out in T8.2 as
+a line to *check*, because its absence is silent and produces confident wrong
+counts.
+
+**The sandbox is reasoned about rather than assumed.** `PrivateTmp` covers
+`/tmp` and `/var/tmp`; libcamera's buffers live in `/dev/shm` and its IPA sockets
+in `/run`. `ProtectSystem=full` leaves `/usr/share/libcamera` readable, which is
+all the tuning file needs. Both recorded in the unit, along with why
+`ProtectHome` and `PrivateDevices` must stay *absent* — either would break it,
+and `ProtectHome` would break it silently by cutting picapture off from its
+measured tuning.
+
+**`%h` in `Documentation=` pointed at `/root`.** System units resolve `%h` to
+root's home whatever `User=` says, so the path did not exist. Uses `__WORKDIR__`
+now, which `install.sh` already substitutes.
+
+**The by-id path is now the documented default.** `/dev/ttyACM0` renumbers when
+the board is reset while the Pi is up, which happened repeatedly during testing.
+
+**Camera moved ahead of Square in the swap order.** It is the swap that fails on
+permissions, and a permission failure under systemd looks like a crash loop.
+Prove it before real money is involved.
 
 **One process, not two.** `fridged` spawning picapture keeps the camera's
 lifetime and the serial link in the same process, so there is no window where
