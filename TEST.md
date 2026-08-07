@@ -17,10 +17,10 @@ right expectations.
 | `protocol.py`, `test_fridged.py` | Passing, off hardware |
 | `checkout.cpp` re-entrant basket, `RefundOwed` | **PASSED on the board** — T2.1–T2.10, commit `79a07c2` |
 | Drink rename end to end (Coke/Fanta/Mountain Dew/Solo) | **PASSED on the board** — `items=coke:1`, `items=fanta:1` |
-| picapture patch sampling + colour-centre storage | **Never run on the Pi** |
-| Area-based can counting after the colour refactor | Merge case proved once, **before** the refactor |
-| `hue_weight` raised above 4.0 | Never tried |
-| Per-frame confidence (`conf=`) | Arithmetic tested off-camera, **never run on the Pi** |
+| picapture patch sampling + colour-centre storage | **PASSED on the Pi** — Coke now stores at hue 0, not 3 |
+| Area-based can counting after the colour refactor | **PASSED** — 2 touching Cokes held at `coke:2` for 567 frames |
+| `hue_weight` raised above 4.0 | **Not needed.** A still shelf shows zero count changes; nothing to fix |
+| Per-frame confidence (`conf=`) | **PASSED on the Pi** — 87-90 still, 50-83 with a hand in frame |
 | `fridged` running picapture as a subprocess | Tested against a stand-in, **never run against the real binary** |
 | Refusing to answer a scan (decision D1) | Tested with a fake clock, **never run with a real camera** |
 | Baseline latch and recount settling (stage 4) | Tested with a fake clock; **its four constants are guesses until T6** |
@@ -556,6 +556,33 @@ Also worth one line: what does it read on a completely **empty** shelf in good
 light? It should be near 100 — correctly seeing nothing is a good frame, not a
 bad one, and if it reads low the figure means two different things at once and
 no threshold can be set on it.
+
+## Result — 2026-08-07, commit `79a07c2`
+
+T3.0-T3.4, T3.6, T3.7 **passed**. T3.5 **deliberately skipped** — see below.
+
+**T3.6 is the headline: 567 of 568 frames identical.** The shelf was two Cokes
+touching, then Fanta, Solo and Mountain Dew side by side with no gaps, and it
+reported `coke:2,fanta:1,mtndew:1,solo:1` correctly for two and a half minutes
+with **not one count change**. Only frame 1 differed, at `conf=51`, before the
+exposure settled.
+
+Confidence over the same run: 309x89, 125x88, 122x90, 11x87, 1x51. Four values.
+
+Consequences:
+
+- **The Coke/Fanta instability seen earlier was hands in frame, not tuning.**
+  Every burst lines up with somebody reaching in. A still shelf does not wander.
+- **T3.5 (`hue_weight`) is therefore not worth running.** There is no
+  instability left for it to fix, and raising it risks fragmenting Mountain Dew,
+  whose own hue spread would start falling outside `max_brand_dist`. Do not take
+  that risk for a problem that is not there. `hue_weight = 4` stands.
+- Recalibrating `can_area` fixed a real double-count: Mountain Dew read `2` with
+  the stale divisor 5618 and `1` after remeasuring at 6557.
+- A hand reads as cans — skin sits around hue 5-20, between Coke and Solo. No
+  colour tuning separates that. It is what the stage 4 baseline latch is for.
+
+Measured `can_area`: Coke 6350, Fanta 6915, Mountain Dew 6557, Solo 6270.
 
 > **Prompt to send me:**
 > `Results from TEST.md T3 (picapture vision on the Pi). Commit: <hash>`
