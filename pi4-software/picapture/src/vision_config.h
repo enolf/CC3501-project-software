@@ -308,6 +308,16 @@ struct Config {
     // missing payment has no row. A miscounted shelf produces a perfectly
     // well-formed packet with the wrong numbers in it, and the only evidence
     // available is how equivocal the measurement was.
+    //
+    // WHAT THIS NUMBER IS NOT. It measures how sure the vision is of its own
+    // decisions, NOT whether those decisions are right. The two come apart, and
+    // it was measured coming apart: on 2026-08-07 a hand held across the shelf
+    // scored 76 and reported several cans taken. Three identical frames, well
+    // exposed, colours near a brand centre — a confident count of the wrong
+    // thing. Every deduction below asks "was this measurement equivocal?", and
+    // none of them can ask "is that actually a can?". A high `conf=` means the
+    // picture was unambiguous, and an unambiguous picture of the wrong scene
+    // still scores high.
 
     /// Deducted when no brand has had its can area measured, scaled by the
     /// fraction that have not. An uncalibrated brand counts one can per blob,

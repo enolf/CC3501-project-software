@@ -25,7 +25,7 @@ right expectations.
 | Refusing to answer a scan (decision D1) | Tested with a fake clock, **never run with a real camera** |
 | Baseline latch and recount settling (stage 4) | **PASSED on the fridge** — 15/15 door cycles, T6 |
 | The four settling constants | **Measured and confirmed**, T6 2026-08-07 |
-| Confidence + trigger stored, dashboard panels (stage 5) | Passing off-hardware; **dashboard never rendered on the Pi** — T7 |
+| Confidence + trigger stored, dashboard panels (stage 5) | T7.1 **passed on the fridge 2026-08-07** (40 scans, 40 readings, both triggers). T7.2 panels + T7.3 low-confidence dip still outstanding |
 
 Record which commit you tested, so the results can be matched to the code:
 
@@ -969,6 +969,13 @@ sqlite3 -header -column /tmp/t7.db "
 **Expect:** roughly equal numbers of `door_open` and `door_close` scans, and one
 confidence reading per scan.
 
+> **Result, 2026-08-07 (commit 848d7c5):** passed. 24 `door_close` / 16
+> `door_open`, 40 confidence readings — one per scan — spanning 76–95, mean
+> 87.9. The split is uneven because the run began with the door already open
+> (`door was open for 6351 s`, so that first close had no matching open) and
+> because a baseline cannot be answered during the camera's first ~30 s of
+> startup. Neither is a fault.
+
 **Fail if:** every row says `door_close` — the trigger is not being recorded and
 the confidence panel will show one series instead of two.
 
@@ -1007,16 +1014,40 @@ scroll to the stock row.
 The whole point of the stage: with no camera frames kept, this is the **only**
 record that a count was doubtful. The counts themselves look identical.
 
-Provoke one. Open the door and hold your hand across the shelf while you close
-it, so the recount never settles:
+**A hand across the shelf does NOT work, and the reason matters.** Tried on
+2026-08-07: the count came back at 76, no warning, and the vision cheerfully
+reported several cans taken. Confidence measures *how sure the vision is of its
+own decisions*, not whether those decisions are right. A hand held still is
+three identical frames, well exposed, colours near a brand centre — a confident
+count of the wrong thing. Nothing in this stage will catch that, and nothing in
+this stage claims to.
+
+What does work is making the counts **age**. `_grade()` scales confidence
+linearly from `CAMERA_STALE_S` (1 s, full) to `CAMERA_DEAD_S` (5 s, zero), so a
+3 s old count turns an 87 into ~43. Freeze picapture rather than killing it —
+the supervisor only restarts on process *exit*, so a stopped process causes no
+restart churn:
 
 ```bash
-grep -E "below 50|on the deadline|did not hold still" /tmp/t7.log
+# second terminal, with fridged running
+pkill -STOP -f PiCapture     # freeze; counts start ageing
+sleep 3                      # 5s would be "dead" and refuse to answer; 3s is "stale"
+# --- close the door NOW ---
+pkill -CONT -f PiCapture     # unfreeze
 ```
 
-**Expect:** a `confidence NN (below 50) - this sale rests on a count nobody
-should trust` line, the **Scans nobody should trust** stat going amber, and a
-visible dip in the graph.
+```bash
+grep -E "below 50|old count|on the deadline|did not hold still" /tmp/t7.log
+```
+
+Deterministic, one command, and it exercises a real failure mode — a camera
+hiccup — instead of a contrived one.
+
+**Expect:** `recount answered from a 3.0s old count; confidence 87 -> 43`, then
+a `confidence NN (below 50) - this sale rests on a count nobody should trust`
+line, the **Scans nobody should trust** stat going from 0 to 1, and a visible
+dip in the graph. The stat *changing* is the test — a 0 on its own proves
+nothing, since a healthy fridge reads 0 too.
 
 **Fail if:** the log warns but the panel stays at 0 — the threshold in the panel
 has drifted from `LOW_CONFIDENCE_THRESHOLD` in `fridged/config.py`. Grafana
