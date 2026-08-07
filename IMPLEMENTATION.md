@@ -476,6 +476,44 @@ the board is reset while the Pi is up, which happened repeatedly during testing.
 permissions, and a permission failure under systemd looks like a crash loop.
 Prove it before real money is involved.
 
+### The serial port had to learn to reopen itself
+
+Asking "can this be left to start on its own?" turned up a gap that no amount of
+unit configuration fixes, because it is a code problem.
+
+`serial.Serial` was opened once, at startup, and never again. Two consequences:
+
+1. **At boot the port may not exist yet.** The Pi and the RP2040 power up
+   together, and `serial.Serial()` raised if the device node had not appeared.
+   systemd would restart every 5 s until it did — self-healing, but it inflates
+   `NRestarts` and logs a low-confidence baseline on each attempt.
+2. **A device that goes away never comes back.** `link.poll()` caught the
+   `OSError` and returned "no data", so the loop kept running with a dead file
+   descriptor: service alive, reporting itself healthy, permanently deaf. The
+   board would fault on `PI_TIMEOUT` and nothing recovered it.
+
+The second is the serious one, and it had already been hit — the workaround
+during testing was *stop the service, reset the board, start the service*. Three
+manual steps, at a keyboard, which is not available mid-demonstration. Pressing
+RESET on the board or nudging the cable is enough to trigger it.
+
+`ReconnectingSerial` in `link.py` wraps the port with the same
+own-it-and-restart-it pattern the picapture supervisor already uses: reopen with
+backoff from 1 s to 10 s, never raise on open, and count reopens. The 10 s
+ceiling is chosen against the board's 30 s `LINK_TIMEOUT_MS`, so recovery lands
+inside the window where the board has not yet declared the Pi dead.
+
+**`Link` discards its buffer across a reconnect.** Without it, the front half of
+the frame that was cut off mid-flight gets glued to the first bytes after
+recovery, and a clean reconnect reports a corrupt frame that never existed on
+the wire — a lie about the link at precisely the moment someone is reading the
+log to explain a dropout.
+
+**The cost, taken deliberately:** a mistyped port path now retries forever
+instead of failing loudly. Mitigated by logging the first failure at ERROR *with
+the ports that do exist* (`/dev/serial/by-id/*`), so a typo is obvious in
+`journalctl` rather than mysterious.
+
 **One process, not two.** `fridged` spawning picapture keeps the camera's
 lifetime and the serial link in the same process, so there is no window where
 the board asks and nothing is listening. A second unit would have to be ordered

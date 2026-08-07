@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from fridged import config          # noqa: E402  (path set above)
 from fridged.ingest import Ingest   # noqa: E402
-from fridged.link import Link       # noqa: E402
+from fridged.link import Link, ReconnectingSerial  # noqa: E402
 from fridged.store import SchemaMismatch, Store  # noqa: E402
 
 import protocol                     # noqa: E402  (tools/, via fridged/__init__)
@@ -191,6 +191,125 @@ def test_link():
         got += link3.poll()
     check("a frame arriving in fragments is reassembled",
           len(got) == 1 and got[0].frame.type == "TEMP")
+
+
+class FlakySerial:
+    """A serial port that can be made to vanish, as a real one does.
+
+    `alive = False` makes every call raise, which is what a pyserial handle does
+    once its USB device has gone: the descriptor stays valid and every operation
+    on it fails.
+    """
+
+    def __init__(self, incoming=b""):
+        self.incoming = incoming
+        self.written = b""
+        self.alive = True
+        self.closed = False
+
+    def read(self, size):
+        if not self.alive:
+            raise OSError(5, "Input/output error")
+        chunk, self.incoming = self.incoming[:size], self.incoming[size:]
+        return chunk
+
+    def write(self, data):
+        if not self.alive:
+            raise OSError(5, "Input/output error")
+        self.written += data
+        return len(data)
+
+    def close(self):
+        self.closed = True
+
+
+def test_reconnecting_serial():
+    """The board is reset, or the cable is nudged. It has to come back.
+
+    This is the difference between a fridge that survives a demonstration and
+    one that needs somebody to SSH in. Before this class, a re-enumerated device
+    left the service running, reporting itself alive, and permanently deaf.
+    """
+    print("\n--- reconnecting serial ---")
+
+    now = [1000.0]
+    clock = lambda: now[0]                                  # noqa: E731
+
+    # 1. The port is not there yet. This is the ordinary state for the first
+    #    second or two of a cold boot, when the Pi and the board power up
+    #    together, and it must NOT be a crash.
+    attempts = []
+
+    def refuse(port, baud):
+        attempts.append(port)
+        raise OSError(2, "No such file or directory")
+
+    port = ReconnectingSerial("/dev/nope", 115200, opener=refuse, clock=clock)
+    check("a missing port does not raise on construction", not port.connected)
+    check("reading a missing port yields no data, not an exception",
+          port.read(64) == b"")
+    check("writing to a missing port is swallowed", port.write(b"x") == 0)
+
+    # 2. Retries are spaced. A tight loop against an unplugged cable would burn
+    #    the CPU the service needs for everything else.
+    before = len(attempts)
+    for _ in range(50):
+        port.read(64)
+    check("retries are rate limited, not attempted every pass",
+          len(attempts) == before)
+
+    # 3. The board turns up. The port opens itself, with nobody restarting
+    #    anything.
+    device = FlakySerial(protocol.build("EVT", "HB", "", ms=1))
+    now[0] += 30.0
+    port._opener = lambda p, b: device
+    got = port.read(64)
+    check("the port opens itself once the device appears", port.connected)
+    check("data flows as soon as it reconnects", got.startswith(b"EVT"))
+
+    # 4. RESET on the RP2040. The descriptor survives; the device does not.
+    device.alive = False
+    check("a vanished device reads as no data", port.read(64) == b"")
+    check("the dead handle is dropped, not held", not port.connected)
+    check("the reconnect is counted so the link can resynchronise",
+          port.reopens == 1)
+
+    replacement = FlakySerial(protocol.build("EVT", "HB", "", ms=2))
+    now[0] += 30.0
+    port._opener = lambda p, b: replacement
+    check("it comes back on its own after a reset",
+          port.read(64).startswith(b"EVT") and port.connected)
+
+
+def test_link_resynchronises():
+    """A reconnect must not manufacture a corrupt frame out of two halves."""
+    print("\n--- link resynchronisation ---")
+
+    whole = protocol.build("EVT", "TEMP", "rom=28FF1234 c=4.250", ms=1)
+    device = FlakySerial(whole[:12])            # cut off mid-frame
+
+    now = [0.0]
+    port = ReconnectingSerial("/dev/x", 115200, opener=lambda p, b: device,
+                              clock=lambda: now[0])
+    link = Link(port)
+    link.poll()                                 # buffers the front half
+    check("the truncated half is held, not reported", link.bad == 0)
+
+    # The board resets. The half-frame in the buffer is now meaningless, and the
+    # bytes that follow are the middle of a different frame.
+    device.alive = False
+    link.poll()
+
+    now[0] += 30.0
+    tail = protocol.build("EVT", "HB", "", ms=2)
+    port._opener = lambda p, b: FlakySerial(tail)
+    events = link.poll()
+
+    check("the stale half-frame is discarded across a reconnect",
+          link.bad == 0)
+    check("the first frame after reconnecting is read normally",
+          [e.kind for e in events] == ["frame"] and
+          events[0].frame.type == "HB")
 
 
 # --- Ingest -----------------------------------------------------------------
@@ -1941,6 +2060,8 @@ if __name__ == "__main__":
 
     test_store()
     test_link()
+    test_reconnecting_serial()
+    test_link_resynchronises()
     test_ingest()
     test_fake_board()
     test_door_model()

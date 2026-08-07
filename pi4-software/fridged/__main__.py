@@ -29,7 +29,7 @@ from . import config
 from .camera import PiCapture, SimCamera
 from .payments import BACKENDS, PaymentService
 from .ingest import Ingest
-from .link import Link
+from .link import Link, ReconnectingSerial
 from .store import SCHEMA_VERSION, Store
 
 log = logging.getLogger("fridged")
@@ -67,10 +67,13 @@ def build_transport(args):
             "`--port sim` does not need it.")
 
     log.info("opening %s at %d baud", args.port, config.SERIAL_BAUD)
-    # timeout=0 makes read() non-blocking, which is what the service loop needs:
-    # it must come back and flush the database and answer the board even when
-    # nothing has arrived.
-    return serial.Serial(args.port, config.SERIAL_BAUD, timeout=0)
+
+    # ReconnectingSerial rather than serial.Serial directly. It reopens the port
+    # after the board is reset or the cable is nudged — neither of which the raw
+    # port survives, because the device does not come back on the same file
+    # descriptor — and it does not raise when the node is not there yet, which
+    # is the normal state for the first second or two of a cold boot.
+    return ReconnectingSerial(args.port, config.SERIAL_BAUD)
 
 
 def build_camera(args):

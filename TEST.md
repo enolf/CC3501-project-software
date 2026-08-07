@@ -28,6 +28,7 @@ right expectations.
 | Confidence + trigger stored, dashboard panels (stage 5) | **Passed on the fridge 2026-08-07** — T7.1, T7.2, T7.3 all green |
 | The service under systemd with real board + camera (stage 6) | **Never run.** Every hardware test so far was a foreground process with a terminal attached — T8 |
 | Surviving a power cut | **Never tried** — T8.4 |
+| Reopening the port after a board reset | Covered by host tests; **never seen against a real USB device** — T8.5 |
 
 Record which commit you tested, so the results can be matched to the code:
 
@@ -1216,7 +1217,40 @@ that is not recoverable by restarting, and I want to see it immediately.
 one-low-confidence-baseline-per-start means the dashboard will quietly
 misattribute this to bad counts, so check the counter rather than the panel.
 
-## T8.5 — Grafana came back too
+## T8.5 — The board is reset while the service is running
+
+**This is the one that decides whether a demonstration survives contact.** New
+in stage 6: `ReconnectingSerial` reopens the port. Before it, a re-enumerated
+USB device left `fridged` running, reporting itself alive, and permanently deaf
+— the manual fix was stop the service, reset the board, start the service, which
+is exactly the sequence that came up repeatedly during testing.
+
+Service running, camera running, `journalctl -u fridged -f` in front of you.
+**Press RESET on the RP2040.**
+
+**Expect**, within a couple of seconds:
+
+```
+/dev/serial/by-id/... went away (...); reopening
+/dev/serial/by-id/... reopened
+board ms went backwards (...): it reset and the BOOT frame was lost
+```
+
+then status lines with `link=up` again.
+
+**Expect also:** `bad` does NOT jump. The half-frame that was in flight when the
+port died is discarded rather than glued to the next one.
+
+Now the harsher version. **Unplug the board's USB cable, wait 20 s, plug it back
+in.** Same recovery, and no restart of the service — check `NRestarts` has not
+moved. Twenty seconds is deliberate: it is under the board's 30 s
+`LINK_TIMEOUT_MS`, so a clean recovery means the board never faults at all.
+
+**Fail if:** the log goes quiet with no `went away` line, and status lines keep
+reporting `link=DOWN` forever. That is the old behaviour, and it means the
+service is running the previous code.
+
+## T8.6 — Grafana came back too
 
 Grafana is a separate unit and nothing in stage 6 touches it. Worth thirty
 seconds because a dashboard that needs a manual start is not deployed.

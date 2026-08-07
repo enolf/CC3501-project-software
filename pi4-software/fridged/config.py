@@ -203,6 +203,27 @@ LINK_TIMEOUT_S = 30.0
 #: bytes per pass for the same reason; the Pi can afford far more.
 MAX_READ_PER_POLL = 4096
 
+# --- Reopening the port ------------------------------------------------------
+#
+# A USB serial device that is unplugged, reset, or re-enumerated does not come
+# back on the same file descriptor. The old one stays open and returns errors
+# forever, so without this the service stays alive, healthy-looking and deaf.
+#
+# It is not a rare case. Pressing RESET on the RP2040 does it, and so does
+# nudging the cable. During testing the workaround was to stop the service,
+# reset the board, and start the service again — three manual steps that nobody
+# can perform during a demonstration.
+
+#: First retry gap after the port goes away. Short: a board that was reset is
+#: usually back within a second or two, and reconnecting quickly means the board
+#: may never notice the Pi was gone (it allows `LINK_TIMEOUT_MS`, 30 s).
+SERIAL_REOPEN_DELAY_S = 1.0
+
+#: Ceiling on the doubling. Ten seconds keeps recovery well inside the board's
+#: 30 s patience while a genuinely unplugged cable is retried at a rate that
+#: costs nothing.
+SERIAL_REOPEN_MAX_S = 10.0
+
 # --- Write batching ---------------------------------------------------------
 #
 # dashboard.md section 13: continuous writes kill SD cards. One transaction per

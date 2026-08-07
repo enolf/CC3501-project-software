@@ -11,12 +11,16 @@ the C++ implementation in `frame.h` by three golden frames. Nothing here
 re-implements it.
 """
 
+import glob
+import logging
 import time
 from collections import namedtuple
 
 import protocol  # tools/protocol.py; see the sys.path note in __init__.py
 
 from . import config
+
+log = logging.getLogger(__name__)
 
 #: One thing that arrived on the link.
 #:
@@ -38,6 +42,127 @@ LinkEvent = namedtuple("LinkEvent", "kind ts line frame reason")
 REJECT_REASON = "frame-shaped, failed validation (CRC, LEN or syntax)"
 
 
+class ReconnectingSerial:
+    """A serial port that reopens itself.
+
+    Presents the two methods `Link` uses — `read()` and `write()` — so `Link`
+    cannot tell the difference and needs no changes. Same shape as picapture's
+    supervisor in `camera.py`: own the thing that can die, restart it with
+    backoff, and let the layer above carry on unaware.
+
+    WHY THIS EXISTS. A USB CDC device that is unplugged, reset or re-enumerated
+    does not come back on the same file descriptor. The old one stays open and
+    fails every call, so the previous behaviour — swallow the error, return no
+    data — left the service running, reporting itself alive, and permanently
+    deaf. The board would fault on `PI_TIMEOUT` and nothing would recover it
+    without someone logging in.
+
+    IT NEVER RAISES ON OPEN, including the first time. At boot the Pi and the
+    RP2040 power up together and the device node may not exist yet, so a
+    constructor that raised would put the service in a systemd restart loop for
+    the first few seconds of every power-on. The cost of that choice is that a
+    MISTYPED port path also retries forever instead of failing loudly — which is
+    why the failure log lists the ports that do exist. A typo is then obvious in
+    `journalctl` rather than mysterious.
+    """
+
+    def __init__(self, port, baud=None, opener=None, clock=time.monotonic,
+                 candidates="/dev/serial/by-id/*"):
+        self.port = port
+        self.baud = baud if baud is not None else config.SERIAL_BAUD
+        self.reopens = 0
+        self._clock = clock
+        self._candidates = candidates
+        self._serial = None
+        self._delay = config.SERIAL_REOPEN_DELAY_S
+        self._retry_at = 0.0
+        self._complained = False
+
+        if opener is None:
+            import serial
+
+            def opener(port, baud):
+                # timeout=0 keeps read() non-blocking, which is what the service
+                # loop needs: it must come back and flush the database and
+                # answer the board even when nothing has arrived.
+                return serial.Serial(port, baud, timeout=0)
+
+        self._opener = opener
+        self._open()
+
+    @property
+    def connected(self):
+        return self._serial is not None
+
+    def _open(self):
+        """Try once. Returns True if the port is open afterwards."""
+        if self._serial is not None:
+            return True
+        if self._clock() < self._retry_at:
+            return False
+
+        try:
+            self._serial = self._opener(self.port, self.baud)
+        except Exception as exc:
+            # Exception, not OSError: pyserial raises SerialException (an
+            # OSError) for a missing device but ValueError for a bad argument,
+            # and neither should stop the service.
+            self._retry_at = self._clock() + self._delay
+            self._delay = min(self._delay * 2, config.SERIAL_REOPEN_MAX_S)
+            if not self._complained:
+                # Once at ERROR with the alternatives, then quiet. Retrying
+                # every second for an unplugged cable must not become the log.
+                self._complained = True
+                log.error("cannot open %s: %s. Retrying every %.0fs. "
+                          "Ports that DO exist: %s", self.port, exc,
+                          config.SERIAL_REOPEN_MAX_S,
+                          ", ".join(sorted(glob.glob(self._candidates)))
+                          or "none")
+            return False
+
+        self._delay = config.SERIAL_REOPEN_DELAY_S
+        if self._complained or self.reopens:
+            log.warning("%s reopened", self.port)
+        self._complained = False
+        return True
+
+    def _drop(self, exc):
+        try:
+            self._serial.close()
+        except Exception:
+            pass                    # already gone; closing is a formality
+        self._serial = None
+        self.reopens += 1
+        self._retry_at = self._clock() + self._delay
+        log.warning("%s went away (%s); reopening", self.port, exc)
+
+    def read(self, size):
+        if not self._open():
+            return b""
+        try:
+            return self._serial.read(size)
+        except Exception as exc:
+            self._drop(exc)
+            return b""
+
+    def write(self, data):
+        if not self._open():
+            return 0
+        try:
+            return self._serial.write(data)
+        except Exception as exc:
+            self._drop(exc)
+            return 0
+
+    def close(self):
+        if self._serial is not None:
+            try:
+                self._serial.close()
+            except Exception:
+                pass
+            self._serial = None
+
+
 class Link:
     """Services one transport: drains it, decodes it, and keeps it alive."""
 
@@ -57,6 +182,14 @@ class Link:
 
         #: Wall-clock time the last valid frame arrived, or None if none has.
         self.last_frame_ts = None
+
+        #: Tracks `transport.reopens` so a reconnect can discard the half-line
+        #: left in `_buffer`. Without it the tail of the frame that was cut off
+        #: gets glued to the head of the first frame after reconnecting, and the
+        #: recovery reports a `bad` frame that never existed on the wire.
+        #: Transports that cannot reconnect (the simulated board) have no such
+        #: attribute and this stays at zero.
+        self._reopens_seen = getattr(transport, "reopens", 0)
 
     # --- Receiving ----------------------------------------------------------
 
@@ -85,6 +218,16 @@ class Link:
             # itself healthy, which is the worst of both outcomes: no data and
             # no error.
             return []
+
+        # A reconnect happened since the last pass. Whatever is in the buffer is
+        # the front half of a frame that was cut off mid-flight, and the bytes
+        # now arriving are the middle of a different one. Joining them makes a
+        # `bad` frame out of two innocent halves, which is a lie about the link
+        # exactly when someone is looking at it to explain a dropout.
+        reopens = getattr(self.transport, "reopens", 0)
+        if reopens != self._reopens_seen:
+            self._reopens_seen = reopens
+            self._buffer = b""
 
         if not chunk:
             return []
