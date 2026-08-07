@@ -72,6 +72,15 @@ def clear(store):
     The boundary comes from the marker rather than from a guess, because
     "everything older than two weeks" would also delete real history the moment
     this system has been running for longer than the seed covered.
+
+    EVERY table this module writes has to be listed here. An earlier version
+    deleted only `measurement`, then tried to delete the seed's `boot` row —
+    which `txn` still referenced, so it raised FOREIGN KEY constraint failed
+    *after* the temperatures had already gone. The result was the worst
+    available state: a dashboard with two weeks of sales and no temperatures,
+    and an error message that named a table nobody had asked it to touch.
+
+    So: children before parents, one transaction, all or nothing.
     """
     rows = store._conn.execute(
         "SELECT line FROM raw_line WHERE source='seed' ORDER BY ts").fetchall()
@@ -80,12 +89,45 @@ def clear(store):
         return
 
     boundary = max(float(r[0].removeprefix(MARKER_PREFIX)) for r in rows)
-    deleted = store._conn.execute(
-        "DELETE FROM measurement WHERE ts <= ?", (boundary,)).rowcount
-    store._conn.execute("DELETE FROM boot WHERE reason='seed'")
-    store._conn.execute("DELETE FROM raw_line WHERE source='seed'")
-    print(f"cleared {deleted} seeded measurements up to "
+
+    # Transactions are identified by their boot rather than by timestamp. A
+    # seeded boot is the only thing that ever writes them, and `txn_item` and
+    # `coin_event` have no `ts` of their own to compare against a boundary.
+    boots = [r[0] for r in store._conn.execute(
+        "SELECT id FROM boot WHERE reason='seed'").fetchall()]
+    marks = ",".join("?" * len(boots))
+
+    store._conn.execute("BEGIN")
+    try:
+        if boots:
+            store._conn.execute(
+                f"DELETE FROM txn_item WHERE boot_id IN ({marks})", boots)
+            store._conn.execute(
+                f"DELETE FROM coin_event WHERE boot_id IN ({marks})", boots)
+            store._conn.execute(
+                f"DELETE FROM txn WHERE boot_id IN ({marks})", boots)
+
+        counts = {}
+        for table in ("measurement", "door_event", "stock_snapshot",
+                      "rfid_event", "cash_count"):
+            counts[table] = store._conn.execute(
+                f"DELETE FROM {table} WHERE ts <= ?", (boundary,)).rowcount
+
+        # Only now, with nothing referencing them.
+        store._conn.execute("DELETE FROM boot WHERE reason='seed'")
+        store._conn.execute("DELETE FROM raw_line WHERE source='seed'")
+        store._conn.execute("COMMIT")
+    except Exception:
+        store._conn.execute("ROLLBACK")
+        raise
+
+    print(f"cleared seeded data up to "
           f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(boundary))}")
+    for table, n in counts.items():
+        if n:
+            print(f"  {n:>8,} {table}")
+    if boots:
+        print(f"  {len(boots):>8,} seeded boot(s), with their transactions")
 
 
 def seed_temperature(store, start_ts, end_ts, rng, door):

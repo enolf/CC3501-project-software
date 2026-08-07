@@ -312,6 +312,75 @@ def test_link_resynchronises():
           events[0].frame.type == "HB")
 
 
+def test_seed_clear():
+    """`--clear` must remove the seed and NOTHING else.
+
+    It used to delete `measurement`, then hit FOREIGN KEY constraint failed on
+    the seed's `boot` row — which `txn` still referenced — leaving the database
+    with two weeks of sales and no temperatures. A half-cleared database is
+    worse than an uncleared one, because it looks fine until someone reads it.
+    """
+    print("\n--- seed --clear ---")
+    import contextlib
+    import io
+
+    from fridged import seed as seed_module
+
+    path = str(temp_db())
+    quiet = io.StringIO()
+    with contextlib.redirect_stdout(quiet):
+        seed_module.main(["--db", path, "--days", "0.05"])
+
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA foreign_keys=ON")
+    seeded = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+              for t in ("measurement", "door_event", "stock_snapshot", "txn")}
+    check("seeding writes history across several tables",
+          all(n > 0 for n in seeded.values()))
+
+    # Live rows, dated now — long after the seed's boundary. These must survive,
+    # which is the whole reason `--clear` works off a marker and not off an age.
+    now = time.time()
+    live_boot = conn.execute(
+        "INSERT INTO boot (ts, fw, reason) VALUES (?,?,?)",
+        (now, "0.2", "boot_frame")).lastrowid
+    conn.execute("INSERT INTO measurement (ts, metric, value) VALUES (?,?,?)",
+                 (now, "camera.confidence", 91.0))
+    conn.execute("INSERT INTO door_event (ts, state) VALUES (?,?)",
+                 (now, "open"))
+    conn.execute("INSERT INTO stock_snapshot (ts, drink, count, trigger) "
+                 "VALUES (?,?,?,?)", (now, "coke", 5, "door_open"))
+    conn.execute("INSERT INTO txn (boot_id, txn_id, ts_start, method, outcome) "
+                 "VALUES (?,?,?,?,?)", (live_boot, 1, now, "cash", "paid"))
+    conn.execute("INSERT INTO txn_item (boot_id, txn_id, drink, qty) "
+                 "VALUES (?,?,?,?)", (live_boot, 1, "coke", 1))
+    conn.commit()
+    sensors_before = conn.execute("SELECT COUNT(*) FROM sensor").fetchone()[0]
+    conn.close()
+
+    with contextlib.redirect_stdout(quiet):
+        seed_module.main(["--db", path, "--clear"])
+
+    conn = sqlite3.connect(path)
+    after = {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+             for t in ("measurement", "door_event", "stock_snapshot", "txn",
+                       "txn_item", "boot", "raw_line", "sensor")}
+    integrity = conn.execute("PRAGMA integrity_check").fetchone()[0]
+    conn.close()
+
+    check("every seeded table is emptied, not just measurement",
+          (after["measurement"], after["door_event"],
+           after["stock_snapshot"]) == (1, 1, 1))
+    check("seeded transactions go with their boot",
+          (after["txn"], after["txn_item"], after["boot"]) == (1, 1, 1))
+    check("the seed marker is removed", after["raw_line"] == 0)
+    check("live rows written after the seed survive",
+          after["measurement"] == 1 and after["txn"] == 1)
+    check("sensor names are configuration and are never cleared",
+          after["sensor"] == sensors_before)
+    check("the database is still sound afterwards", integrity == "ok")
+
+
 # --- Ingest -----------------------------------------------------------------
 
 def feed(ingest, link, wire):
@@ -2062,6 +2131,7 @@ if __name__ == "__main__":
     test_link()
     test_reconnecting_serial()
     test_link_resynchronises()
+    test_seed_clear()
     test_ingest()
     test_fake_board()
     test_door_model()
