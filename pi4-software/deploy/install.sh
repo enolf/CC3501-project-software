@@ -59,10 +59,16 @@ check_device_group() {
             echo "             Add '${owner}' to SupplementaryGroups= in" >&2
             echo "             ${UNIT_DIR}/fridged.service or the service" >&2
             echo "             cannot open it." >&2
+        else
+            # Said out loud even though nothing is wrong. An all-clear that
+            # prints NOTHING is indistinguishable from a check that did not run,
+            # and this section exists precisely to be reassuring before a
+            # deployment.
+            printf '    ok       %-24s %s\n' "${path}" "${owner}"
         fi
         return 0
     done
-    echo "    note: no ${want} device present yet (${*:2})"
+    printf '    absent   %-24s (no %s device plugged in yet)\n' "${2}" "${want}"
 }
 
 say "Devices"
