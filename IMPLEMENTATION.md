@@ -3,10 +3,9 @@
 How the OpenCV can detection gets from "a program that prints counts" to "the
 thing the fridge charges people from".
 
-Stages 1–3 are done and stage 4's machinery is written. **Nothing has run on
-the fridge.** `TEST.md` covers proving what exists on hardware — including the
-four constants stage 4 cannot be finished without — and this file covers what
-still has to be built.
+**Stages 1–4 are done and proven on the fridge** (2026-08-07): the firmware
+basket logic, the vision, the subprocess, and the baseline latch with settling.
+Stages 5–7 remain. `TEST.md` records what was measured and how.
 
 ## Where we are
 
@@ -21,11 +20,10 @@ The two halves are connected. `--camera picapture` runs the vision as a child
 process and answers the board from what it actually sees; `--camera sim` is
 unchanged and still the default.
 
-The two scans are now answered *differently*: the baseline from the last
-reading that held still while the door was shut, the recount only once the
-picture stops moving. What remains is not code but **measurement** — how many
-agreeing frames, and how long to wait, are placeholders until T3.6 and T6 say
-what a real shelf does.
+The two scans are answered *differently*: the baseline from the last reading
+that held still while the door was shut, the recount only once the picture stops
+moving. Measured on the fridge — fifteen door cycles, fifteen correct answers,
+recount settling in 550-650 ms and never once hitting a timeout.
 
 The firmware needs no further changes. It already asks at the right two moments,
 diffs the answers, and handles put-backs, swaps and restocks — see
@@ -37,8 +35,8 @@ diffs the answers, and handles put-backs, swaps and restocks — see
 | --- | --- | --- | --- |
 | 2 ✅ | picapture says how sure it is | Small | — |
 | 3 ✅ | `fridged` runs picapture and reads its counts | Medium | 2 |
-| 4 | The two scans are answered differently, with settling | **Large** | 3 |
-|   | └ machinery ✅ · constants still to be measured (T6) | | |
+| 4 ✅ | The two scans are answered differently, with settling | **Large** | 3 |
+|   | └ 15/15 door cycles correct on the fridge, T6 | | |
 | 5 | The confidence reaches the dashboard | Small | 2, 4 |
 | 6 | It survives a reboot as a service | Small | 3 |
 | 7 | Acceptance against a real shelf and real money | — | all |
@@ -198,18 +196,19 @@ process's stdout. **Still needs the real binary on the Pi** — see `TEST.md` T5
 
 ---
 
-# Stage 4 — Answering the two scans — machinery built, **not yet tuned**
+# Stage 4 — Answering the two scans ✅
 
 **The stage with the actual design in it.** Everything else is plumbing.
 
-> **Status.** All of the behaviour below is written and tested against a fake
-> clock. What is *not* done is choosing the four numbers it runs on:
-> `SETTLE_FRAMES`, `SETTLE_TIMEOUT_S`, `SCAN_ANSWER_BUDGET_S` and
-> `UNSETTLED_CONFIDENCE_SCALE`. They are named constants in `config.py` with a
-> block comment saying which `TEST.md` measurement should set each one, so
-> tuning them is an edit rather than a rewrite. **The values in there now are
-> placeholders**, exactly as picapture's colour defaults are. `TEST.md` T6 is
-> how they get measured; the stage is not finished until they have been.
+> **Status: done, and validated on the fridge (2026-08-07).** Fifteen door
+> cycles, fifteen correct answers — single cans, a two-can basket, put-backs,
+> and five cycles where nothing was touched. No false charge and no missed one.
+>
+> The four constants were placeholders and are now **measurements confirmed
+> rather than changed**: the recount settles in 550-650 ms, and neither
+> `SETTLE_TIMEOUT_S` nor `SCAN_ANSWER_BUDGET_S` has ever fired. Raising
+> `SETTLE_FRAMES` to 5 was considered and **rejected on the evidence** — it
+> would add 500 ms to every purchase to buy margin nothing has asked for.
 
 ### 4.1 Why one answer will not do
 

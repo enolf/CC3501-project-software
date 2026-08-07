@@ -582,6 +582,17 @@ class PiCapture:
             confidence = int(confidence * config.UNSETTLED_CONFIDENCE_SCALE)
             log.info("%s answered from an unsettled picture; confidence %d",
                      why, confidence)
+        else:
+            # Said out loud, at DEBUG, even though nothing is wrong.
+            #
+            # The two branches above only speak up when a penalty applies, so a
+            # healthy answer left NO trace at all — and "no log line" is a
+            # terrible thing to have to infer success from. On the fridge it
+            # read as the camera having gone silent, when in fact every baseline
+            # was fresh and settled. One line costs nothing and removes the
+            # ambiguity.
+            log.debug("%s answered from a settled picture, %.1fs old; "
+                      "confidence %d", why, age, confidence)
 
         return counts, confidence
 

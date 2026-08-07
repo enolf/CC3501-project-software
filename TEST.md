@@ -23,7 +23,8 @@ right expectations.
 | Per-frame confidence (`conf=`) | **PASSED on the Pi** — 87-90 still, 50-83 with a hand in frame |
 | `fridged` running picapture as a subprocess | Tested against a stand-in, **never run against the real binary** |
 | Refusing to answer a scan (decision D1) | Tested with a fake clock, **never run with a real camera** |
-| Baseline latch and recount settling (stage 4) | Tested with a fake clock; **its four constants are guesses until T6** |
+| Baseline latch and recount settling (stage 4) | **PASSED on the fridge** — 15/15 door cycles, T6 |
+| The four settling constants | **Measured and confirmed**, T6 2026-08-07 |
 
 Record which commit you tested, so the results can be matched to the code:
 
@@ -890,6 +891,37 @@ grep -oE "conf=[0-9]+" /tmp/t6-cycles.log | sort | uniq -c | sort -rn
 **Expect:** two clusters — a high one for settled answers, a low one for anything
 forced out. If everything is one number, the mark-down is not distinguishing
 anything and `UNSETTLED_CONFIDENCE_SCALE` needs revisiting.
+
+## Result — 2026-08-07: **15 of 15 cycles correct.** Constants confirmed.
+
+Run against the real camera, the real board and a real shelf.
+
+| Constant | Value | What the measurement said |
+| --- | --- | --- |
+| `SETTLE_FRAMES` | 3 | Recount answered 550-650 ms after entering Recount |
+| `SETTLE_TIMEOUT_S` | 4.0 | **Never fired**, in 15 cycles. ~3.4 s spare |
+| `SCAN_ANSWER_BUDGET_S` | 6.0 | Never fired |
+| `UNSETTLED_CONFIDENCE_SCALE` | 0.5 | Applies only when genuinely unsettled |
+
+**Nothing was changed.** Raising `SETTLE_FRAMES` to 5 was considered and
+rejected: fifteen correct cycles with no timeouts is not a system asking for
+more evidence per decision, and it would cost 500 ms on every purchase.
+
+Cycles: four single-can takes, one **two-can** take (Solo + Mountain Dew), five
+put-backs, five open-and-close with nothing touched. Every one correct. No
+transaction rows, correctly — no payment method was ever chosen.
+
+**Two bugs were found by this stage, both invisible off-hardware:**
+
+1. **A still shelf was graded "unsettled".** `settled` was inferred as
+   `latched is not latest`, but on a motionless shelf every frame agrees, so
+   `_stable` is reassigned to `_latest` each frame and the two ARE the same
+   object. Every baseline came back at confidence 40 against a shelf measured
+   stable for 567 consecutive frames. Fixed by recording the flag at latch time.
+2. **A healthy answer logged nothing at all.** Both branches of `_grade()` only
+   spoke up when a penalty applied, so success was indistinguishable from the
+   camera having gone quiet — which is exactly how it was misread here. A
+   DEBUG line now states the good case explicitly.
 
 > **Prompt to send me:**
 > `Results from TEST.md T6 (settling constants). Commit: <hash>`
