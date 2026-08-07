@@ -261,7 +261,7 @@ class SimCamera:
         return dict(self.shelf), confidence
 
     def payload(self, force=False):
-        """The `EVT INV` payload and the counts behind it.
+        """`(payload, counts, confidence)`.
 
         Never None and never PENDING: a simulated shelf always knows what is on
         it, immediately. The real backend has neither luxury, which is why the
@@ -271,7 +271,7 @@ class SimCamera:
         call this without asking which backend it holds.
         """
         counts, confidence = self.scan()
-        return build_payload(counts, confidence), counts
+        return build_payload(counts, confidence), counts, confidence
 
 
 class PiCapture:
@@ -472,7 +472,12 @@ class PiCapture:
             return self._clock() - self._latest[2]
 
     def payload(self, force=False):
-        """The `EVT INV` payload and counts, PENDING, or None.
+        """`(payload, counts, confidence)`, PENDING, or None.
+
+        The confidence is handed back separately as well as being on the wire,
+        because it is worth STORING. It is the only record of how much a count
+        was worth believing — the counts themselves look identical whether the
+        shelf held still or the answer was forced out on a deadline.
 
         `force` abandons settling and answers with whatever is available. It is
         the caller's backstop, not a normal path: `_on_scan` uses it when its own
@@ -484,7 +489,7 @@ class PiCapture:
         if answer is None or answer is PENDING:
             return answer
         counts, confidence = answer
-        return build_payload(counts, confidence), counts
+        return build_payload(counts, confidence), counts, confidence
 
     def scan(self, force=False):
         """`(counts, confidence)`, PENDING, or None. See `payload()`."""

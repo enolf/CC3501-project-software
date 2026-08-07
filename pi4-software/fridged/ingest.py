@@ -59,8 +59,15 @@ class Ingest:
         self.open_txn_id = None
 
         #: A `CMD SCAN` that has arrived and not yet been answered, as
-        #: `(frame_ts, deadline)`. See `_on_scan`.
+        #: `(frame_ts, deadline, trigger)`. See `_on_scan`.
         self.scan_owed = None
+
+        #: Whether the door is open, or None if no DOOR frame has arrived yet.
+        #: Read by `scan_trigger()` to tell a baseline scan from a recount —
+        #: `EVT DOOR` always precedes the `CMD SCAN` it belongs to, because the
+        #: board runs `notify_door()` ahead of the switch that calls
+        #: `request_scan()`.
+        self.door_open = None
 
         #: An approved card that has tapped but whose owner has not opened the
         #: door yet, as `(uid, ts)`. See `_on_rfid` for why this is a separate
@@ -233,11 +240,18 @@ class Ingest:
         # link we are trying to answer on.
         answer = self.camera.payload()
 
+        # WHICH scan this is, captured now rather than when the answer goes out.
+        # A deferred reply can be sent seconds later, by which point the door
+        # may have moved again — recording the state at that point would file a
+        # baseline as a recount and quietly corrupt the one column that says
+        # which of the two readings a snapshot was.
+        trigger = self.scan_trigger()
+
         if answer is PENDING:
             deadline = self._clock() + config.SCAN_ANSWER_BUDGET_S
             if self.scan_owed is None:
                 log.debug("scan deferred while the picture settles")
-            self.scan_owed = (ts, deadline)
+            self.scan_owed = (ts, deadline, trigger)
             return
 
         self.scan_owed = None
@@ -246,14 +260,44 @@ class Ingest:
                       "rather than guessing what is on the shelf")
             return
 
-        self._send_inventory(answer, ts)
+        self._send_inventory(answer, ts, trigger)
 
-    def _send_inventory(self, answer, ts):
-        payload, counts = answer
+    def scan_trigger(self):
+        """Which of the two scans this is, from the door state.
+
+        The board takes a baseline the instant the door opens and a recount
+        after it shuts, and the two are not equivalent measurements: the
+        baseline is latched from before anybody reached in, the recount waits
+        for the picture to settle. Storing which is which is what makes them
+        comparable afterwards — `stock_snapshot.trigger` has had the column
+        since the schema was written and nothing had ever filled it honestly.
+        """
+        if self.door_open is None:
+            return "untriggered"        # a scan with no door event behind it
+        return "door_open" if self.door_open else "door_close"
+
+    def _send_inventory(self, answer, ts, trigger):
+        payload, counts, confidence = answer
         if not self.link.send("EVT", "INV", payload):
             log.error("could not send the INV reply: %s", payload)
             return
-        self.store.stock_snapshot(ts, counts)
+
+        self.store.stock_snapshot(ts, counts, trigger=trigger)
+
+        # THE ONLY RECORD OF HOW MUCH THAT COUNT WAS WORTH BELIEVING.
+        #
+        # It went out on the wire and was thrown away. The counts themselves are
+        # identical whether the shelf held still or the answer was forced out on
+        # a deadline, so without this there is no way, ever, to look back at a
+        # disputed charge and see whether the measurement behind it was sound.
+        # Stored as a `measurement` because that table exists precisely so that
+        # adding a metric is not a schema change.
+        self.store.measurement(ts, "camera.confidence", float(confidence))
+
+        if confidence < config.LOW_CONFIDENCE_THRESHOLD:
+            log.warning("%s scan answered at confidence %d (below %d) - this "
+                        "sale rests on a count nobody should trust",
+                        trigger, confidence, config.LOW_CONFIDENCE_THRESHOLD)
 
     def _answer_owed_scan(self):
         """Finish a scan that was deferred. Called every service pass.
@@ -265,7 +309,7 @@ class Ingest:
         if self.scan_owed is None or self.camera is None:
             return
 
-        ts, deadline = self.scan_owed
+        ts, deadline, trigger = self.scan_owed
         expired = self._clock() >= deadline
 
         answer = self.camera.payload(force=expired)
@@ -288,7 +332,7 @@ class Ingest:
         if expired:
             log.warning("answering CMD SCAN on the deadline (%.0fs), before "
                         "the picture settled", config.SCAN_ANSWER_BUDGET_S)
-        self._send_inventory(answer, ts)
+        self._send_inventory(answer, ts, trigger)
 
     def _on_door(self, frame, ts):
         """`EVT DOOR state=open|closed`.
@@ -300,6 +344,7 @@ class Ingest:
         """
         state = protocol.field(frame.payload, "state")
         if state == "open":
+            self.door_open = True
             # The moment a tap becomes an attribution. See `_on_rfid`: this
             # mirrors the board's own Greeting -> Selecting transition, so both
             # ends agree about whose purchase this is.
@@ -318,6 +363,7 @@ class Ingest:
                 self.camera.door_opened(ts)
             self.store.door_opened(ts)
         elif state == "closed":
+            self.door_open = False
             # The shelf changes here, NOT when the door opened.
             #
             # The board takes a baseline scan the instant the door opens, and

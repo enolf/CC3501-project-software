@@ -778,7 +778,7 @@ def test_stock():
     check("a full shelf starts at capacity",
           all(v == camera.capacity for v in camera.shelf.values()))
 
-    payload, counts = camera.payload()
+    payload, counts, _conf = camera.payload()
     check(f"the INV payload uses the wire's lower-case drink keys ({payload})",
           all(f"{d}=" in payload for d in DRINKS) and "conf=" in payload)
     check("the payload's counts match the shelf", counts == camera.shelf)
@@ -937,7 +937,7 @@ def test_camera_staleness():
     # One frame is not a settled shelf, and saying so is the point of stage 4:
     # a lone frame is exactly what a hand halfway into the fridge produces.
     camera._accept("coke:5,fanta:4,mtndew:3,solo:2;conf=90;")
-    payload, counts = camera.payload()
+    payload, counts, _conf = camera.payload()
     lone = int(payload.split("conf=")[1])
     check(f"a single unagreed frame answers, but marked down ({lone} of 90)",
           0 < lone < 90 and counts["coke"] == 5)
@@ -945,14 +945,14 @@ def test_camera_staleness():
     # ...and once the frames agree, the mark-down goes away.
     for _ in range(cfg.SETTLE_FRAMES):
         camera._accept("coke:5,fanta:4,mtndew:3,solo:2;conf=90;")
-    payload, counts = camera.payload()
+    payload, counts, _conf = camera.payload()
     check(f"a settled shelf answers at full confidence ({payload})",
           "conf=90" in payload and counts["coke"] == 5)
 
     # Wobbling: still running, just behind. Answer anyway — this is the common
     # case and stopping the fridge for it would mean stopping it constantly.
     now[0] += (cfg.CAMERA_STALE_S + cfg.CAMERA_DEAD_S) / 2
-    payload, _ = camera.payload()
+    payload, _counts, _conf = camera.payload()
     stale_conf = int(payload.split("conf=")[1])
     check(f"a stale count still answers, at reduced confidence "
           f"({stale_conf} was 90)", 0 < stale_conf < 90)
@@ -1109,7 +1109,7 @@ def test_baseline_latch():
     # the recount would then have shown a shelf that had GAINED two cans.
     camera._accept("coke:3,fanta:5,mtndew:5,solo:5;conf=60;")
 
-    payload, counts = camera.payload()
+    payload, counts, _conf = camera.payload()
     check(f"the baseline scan answers from before the door moved ({payload})",
           counts["coke"] == 5)
     check("...at the confidence of that settled reading, not the bad frame",
@@ -1129,7 +1129,7 @@ def test_baseline_latch():
         now[0] += 0.25
         steady._accept("coke:5,fanta:5,mtndew:5,solo:5;conf=92;")
     steady.door_opened(now[0])
-    payload, _ = steady.payload()
+    payload, _counts, _conf = steady.payload()
     check(f"a shelf that never moved gives a FULL-confidence baseline "
           f"({payload})", "conf=92" in payload)
     steady.close()
@@ -1213,7 +1213,7 @@ def test_settling():
           camera.payload() is PENDING)
 
     _settled(camera, "coke:4,fanta:5,mtndew:5,solo:5;conf=88;")
-    payload, counts = camera.payload()
+    payload, counts, _conf = camera.payload()
     check(f"once the frames agree, the recount is answered ({payload})",
           counts["coke"] == 4 and "conf=88" in payload)
 
@@ -1330,7 +1330,7 @@ def test_deferred_scan_deadline():
         def payload(self, force=False):
             return PENDING if not force else (
                 "coke=1 fanta=1 mtndew=1 solo=1 conf=10",
-                {"coke": 1, "fanta": 1, "mtndew": 1, "solo": 1})
+                {"coke": 1, "fanta": 1, "mtndew": 1, "solo": 1}, 10)
 
     camera = NeverSettles(autostart=False, clock=lambda: now[0])
     ingest = Ingest(store, link, camera, clock=lambda: now[0])
@@ -1463,6 +1463,94 @@ def test_full_door_cycle():
     check("the reply came inside the board's 8 s recount window",
           config.SETTLE_TIMEOUT_S < 8.0 and
           config.SCAN_ANSWER_BUDGET_S < 8.0)
+    store.close()
+    camera.close()
+
+
+def test_confidence_is_recorded():
+    print("\n--- the confidence and the trigger reach the database ---")
+    from fridged import config as cfg
+    from fridged.camera import PiCapture
+
+    now = [7000.0]
+    store = Store(temp_db()).open()
+    link = Link(StubTransport())
+    camera = PiCapture(autostart=False, clock=lambda: now[0])
+    ingest = Ingest(store, link, camera, clock=lambda: now[0])
+
+    def scans():
+        return dict(store._conn.execute(
+            "SELECT trigger, COUNT(DISTINCT ts) FROM stock_snapshot "
+            "GROUP BY trigger"))
+
+    def confidences():
+        return [r[0] for r in store._conn.execute(
+            "SELECT value FROM measurement WHERE metric = 'camera.confidence' "
+            "ORDER BY ts")]
+
+    _settled(camera, "coke:5,fanta:5,mtndew:5,solo:5;conf=93;")
+
+    # --- baseline ---
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=10))
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=11))
+    store.flush(force=True)
+    check(f"a scan after the door opens is stored as a baseline ({scans()})",
+          scans() == {"door_open": 1})
+
+    # THE POINT OF STAGE 5: it went out on the wire and was thrown away. The
+    # counts alone cannot tell a settled answer from one forced out on a
+    # deadline, so without this a disputed charge has no record behind it.
+    check(f"...with the confidence beside it ({confidences()})",
+          confidences() == [93.0])
+
+    # --- recount ---
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=closed", ms=20))
+    _settled(camera, "coke:4,fanta:5,mtndew:5,solo:5;conf=88;")
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=21))
+    store.flush(force=True)
+    check(f"a scan after the door shuts is stored as a recount ({scans()})",
+          scans() == {"door_open": 1, "door_close": 1})
+    check("the two scans are distinguishable in the data, not just in the log",
+          store._conn.execute(
+              "SELECT COUNT(DISTINCT trigger) FROM stock_snapshot"
+          ).fetchone()[0] == 2)
+
+    # --- a deferred reply must keep the trigger it was ASKED under ---
+    #
+    # The subtle one. A deferred reply can go out seconds after the scan, by
+    # which time the door may have moved again. Recording the door state at
+    # send time would file a baseline as a recount and quietly corrupt the one
+    # column that says which of the two readings a snapshot is.
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=open", ms=30))
+    camera.door_closed(now[0])          # force the camera into settling
+    feed(ingest, link, protocol.build("CMD", "SCAN", "", ms=31))
+    check("the scan is deferred", ingest.scan_owed is not None)
+
+    feed(ingest, link, protocol.build("EVT", "DOOR", "state=closed", ms=40))
+    _settled(camera, "coke:3,fanta:5,mtndew:5,solo:5;conf=77;")
+    ingest.tick()
+    store.flush(force=True)
+    check(f"a deferred reply keeps the trigger from when it was asked "
+          f"({scans()})", scans()["door_open"] == 2)
+
+    # --- a scan nobody opened a door for ---
+    fresh_store = Store(temp_db()).open()
+    fresh = Ingest(fresh_store, Link(StubTransport()), camera,
+                   clock=lambda: now[0])
+    feed(fresh, fresh.link, protocol.build("CMD", "SCAN", "", ms=5))
+    fresh_store.flush(force=True)
+    check("a scan with no door behind it is labelled honestly",
+          [r[0] for r in fresh_store._conn.execute(
+              "SELECT DISTINCT trigger FROM stock_snapshot")] == ["untriggered"])
+
+    # The dashboard hardcodes this same number; they have to agree or the panel
+    # counts a different population from the one the log warns about.
+    check(f"the low-confidence threshold is the unsettled score "
+          f"({cfg.LOW_CONFIDENCE_THRESHOLD})",
+          cfg.LOW_CONFIDENCE_THRESHOLD == int(
+              100 * cfg.UNSETTLED_CONFIDENCE_SCALE))
+
+    fresh_store.close()
     store.close()
     camera.close()
 
@@ -1747,12 +1835,20 @@ def test_dashboards():
 
     # Stock over three scans, with a restock in the middle, so the
     # reconciliation panel's restock-detection has something to detect.
-    store.stock_snapshot(now - 500,
-                         {"coke": 6, "fanta": 6, "mtndew": 6, "solo": 6})
-    store.stock_snapshot(now - 300,
-                         {"coke": 5, "fanta": 5, "mtndew": 5, "solo": 6})
-    store.stock_snapshot(now - 100,
-                         {"coke": 6, "fanta": 6, "mtndew": 6, "solo": 6})
+    #
+    # Each one carries its trigger and a matching `camera.confidence` reading at
+    # the SAME ts, because that is how the real thing writes them — the
+    # confidence panel joins the two on timestamp, so a fixture that wrote only
+    # one of the pair would leave the join untested and the panel blank on the
+    # Pi. One low reading is included so the "nobody should trust" stat has
+    # something to count; a fixture where everything is healthy would never show
+    # that panel renders.
+    for scan_ts, trigger, counts, conf in (
+            (now - 500, "door_open",  {"coke": 6, "fanta": 6, "mtndew": 6, "solo": 6}, 93.0),
+            (now - 300, "door_close", {"coke": 5, "fanta": 5, "mtndew": 5, "solo": 6}, 88.0),
+            (now - 100, "door_open",  {"coke": 6, "fanta": 6, "mtndew": 6, "solo": 6}, 41.0)):
+        store.stock_snapshot(scan_ts, counts, trigger=trigger)
+        store.measurement(scan_ts, "camera.confidence", conf)
     store.flush(force=True)
 
     for path in files:
@@ -1857,6 +1953,7 @@ if __name__ == "__main__":
     test_camera_subprocess()
     test_camera_in_the_loop()
     test_camera_selection()
+    test_confidence_is_recorded()
     test_baseline_latch()
     test_settling()
     test_settling_deadline()

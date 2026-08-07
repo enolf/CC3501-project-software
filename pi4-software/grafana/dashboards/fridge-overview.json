@@ -1686,6 +1686,154 @@
       }
     },
     {
+      "id": 36,
+      "type": "stat",
+      "title": "Scans nobody should trust",
+      "description": "Counts answered below 50 confidence over the selected range. Fifty is not a round number somebody liked: UNSETTLED_CONFIDENCE_SCALE halves an answer forced out before the picture settled, so a healthy 90 becomes 45 and the threshold catches exactly that population. It MUST match LOW_CONFIDENCE_THRESHOLD in fridged/config.py - Grafana cannot read Python, so the two are kept in step by hand. Anything above zero here means a sale rested on a measurement the system itself doubted.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 54
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COUNT(*) AS \"Scans\"\nFROM measurement\nWHERE metric = 'camera.confidence'\n  AND value < 50\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COUNT(*) AS \"Scans\"\nFROM measurement\nWHERE metric = 'camera.confidence'\n  AND value < 50\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Camera confidence",
+      "description": "How much each count was worth believing. Baseline and recount are plotted apart because they are not the same measurement: the baseline is latched from before anybody reached in, the recount waits for the picture to hold still. With no camera frames kept (decision D3), this graph and the two stock snapshots are the ENTIRE record behind a disputed charge - the counts themselves look identical whether the shelf was steady or the answer was forced out on a deadline. The lowest value in each bucket is shown, not the average: one bad scan is the thing worth seeing.",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 54
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MIN(CASE WHEN trigger = 'door_open'  THEN value END) AS \"Baseline\",\n       MIN(CASE WHEN trigger = 'door_close' THEN value END) AS \"Recount\"\nFROM (SELECT m.ts AS ts, m.value AS value, s.trigger AS trigger\n      FROM measurement m\n      JOIN (SELECT DISTINCT ts, trigger FROM stock_snapshot) s\n        ON s.ts = m.ts\n      WHERE m.metric = 'camera.confidence')\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MIN(CASE WHEN trigger = 'door_open'  THEN value END) AS \"Baseline\",\n       MIN(CASE WHEN trigger = 'door_close' THEN value END) AS \"Recount\"\nFROM (SELECT m.ts AS ts, m.value AS value, s.trigger AS trigger\n      FROM measurement m\n      JOIN (SELECT DISTINCT ts, trigger FROM stock_snapshot) s\n        ON s.ts = m.ts\n      WHERE m.metric = 'camera.confidence')\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 75
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
       "id": 32,
       "type": "stat",
       "title": "Coin box drift",
@@ -1694,7 +1842,7 @@
         "h": 4,
         "w": 12,
         "x": 0,
-        "y": 54
+        "y": 61
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1763,7 +1911,7 @@
         "h": 4,
         "w": 12,
         "x": 12,
-        "y": 54
+        "y": 61
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1832,7 +1980,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 58
+        "y": 65
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1923,7 +2071,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 65
+        "y": 72
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -1998,7 +2146,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 65
+        "y": 72
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2056,7 +2204,7 @@
         "h": 4,
         "w": 12,
         "x": 0,
-        "y": 73
+        "y": 80
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2125,7 +2273,7 @@
         "h": 4,
         "w": 12,
         "x": 12,
-        "y": 73
+        "y": 80
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2194,7 +2342,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 77
+        "y": 84
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2318,7 +2466,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 85
+        "y": 92
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2377,7 +2525,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 92
+        "y": 99
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2434,7 +2582,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 92
+        "y": 99
       },
       "datasource": {
         "type": "frser-sqlite-datasource",
@@ -2491,7 +2639,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 100
+        "y": 107
       },
       "datasource": {
         "type": "frser-sqlite-datasource",

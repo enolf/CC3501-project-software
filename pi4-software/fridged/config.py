@@ -160,6 +160,17 @@ SCAN_ANSWER_BUDGET_S = 6.0
 #: that a threshold can actually be set on it later.
 UNSETTLED_CONFIDENCE_SCALE = 0.5
 
+#: Below this confidence, a scan is logged as one nobody should trust.
+#:
+#: Set at half, because that is what `UNSETTLED_CONFIDENCE_SCALE` does to an
+#: answer forced out before the picture settled: a healthy 90 becomes 45. So the
+#: threshold catches exactly the population it is meant to — answers that were
+#: given under protest — rather than being a round number somebody liked.
+#:
+#: **The Grafana panel "Scans nobody should trust" hardcodes this same 50.**
+#: Grafana cannot read Python, so if you change it here, change it there.
+LOW_CONFIDENCE_THRESHOLD = 50
+
 #: How many unparseable stdout lines to log before going quiet about them. The
 #: debug modes print tuning readouts to stdout as well as counts, so a few are
 #: normal; a flood is a version mismatch and the count is what shows it.

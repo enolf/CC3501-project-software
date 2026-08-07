@@ -25,6 +25,7 @@ right expectations.
 | Refusing to answer a scan (decision D1) | Tested with a fake clock, **never run with a real camera** |
 | Baseline latch and recount settling (stage 4) | **PASSED on the fridge** — 15/15 door cycles, T6 |
 | The four settling constants | **Measured and confirmed**, T6 2026-08-07 |
+| Confidence + trigger stored, dashboard panels (stage 5) | Passing off-hardware; **dashboard never rendered on the Pi** — T7 |
 
 Record which commit you tested, so the results can be matched to the code:
 
@@ -930,6 +931,101 @@ transaction rows, correctly — no payment method was ever chosen.
 > confidence clusters from T6.4.
 >
 > With those four I can set the constants from measurements and close stage 4.
+
+---
+
+# T7 — The confidence on the dashboard. Pi + camera + board + Grafana.
+
+New in stage 5. `conf=` used to go out on the wire and be discarded; it is now
+stored, and `stock_snapshot.trigger` finally records which of the two scans a
+row came from. Everything here passes off-hardware — what has not been seen is
+the dashboard actually rendering.
+
+## T7.1 — The data lands
+
+Ten door cycles is plenty. Reuse the T6 run if you still have `/tmp/t6b.db`,
+otherwise:
+
+```bash
+sudo systemctl stop fridged
+cd ~/CC3501-project-software/pi4-software
+python3 -m fridged --port /dev/serial/by-id/usb-Raspberry_Pi_Pico_*-if00 \
+    --db /tmp/t7.db --camera picapture 2>&1 | tee /tmp/t7.log
+```
+
+Take a can on some cycles, nothing on others, and **pay for at least one**.
+
+```bash
+sqlite3 -header -column /tmp/t7.db "
+  SELECT trigger, COUNT(DISTINCT ts) AS scans FROM stock_snapshot
+  GROUP BY trigger;"
+
+sqlite3 -header -column /tmp/t7.db "
+  SELECT COUNT(*) AS readings, MIN(value) AS worst,
+         ROUND(AVG(value),1) AS mean, MAX(value) AS best
+  FROM measurement WHERE metric = 'camera.confidence';"
+```
+
+**Expect:** roughly equal numbers of `door_open` and `door_close` scans, and one
+confidence reading per scan.
+
+**Fail if:** every row says `door_close` — the trigger is not being recorded and
+the confidence panel will show one series instead of two.
+
+**Fail if:** `readings` is 0 — the confidence is still being thrown away.
+
+Worth a look at the two side by side, since this is the pairing the panel joins
+on:
+
+```bash
+sqlite3 -header -column /tmp/t7.db "
+  SELECT datetime(s.ts,'unixepoch','localtime') AS at, s.trigger,
+         m.value AS confidence
+  FROM (SELECT DISTINCT ts, trigger FROM stock_snapshot) s
+  JOIN measurement m ON m.ts = s.ts AND m.metric = 'camera.confidence'
+  ORDER BY s.ts DESC LIMIT 12;"
+```
+
+## T7.2 — The panels render
+
+Point Grafana at the database the run above wrote, or re-run against
+`/var/lib/fridge/fridge.db` with the service. Open **Fridge — Overview** and
+scroll to the stock row.
+
+| Panel | Expect |
+| --- | --- |
+| **Camera confidence** | Two series, **Baseline** and **Recount**, stepped, 0-100. Not one line, not empty. |
+| **Scans nobody should trust** | A number. Green at 0. |
+
+**Fail if:** either panel says "No data" — the query is wrong, and
+`python3 tests/test_fridged.py` should have caught it, so tell me.
+
+**Fail if:** only one series appears — see T7.1, the trigger is not landing.
+
+## T7.3 — A bad scan is visible afterwards
+
+The whole point of the stage: with no camera frames kept, this is the **only**
+record that a count was doubtful. The counts themselves look identical.
+
+Provoke one. Open the door and hold your hand across the shelf while you close
+it, so the recount never settles:
+
+```bash
+grep -E "below 50|on the deadline|did not hold still" /tmp/t7.log
+```
+
+**Expect:** a `confidence NN (below 50) - this sale rests on a count nobody
+should trust` line, the **Scans nobody should trust** stat going amber, and a
+visible dip in the graph.
+
+**Fail if:** the log warns but the panel stays at 0 — the threshold in the panel
+has drifted from `LOW_CONFIDENCE_THRESHOLD` in `fridged/config.py`. Grafana
+cannot read Python, so the 50 is written in both places by hand.
+
+> **Prompt to send me:**
+> `Results from TEST.md T7 (confidence on the dashboard). Commit: <hash>`
+> then paste: the three SQL results from T7.1, whether both panels rendered with
+> two series, and what happened when you provoked a bad scan.
 
 ---
 

@@ -5,7 +5,8 @@ thing the fridge charges people from".
 
 **Stages 1–4 are done and proven on the fridge** (2026-08-07): the firmware
 basket logic, the vision, the subprocess, and the baseline latch with settling.
-Stages 5–7 remain. `TEST.md` records what was measured and how.
+**Stage 5 is written** and passes off-hardware; it needs the dashboard looked at
+on the Pi (T7). Stages 6–7 remain. `TEST.md` records what was measured and how.
 
 ## Where we are
 
@@ -37,7 +38,7 @@ diffs the answers, and handles put-backs, swaps and restocks — see
 | 3 ✅ | `fridged` runs picapture and reads its counts | Medium | 2 |
 | 4 ✅ | The two scans are answered differently, with settling | **Large** | 3 |
 |   | └ 15/15 door cycles correct on the fridge, T6 | | |
-| 5 | The confidence reaches the dashboard | Small | 2, 4 |
+| 5 ✅ | The confidence reaches the dashboard | Small | 2, 4 |
 | 6 | It survives a reboot as a service | Small | 3 |
 | 7 | Acceptance against a real shelf and real money | — | all |
 
@@ -351,46 +352,68 @@ reports no change, and taking one can reports exactly one.
 
 ---
 
-# Stage 5 — The confidence on the dashboard
+# Stage 5 — The confidence on the dashboard ✅
 
 **Goal:** a person can see how much to trust what the camera reported.
 
 **No camera frames, by decision D3.** Counts and confidence are stored; pictures
-are not. That removes the HTTP server this stage originally called for, along
-with the whole question of who on the network could watch it — which is why it
-dropped from Medium to Small. `FRAMES_DIR` and `LATEST_JPG` in `config.py` were
-reserved for a frame server that is now never going to exist, and should be
-deleted rather than left as an invitation.
+are not. That removed the HTTP server this stage originally called for, along
+with the whole question of who on the network could watch it. `FRAMES_DIR` and
+`LATEST_JPG` were deleted from `config.py` back in stage 3.
 
-### 5.1 Store the confidence
+### 5.1 The confidence is stored
 
-`conf=` currently goes out on the wire and is **thrown away** — `_on_scan`
-writes `stock_snapshot` and nothing else. Store it as a `measurement`, which is
-exactly what the generic metrics table exists for.
+`conf=` went out on the wire and was **thrown away** — `_on_scan` wrote
+`stock_snapshot` and nothing else. It is now a `measurement` under
+`camera.confidence`, which is exactly what the generic metrics table exists for:
+adding a metric is not a schema change.
 
-Also worth recording which scan a snapshot came from: `stock_snapshot.trigger`
-already has a column for it, and `'door_open'` versus `'door_close'` is the
-difference between a baseline and a recount.
+`payload()` returns `(payload, counts, confidence)` rather than digging the
+number back out of a string it had just built.
 
-### 5.2 Panels
+**Why it matters more than it sounds.** The counts are byte-identical whether
+the shelf held perfectly still or the answer was forced out on a deadline. With
+no frames kept, this number and the two snapshots are the **entire** record
+behind a disputed charge.
 
-- Confidence over time, with the existing stock graph.
-- A low-confidence annotation, so a suspicious sale can be traced to a scan
-  nobody trusted.
+`fridged` also logs a warning below `LOW_CONFIDENCE_THRESHOLD`, so a bad scan is
+visible in the journal at the moment it happens rather than only in hindsight.
 
-Without the frame, this graph is the *only* way to tell a solid count from a
-guess after the fact. That makes it more important than it was when there was a
-picture to fall back on, not less.
+### 5.2 The trigger is filled in honestly
+
+`stock_snapshot.trigger` has existed since the schema was written and nothing
+had ever put a true value in it — every row said `door_close`. It now records
+`door_open` / `door_close` / `untriggered`.
+
+**Captured when the scan ARRIVES, not when the answer goes out.** A deferred
+reply can be sent seconds later, by which point the door may have moved again;
+reading the door state at send time would file a baseline as a recount and
+quietly corrupt the one column that says which reading a snapshot is. There is a
+test for exactly that sequence.
+
+### 5.3 Two panels
+
+- **Camera confidence** — baseline and recount plotted *separately*, because
+  they are not the same measurement. Shows the **minimum** per bucket, not the
+  average: one bad scan is the thing worth seeing, and an average hides it.
+- **Scans nobody should trust** — a count below 50.
+
+Fifty is not a round number somebody liked. `UNSETTLED_CONFIDENCE_SCALE` halves
+an answer forced out before the picture settled, so a healthy 90 becomes 45 and
+the threshold catches exactly that population. **Grafana cannot read Python**,
+so the panel hardcodes it and a test asserts the two agree.
 
 ### Files
 
-`fridged/ingest.py` · `fridged/config.py` ·
-`grafana/dashboards/fridge-overview.json` · `tests/test_fridged.py`
+`fridged/ingest.py` · `fridged/camera.py` · `fridged/config.py` ·
+`fridged/store.py` · `grafana/dashboards/fridge-overview.json` ·
+`tests/test_fridged.py`
 
 ### Done when
 
-The dashboard shows a confidence graph alongside stock, low-confidence scans are
-visibly marked, and the dashboard test suite passes with the new panels.
+Done off-hardware: 359 fridged checks, up from 340. A 25 s simulated run
+produces 97 baselines, 97 recounts and 194 confidence readings spanning 73–100.
+**Still needs the dashboard rendered on the Pi** — `TEST.md` T7.
 
 ---
 

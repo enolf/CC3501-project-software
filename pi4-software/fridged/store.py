@@ -132,7 +132,11 @@ CREATE TABLE IF NOT EXISTS stock_snapshot (
     ts      REAL NOT NULL,
     drink   TEXT NOT NULL,
     count   INTEGER NOT NULL,
-    trigger TEXT NOT NULL           -- 'door_close', 'manual', 'seed'
+    -- Which of the two scans this was. They are NOT equivalent measurements:
+    -- the baseline is latched from before anybody reached in, the recount waits
+    -- for the picture to hold still. 'untriggered' is a scan with no door event
+    -- behind it.
+    trigger TEXT NOT NULL           -- 'door_open' | 'door_close' | 'untriggered'
 );
 CREATE INDEX IF NOT EXISTS ix_stock_snapshot_ts ON stock_snapshot(ts);
 
