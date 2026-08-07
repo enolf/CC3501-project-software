@@ -865,9 +865,11 @@ From the same run, for each of the ten cycles record **what you took** and
 ```bash
 sqlite3 /tmp/t6.db "
   SELECT ts, drink, count FROM stock_snapshot ORDER BY ts, drink;"
-sqlite3 /tmp/t6.db "
-  SELECT t.id, t.owed_cents, i.drink, i.qty
-  FROM txn t LEFT JOIN txn_item i ON i.txn_id = t.id ORDER BY t.id;"
+sqlite3 -header -column /tmp/t6.db "
+  SELECT t.txn_id, t.owed_cents, t.paid_cents, t.outcome, i.drink, i.qty
+  FROM txn t
+  LEFT JOIN txn_item i ON i.boot_id = t.boot_id AND i.txn_id = t.txn_id
+  ORDER BY t.ts_start;"
 ```
 
 **Expect:** the five empty cycles charge nobody, and the five single-can cycles

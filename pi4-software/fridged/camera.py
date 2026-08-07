@@ -349,6 +349,18 @@ class PiCapture:
         #: THIS moment, not up to now — see `scan()`.
         self._latched_at = None
 
+        #: Whether the latched baseline came from a settled reading.
+        #:
+        #: RECORDED AT LATCH TIME, not inferred afterwards. It was originally
+        #: derived by asking whether the latched reading was a different object
+        #: from the newest one — which is exactly backwards on a still shelf.
+        #: When nothing moves, every frame agrees, so `_stable` is reassigned to
+        #: `_latest` on every frame and the two ARE the same object. A shelf
+        #: that had not moved for two minutes was therefore graded "unsettled"
+        #: and had its confidence halved, while a shelf that had just changed
+        #: was graded settled. Found on hardware.
+        self._latched_settled = False
+
         #: When settling began, for the give-up deadline.
         self._settling_since = None
 
@@ -419,6 +431,7 @@ class PiCapture:
         """
         with self._lock:
             self._latched = self._stable or self._latest
+            self._latched_settled = self._stable is not None
             self._latched_at = self._clock()
             self._mode = _BASELINE
         if self._latched is None:
@@ -479,6 +492,7 @@ class PiCapture:
             mode = self._mode
             latched = self._latched
             latched_at = self._latched_at
+            latched_settled = self._latched_settled
             stable = self._stable
             latest = self._latest
             settling_since = self._settling_since
@@ -504,7 +518,7 @@ class PiCapture:
             # Answered from the frozen pre-open reading, NOT from now. A scan
             # arriving mid-swing must not be allowed to overwrite it.
             reading = latched or latest
-            settled = latched is not None and latched is not latest
+            settled = latched is not None and latched_settled
 
             # AGED AS AT THE MOMENT IT WAS FROZEN, not as at now. A baseline is
             # SUPPOSED to be old — that is the entire point of latching it — and

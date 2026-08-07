@@ -1115,6 +1115,36 @@ def test_baseline_latch():
     check("...at the confidence of that settled reading, not the bad frame",
           "conf=95" in payload)
 
+    # THE BUG THIS TEST EXISTS FOR, found on hardware.
+    #
+    # A shelf that has not moved is the BEST possible baseline, and it was being
+    # graded as the worst. Every frame of a still shelf agrees, so `_stable` is
+    # reassigned to `_latest` each time and the two become the same object; a
+    # "settled" test written as `latched is not latest` then reported unsettled
+    # precisely when nothing had moved, and halved the confidence. On the fridge
+    # every baseline came back at 40 against a shelf measured stable for 567
+    # consecutive frames.
+    steady = PiCapture(autostart=False, clock=lambda: now[0])
+    for _ in range(30):                    # a long, completely still period
+        now[0] += 0.25
+        steady._accept("coke:5,fanta:5,mtndew:5,solo:5;conf=92;")
+    steady.door_opened(now[0])
+    payload, _ = steady.payload()
+    check(f"a shelf that never moved gives a FULL-confidence baseline "
+          f"({payload})", "conf=92" in payload)
+    steady.close()
+
+    # ...and the genuinely unsettled case must still be marked down, or the fix
+    # would have simply inverted the bug.
+    jumpy = PiCapture(autostart=False, clock=lambda: now[0])
+    for i in range(6):                     # never two frames the same
+        now[0] += 0.25
+        jumpy._accept(f"coke:{i},fanta:5,mtndew:5,solo:5;conf=92;")
+    jumpy.door_opened(now[0])
+    check("a shelf that never held still is still marked down",
+          int(jumpy.payload()[0].split("conf=")[1]) < 92)
+    jumpy.close()
+
     # Repeated scans while the door is open keep getting the frozen value: the
     # board can legitimately rescan, and the answer must not drift.
     camera._accept("coke:2,fanta:4,mtndew:5,solo:5;conf=55;")
