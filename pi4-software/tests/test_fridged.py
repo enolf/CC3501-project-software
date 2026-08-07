@@ -312,6 +312,109 @@ def test_link_resynchronises():
           events[0].frame.type == "HB")
 
 
+def test_seed_uses_real_sensors():
+    """Seeded temperatures must land on THIS fridge's sensors.
+
+    `DEFAULT_ZONES` carries the simulator's invented ROM codes. A real fridge
+    has three different ones, named by hand. Seeding under the simulator's codes
+    left every temperature panel empty on a database holding 120,960 temperature
+    readings — the panels read the `temperature` view, which joins through
+    `sensor`, so readings on an unnamed sensor have no zone and are never drawn.
+    """
+    print("\n--- seed onto named sensors ---")
+    import contextlib
+    import io
+
+    from fridged import seed as seed_module
+
+    real = [("9A21811100090028", "freezer"),
+            ("CC21F88600090028", "fridge_bottom"),
+            ("942201B400090028", "fridge_top")]
+
+    path = str(temp_db())
+    store = Store(path).open()
+    for rom, label in real:
+        store._conn.execute(
+            "INSERT INTO sensor (rom_code, zone_label, first_seen) "
+            "VALUES (?,?,0)", (rom, label))
+    store._conn.commit()
+    store.close()
+
+    quiet = io.StringIO()
+    with contextlib.redirect_stdout(quiet):
+        seed_module.main(["--db", path, "--days", "0.05"])
+
+    conn = sqlite3.connect(path)
+    # The view the panels actually read, not the raw table.
+    zones = {r[0] for r in conn.execute("SELECT DISTINCT zone FROM temperature")}
+    sensors = conn.execute("SELECT COUNT(*) FROM sensor").fetchone()[0]
+    conn.close()
+
+    check("all three named zones get seeded history",
+          zones == {"freezer", "fridge_top", "fridge_bottom"})
+    check("no extra simulator sensors are invented alongside the real ones",
+          sensors == 3)
+
+    # And the fallback: a database with nothing named still seeds, rather than
+    # refusing, because that is the case a laptop with no fridge is in.
+    bare = str(temp_db())
+    Store(bare).open().close()
+    with contextlib.redirect_stdout(quiet):
+        seed_module.main(["--db", bare, "--days", "0.05"])
+    conn = sqlite3.connect(bare)
+    rows = conn.execute("SELECT COUNT(*) FROM measurement "
+                        "WHERE metric LIKE 'temp.rom.%'").fetchone()[0]
+    conn.close()
+    check("an unnamed database still seeds, under the simulator's codes",
+          rows > 0)
+
+
+def test_seed_stock_anchor():
+    """`--stock` makes the invented history end where the shelf actually is."""
+    print("\n--- seed --stock ---")
+    import contextlib
+    import io
+
+    from fridged import seed as seed_module
+
+    real = {"coke": 2, "fanta": 1, "mtndew": 1, "solo": 1}
+    path = str(temp_db())
+    quiet = io.StringIO()
+    with contextlib.redirect_stdout(quiet):
+        seed_module.main(["--db", path, "--days", "0.3", "--stock",
+                          "coke=2,fanta=1,mtndew=1,solo=1"])
+
+    conn = sqlite3.connect(path)
+    newest = conn.execute("SELECT MAX(ts) FROM stock_snapshot").fetchone()[0]
+    # The panel's own query, not a paraphrase of it.
+    got = dict(conn.execute(
+        "SELECT drink, count FROM stock_snapshot WHERE ts = ?", (newest,)))
+    conn.close()
+
+    check("the newest seeded snapshot is the real shelf", got == real)
+
+    # Every one of these would otherwise seed a shelf nobody asked for, and the
+    # result reads as a camera fault rather than a typo.
+    check("a pair with no '=' is rejected",
+          raises(ValueError, seed_module.parse_stock, "coke=2,fanta"))
+    check("a non-numeric count is rejected",
+          raises(ValueError, seed_module.parse_stock, "coke=lots"))
+    check("an empty spec is rejected",
+          raises(ValueError, seed_module.parse_stock, "  "))
+    check("an unknown drink name is rejected",
+          raises(ValueError, seed_module.anchor_to_real_shelf,
+                 [(1.0, {"coke": 5})], {"fantaa": 1}, 2.0))
+
+
+def raises(exc, fn, *args):
+    """True if `fn(*args)` raises `exc`."""
+    try:
+        fn(*args)
+    except exc:
+        return True
+    return False
+
+
 def test_seed_clear():
     """`--clear` must remove the seed and NOTHING else.
 
@@ -2131,6 +2234,8 @@ if __name__ == "__main__":
     test_link()
     test_reconnecting_serial()
     test_link_resynchronises()
+    test_seed_uses_real_sensors()
+    test_seed_stock_anchor()
     test_seed_clear()
     test_ingest()
     test_fake_board()

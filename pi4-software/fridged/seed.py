@@ -130,12 +130,56 @@ def clear(store):
         print(f"  {len(boots):>8,} seeded boot(s), with their transactions")
 
 
+#: What the dashboard's temperature panels expect to find in `sensor`, coldest
+#: first — the same order as `DEFAULT_ZONES` (-18, 4.0, 6.2 °C). The mapping is
+#: by temperature rather than by position so it stays right if either list is
+#: reordered.
+ZONE_LABELS = ["freezer", "fridge_bottom", "fridge_top"]
+
+
+def resolve_roms(store):
+    """Which ROM codes to write the seeded temperatures under.
+
+    THE BUG THIS EXISTS TO PREVENT. `DEFAULT_ZONES` carries the *simulator's*
+    invented ROM codes. On a real fridge the `sensor` table already holds three
+    different, real ones, named by hand by warming a sensor and seeing which row
+    moved. Seeding under the simulator's codes inserted three extra unnamed
+    sensors, and every temperature panel — which joins `measurement` to `sensor`
+    and filters on `zone_label` — showed **nothing at all**, on a database with
+    120,960 temperature readings in it.
+
+    So: if this fridge has named its sensors, the invented history belongs to
+    those sensors. That is this module's whole premise — the seeded past and the
+    live present have to be one fridge, not two.
+    """
+    named = dict(store._conn.execute(
+        "SELECT zone_label, rom_code FROM sensor "
+        "WHERE zone_label IS NOT NULL AND TRIM(zone_label) != ''").fetchall())
+
+    if all(label in named for label in ZONE_LABELS):
+        roms = [named[label] for label in ZONE_LABELS]
+        print("  temperatures seeded onto this fridge's own sensors:")
+        for label, rom in zip(ZONE_LABELS, roms):
+            print(f"    {label:<14} {rom}")
+        return roms
+
+    # Said out loud, because the alternative is a silent empty panel.
+    missing = [label for label in ZONE_LABELS if label not in named]
+    print(f"  NOTE: no sensor named {', '.join(missing)} in this database, so")
+    print("        temperatures are seeded under the simulator's ROM codes.")
+    print("        The temperature panels will stay EMPTY until those sensors")
+    print("        are named — see grafana/README.md.")
+    return [zone.rom for zone in DEFAULT_ZONES]
+
+
 def seed_temperature(store, start_ts, end_ts, rng, door):
     """Temperature for every sensor, at the interval the firmware really uses."""
-    for zone in DEFAULT_ZONES:
-        store.note_sensor(zone.rom, start_ts)
+    roms = resolve_roms(store)
+    for rom in roms:
+        store.note_sensor(rom, start_ts)
 
-    metric = {zone.rom: f"temp.rom.{zone.rom}" for zone in DEFAULT_ZONES}
+    metric = {zone.rom: f"temp.rom.{rom}"
+              for zone, rom in zip(DEFAULT_ZONES, roms)}
     batch = []
     written = 0
     ts = start_ts
@@ -223,6 +267,56 @@ def plan_all_transactions(door, rng, start_ts):
     deposits.sort()
     snapshots.sort(key=lambda item: item[0])
     return frames, deposits, snapshots
+
+
+def parse_stock(text):
+    """`coke=2,fanta=1,mtndew=1,solo=1` -> {'coke': 2, ...}.
+
+    Raises rather than skipping a malformed pair. A typo that silently seeded
+    three drinks instead of four would show up as one flat line on the burn-down
+    and be blamed on the camera.
+    """
+    counts = {}
+    for pair in text.split(","):
+        pair = pair.strip()
+        if not pair:
+            continue
+        if "=" not in pair:
+            raise ValueError(f"expected drink=count, got {pair!r}")
+        drink, _, number = pair.partition("=")
+        drink = drink.strip()
+        try:
+            counts[drink] = int(number)
+        except ValueError:
+            raise ValueError(f"{drink}: {number.strip()!r} is not a number")
+    if not counts:
+        raise ValueError("no drinks given")
+    return counts
+
+
+def anchor_to_real_shelf(snapshots, counts, end_ts):
+    """End the invented history at what is actually on the shelf.
+
+    WHY THIS MATTERS FOR THE DASHBOARD. `Stock now` is
+    `WHERE ts = (SELECT MAX(ts) FROM stock_snapshot)` — the newest row wins,
+    with no notion of whether it was invented. Seed 14 days and the newest row
+    is a simulated one, so the panel confidently reports a shelf nobody has.
+
+    Anchoring also removes the step in the burn-down: the last seeded scan and
+    the first real one agree, so the seam is invisible rather than looking like
+    somebody emptied the fridge at the moment the demonstration started.
+
+    The anchor is written as its own scan at `end_ts` rather than by editing the
+    simulated walk, so it reads as exactly what it is — a restock just before
+    the demonstration, which is also what physically happened.
+    """
+    drinks = {drink for _, snap in snapshots for drink in snap}
+    unknown = sorted(set(counts) - drinks) if drinks else []
+    if unknown:
+        raise ValueError(
+            f"unknown drink(s): {', '.join(unknown)}. "
+            f"This shelf has: {', '.join(sorted(drinks))}")
+    return snapshots + [(end_ts, dict(counts))]
 
 
 def seed_stock(store, snapshots):
@@ -323,6 +417,11 @@ def main(argv=None):
                         help="RNG seed, so a run is reproducible")
     parser.add_argument("--clear", action="store_true",
                         help="delete previously seeded data and exit")
+    parser.add_argument("--stock", default=None, metavar="coke=2,fanta=1,...",
+                        help="what is REALLY on the shelf right now. The "
+                             "invented history is made to end here, so the "
+                             "first real scan agrees with it instead of the "
+                             "burn-down showing a step at the seam")
     args = parser.parse_args(argv)
 
     # Seeding usually runs BEFORE the service, so this is often the process that
@@ -358,6 +457,10 @@ def main(argv=None):
         # produce. Its own RNG so a change to one model cannot reshuffle another.
         txn_frames, deposits, snapshots = plan_all_transactions(
             door, random.Random(args.seed + 3), start_ts)
+
+        if args.stock:
+            snapshots = anchor_to_real_shelf(
+                snapshots, parse_stock(args.stock), end_ts)
 
         temps = seed_temperature(store, start_ts, end_ts, rng, door)
         doors = seed_doors(store, door)
@@ -395,6 +498,10 @@ def main(argv=None):
         print(f"  {sales:>8,} transaction frames -> {paid} paid, {stolen} "
               f"unpaid, ${(revenue or 0) / 100:,.2f} taken")
         print(f"  {stock:>8,} stock snapshot rows")
+        if args.stock:
+            shelf = ", ".join(f"{d}={n}" for d, n in
+                              sorted(parse_stock(args.stock).items()))
+            print(f"           ending at the real shelf: {shelf}")
         print(f"  from {time.strftime('%Y-%m-%d %H:%M', time.localtime(start_ts))}"
               f"  to {time.strftime('%Y-%m-%d %H:%M', time.localtime(end_ts))}")
         print(f"  database: {store.path}")
