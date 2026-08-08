@@ -101,7 +101,7 @@ CC3501-project-software/
 │   │   ├── lv_conf.h             LVGL configuration
 │   │   ├── lvgl/                 SUBMODULE, release/v9.2
 │   │   ├── pico-scale/           SUBMODULE (has a nested submodule)
-│   │   └── fatfs/                vendored ChaN FatFs R0.16
+│   │   └── fatfs/                VENDORED ChaN FatFs R0.16 — see §3.1.1
 │   ├── tests/host/               off-hardware unit tests (firmware_tests)
 │   └── docs/bringup/             standalone per-device bring-up programs
 │
@@ -150,6 +150,38 @@ on a missing `lvgl.h` or `hx711.h`. Clone with `--recurse-submodules`, or run
 > and pointed one level too high. Fixed by verifying the vendored tree was
 > byte-identical to upstream `release/v9.2` and then converting it to a real
 > gitlink.
+
+#### 3.1.1 Why FatFs is vendored and the other two are not
+
+`lib/fatfs/` is committed source, not a submodule, and that is deliberate rather
+than an oversight of the same kind as the lvgl one above.
+
+**There is no upstream to point at.** FatFs is published by ChaN as a versioned
+zip from `elm-chan.org/fsw/ff/`, not as a git repository. Submoduling it would
+mean choosing a third-party GitHub mirror, which makes somebody else's account a
+dependency of the code that writes the fridge's log to disk. `lvgl` and
+`pico-scale` are submodules precisely because they *are* real upstream
+repositories, used unmodified.
+
+**Two further reasons a submodule could not express this anyway:**
+
+- Only 5 of the 9 distributed files are here. `ffunicode.c` (long filenames),
+  `ffsystem.c` (reentrancy and dynamic allocation) and `diskio.c` (a glue
+  example) are unused. Our disk layer is `src/drivers/sd_card/sd_diskio.cpp`,
+  which is our code and follows the rules in §5.1.
+- **`ffconf.h` is a configuration file and it has been configured.** Three
+  settings differ from stock R0.16, and a submodule cannot carry local edits.
+
+| Setting | Stock | Here | If it reverts |
+|---|---:|---:|---|
+| `FF_CODE_PAGE` | 932 | 437 | Filenames use a Japanese code page |
+| `FF_USE_STRFUNC` | 0 | 2 | `sd_log.cpp` fails to link — it uses `f_printf` and `f_putc`. The value 2 rather than 1 also writes `\n` as CRLF, so the log opens properly in Notepad |
+| `FF_FS_NORTC` | 0 | 1 | `ff.c` fails to link on `get_fattime`. The RP2040 has no RTC, so nothing can supply one |
+
+**Updating FatFs means re-applying those three.** Unzipping a new release over
+the top silently reverts all of them, and two fail with linker errors that name
+neither `ffconf.h` nor the setting. The same table is at the top of `ffconf.h`
+itself, which is where somebody doing the update will actually be looking.
 
 ### 3.2 Firmware build switches
 

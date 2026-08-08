@@ -1,3 +1,46 @@
+/*===========================================================================/
+/  THIS PROJECT'S SETTINGS -- READ BEFORE UPDATING FatFs
+/===========================================================================/
+/
+/  FatFs R0.16 by ChaN, from http://elm-chan.org/fsw/ff/
+/
+/  VENDORED, NOT A SUBMODULE, and deliberately so. FatFs is published as a
+/  versioned zip rather than a git repository, so there is no upstream to point
+/  a submodule at -- only third-party mirrors, which would make somebody else's
+/  account a dependency of the code that writes our log to disk. lvgl and
+/  pico-scale ARE submodules because they are real upstream repositories used
+/  unmodified. This is not, on both counts:
+/
+/    * Only 5 of the 9 distributed files are here. ffunicode.c (long filenames),
+/      ffsystem.c (reentrancy and dynamic allocation) and diskio.c (a glue
+/      example) are all unused -- see rp2040-software/CMakeLists.txt. Our disk
+/      layer is src/drivers/sd_card/sd_diskio.cpp.
+/    * THREE SETTINGS BELOW DIFFER FROM STOCK. A submodule could not carry them.
+/
+/  ---------------------------------------------------------------------------
+/  IF YOU UPDATE FatFs, RE-APPLY THESE. Unzipping a new release over the top
+/  reverts all three, and two of them fail in ways that do not name this file:
+/
+/  | Setting          | Stock | Here | Reverting it does this                 |
+/  |------------------|-------|------|----------------------------------------|
+/  | FF_CODE_PAGE     |   932 |  437 | Filenames use a Japanese code page     |
+/  | FF_USE_STRFUNC   |     0 |    2 | "undefined reference to `f_printf`"    |
+/  |                  |       |      | from sd_log.cpp, which uses f_printf   |
+/  |                  |       |      | and f_putc. 2, not 1, so '\n' is       |
+/  |                  |       |      | written as CRLF and the log opens      |
+/  |                  |       |      | properly in Notepad on Windows.        |
+/  | FF_FS_NORTC      |     0 |    1 | "undefined reference to `get_fattime`" |
+/  |                  |       |      | from inside ff.c. The RP2040 has no    |
+/  |                  |       |      | RTC, so nothing can supply one, and    |
+/  |                  |       |      | there is no get_fattime() anywhere in  |
+/  |                  |       |      | this project to find.                  |
+/
+/  Neither of those two errors points at ffconf.h, which is the whole reason
+/  this table is here rather than in a commit message nobody will read.
+/
+/  Everything else below is stock R0.16.
+/===========================================================================*/
+
 /*---------------------------------------------------------------------------/
 /  Configurations of FatFs Module
 /---------------------------------------------------------------------------*/
