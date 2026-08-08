@@ -22,9 +22,14 @@
 //   1. TFT display        — text on screen
 //   2. DS18B20            — multi-sensor temperature + health monitoring
 //   3. MFRC522 RFID       — UID read + access decision
-//   4. HX711 (original)   — Load_cell::measure(); superseded by mass_sensor
-//   5. Coin detector      — $1/$2 discrimination, interactive over USB serial
+//   4. Coin detector      — $1/$2 discrimination, interactive over USB serial
 //                           (this was the active main() until stage 2)
+//
+// A fifth example once drove the HX711 through a `Load_cell` class written for
+// a bare-Pico test rig. Both the class and the example have been deleted: the
+// class pointed the amplifier's sample buffer at a stack-local array that died
+// when init() returned, and src/drivers/mass_sensor/ replaces it. Use the coin
+// detector below as the HX711 reference instead.
 //
 // NOTE: these predate the stage 1 rename of the display pin macros
 // (ILI9341_PIN_* / SPI_PORT became DISPLAY_*_PIN / DISPLAY_SPI_INSTANCE in
@@ -274,27 +279,6 @@
 //         sleep_ms(100);
 //     }
 
-//     return 0;
-// }
-
-
-// --------------------------------------------------------------
-
-
-
-
-// Code example for testing the HX711 load cell amplifier
-// --------------------------------------------------------------
-
-// int main()
-// {
-//     Load_cell coin_scale;
-//     coin_scale.init();
-
-//     for(;;)
-//     {
-//         coin_scale.measure();
-//     }
 //     return 0;
 // }
 

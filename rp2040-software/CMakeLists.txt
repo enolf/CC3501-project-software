@@ -68,18 +68,7 @@ if(CrossCompiling)
         src/peripherals/sensor_health/sensor_health.cpp
         src/drivers/mfrc522/mfrc522.cpp
         src/peripherals/access_control/access_control.cpp
-        # src/peripherals/load_cell/load_cell.cpp
-        #   Superseded by src/drivers/mass_sensor/. Deliberately NOT built: its
-        #   init() points the HX711's sample buffer at a stack-local array that
-        #   dies when init() returns, so every later read writes through a
-        #   dangling pointer. Kept on disk as the original bring-up reference.
         src/peripherals/basket/basket.cpp
-        # src/peripherals/camera_side/inventory.cpp
-        #   Superseded by peripherals/catalogue (the price table) and
-        #   peripherals/basket (counts, diffing and the payment gate). Kept on
-        #   disk for its dashboard price-override sketch, which the Pi link will
-        #   want later, but out of the build so there is only ONE definition of
-        #   what a drink costs.
         src/drivers/ili9341/xpt2046.c
         src/drivers/mass_sensor/mass_sensor.cpp
         src/peripherals/coin_acceptor/coin_acceptor.cpp

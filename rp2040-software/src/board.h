@@ -206,11 +206,9 @@
 // 24-bit amplifier which the RP2040 reads over two GPIOs using a PIO state
 // machine (see lib/pico-scale/extern/hx711-pico-c).
 //
-// NOTE: src/peripherals/load_cell/load_cell.h also defines HX711 pins
-// (GP14/GP15). Those are from the earlier bare-Pico test rig and do NOT
-// describe this board. That file is no longer compiled — it is superseded by
-// src/drivers/mass_sensor/ — so the definitions below are the only ones in
-// the firmware.
+// These are the only HX711 pin definitions in the firmware. An earlier
+// bare-Pico test rig used GP14/GP15; that rig's driver has been deleted, so
+// there is no second set to be confused with.
 #define HX711_DATA_PIN 10
 #define HX711_CLK_PIN  11
 
@@ -228,13 +226,13 @@
 // not 5 V tolerant. Recorded here because it is a board wiring fact, even
 // though no code reads it.
 
-// Load cell calibration: raw HX711 counts per gram, from the calibration
-// routine in load_cell.cpp (TAL221 500 g, calibrated against a 50 g mass).
+// Load cell calibration: raw HX711 counts per gram
+// (TAL221 500 g, originally calibrated against a 50 g mass).
 //
 // This is the ONLY calibration figure the coin detector needs. It works
-// entirely in differences from a baseline captured at run time, so any zero
-// offset cancels out -- the stored OFFSET in load_cell.h does not have to be
-// correct, or even current, for coin detection to work.
+// entirely in differences from a baseline captured at run time by tare(), so
+// any zero offset cancels out -- no stored zero has to be correct, or even
+// current, for coin detection to work.
 // Re-derived on this board from known coin masses, replacing the 2945 figure
 // inherited from an earlier bare-Pico test rig. That value read 8.5% high,
 // which is what made a 9.00 g $1 coin appear to weigh 9.80 g.

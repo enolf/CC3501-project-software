@@ -9,9 +9,11 @@
 // common.h only -- deliberately NOT hx711_reader.pio.h. That header *defines*
 // (rather than declares) its init functions and carries no extern "C" guard,
 // so including it from more than one C++ file gives the linker two definitions
-// of the same symbol. load_cell.cpp already includes it. Everything needed
-// here comes from hx711_get_default_config(), which fills in the PIO program
-// and its init callbacks for us.
+// of the same symbol. This file is currently the only includer, and it must
+// stay that way: a second C++ file including that PIO header would not fail
+// here but at link time, with a duplicate-symbol error naming neither file.
+// Everything needed here comes from hx711_get_default_config(), which fills in
+// the PIO program and its init callbacks for us.
 #include "pico-scale/extern/hx711-pico-c/include/common.h"
 
 namespace {
