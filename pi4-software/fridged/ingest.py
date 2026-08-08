@@ -26,9 +26,27 @@ class Ingest:
     """Turns link events into database rows."""
 
     def __init__(self, store, link, camera=None, payments=None,
-                 clock=time.monotonic):
+                 clock=time.monotonic, simulated=False):
         self.store = store
         self.link = link
+        #: Whether the frames arriving came from `fake_board`, not a real
+        #: RP2040. Recorded in the `boot` row's reason so a simulated run can
+        #: always be told from a real one.
+        #:
+        #: WHY THIS IS NOT COSMETIC. `--port sim` is the DEFAULT, and `--db`
+        #: defaults to the same file the dashboard reads. So the easiest command
+        #: in the repository, `python -m fridged`, used to write invented sales
+        #: into the real revenue panels under exactly the same table and metric
+        #: names as genuine ones, with nothing anywhere recording which was
+        #: which. Simulated data is *supposed* to reach the dashboard — that is
+        #: how the panels were designed before there was a fridge — but it has
+        #: to be identifiable, or a demonstration and a week of real takings
+        #: become one indistinguishable pile.
+        #:
+        #: Same idea as `seed.py` tagging its rows `reason='seed'`, and it
+        #: composes with it: 'seed' is invented history, 'sim:*' is a live run
+        #: against a fake board, and an untagged reason is a real RP2040.
+        self.simulated = simulated
         #: Injectable so the deferred-scan deadline can be driven by a test
         #: rather than by waiting six real seconds for it.
         self._clock = clock
@@ -134,28 +152,41 @@ class Ingest:
           a NULL boot_id and transactions could not be keyed at all;
         - `ms_rollback`, when the board resets and the BOOT frame is lost — over
           a cable being unplugged, say. The counter restarting is the signal
-          (dashboard.md section 6), and catching it is what stops the new boot's
-          transaction ids colliding with the old boot's.
+          (documentation.md section 6.2), and catching it is what stops the new
+          boot's transaction ids colliding with the old boot's.
+
+        All three are prefixed `sim:` when the frames came from `fake_board`
+        rather than a real RP2040 — see `self.simulated`.
         """
         if frame.type == "BOOT":
             fw = protocol.field(frame.payload, "fw")
-            self.boot_id = self.store.open_boot(ts, fw, "boot_frame")
+            self.boot_id = self.store.open_boot(ts, fw, self._reason("boot_frame"))
             self.last_ms = frame.ms
             log.info("board booted: fw=%s, boot_id=%d", fw, self.boot_id)
             return
 
         if self.boot_id is None:
-            self.boot_id = self.store.open_boot(ts, None, "resumed")
+            self.boot_id = self.store.open_boot(ts, None, self._reason("resumed"))
             log.info("joined a board that was already running, boot_id=%d",
                      self.boot_id)
         elif (self.last_ms is not None and
               frame.ms + config.MS_ROLLBACK_SLACK < self.last_ms):
-            self.boot_id = self.store.open_boot(ts, None, "ms_rollback")
+            self.boot_id = self.store.open_boot(ts, None,
+                                                self._reason("ms_rollback"))
             log.warning("board ms went backwards (%d -> %d): it reset and the "
                         "BOOT frame was lost. boot_id=%d",
                         self.last_ms, frame.ms, self.boot_id)
 
         self.last_ms = frame.ms
+
+    def _reason(self, reason):
+        """Tag a boot reason with its provenance.
+
+        Prefixed rather than replaced, so which of the three paths opened the
+        row is still recorded. `sim:ms_rollback` is a real thing to want to see:
+        it means the simulator exercised the lost-BOOT-frame detector.
+        """
+        return f"sim:{reason}" if self.simulated else reason
 
     # --- Handlers -----------------------------------------------------------
     #

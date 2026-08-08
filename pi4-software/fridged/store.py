@@ -49,11 +49,20 @@ CREATE INDEX IF NOT EXISTS ix_measurement_metric_ts ON measurement(metric, ts);
 -- `ms_since_boot` and is therefore unique only WITHIN a boot: two reboots in a
 -- day can mint the same id, and without this the second would overwrite the
 -- first (dashboard.md section 5.3 amendment 1). Gives the reset counter free.
+-- `reason` also carries PROVENANCE, which is what stops a demonstration and a
+-- week of real takings becoming one indistinguishable pile:
+--
+--   'boot_frame' | 'resumed' | 'ms_rollback'   a real RP2040
+--   'sim:<any of the above>'                   a `--port sim` run (fake_board)
+--   'seed'                                     invented history (seed.py)
+--
+-- Everything else in the database is keyed to a boot, so this one column
+-- answers "was this real?" for every transaction and coin event as well.
 CREATE TABLE IF NOT EXISTS boot (
     id     INTEGER PRIMARY KEY AUTOINCREMENT,
     ts     REAL NOT NULL,
     fw     TEXT,
-    reason TEXT                     -- 'boot_frame' | 'resumed' | 'ms_rollback'
+    reason TEXT
 );
 
 -- ROM code -> which shelf the sensor is actually on. The mapping lives here and

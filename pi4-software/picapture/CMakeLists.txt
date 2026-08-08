@@ -26,10 +26,10 @@ if(OpenCV_FOUND)
     target_link_libraries(PiCapture ${OpenCV_LIBS})
     target_include_directories(PiCapture PRIVATE ${OpenCV_INCLUDE_DIRS} src)
     target_compile_options(PiCapture PRIVATE -O2 -Wall -Wextra)
-    message(STATUS "OpenCV ${OpenCV_VERSION} found — building PiCapture and config_tests")
+    message(STATUS "OpenCV ${OpenCV_VERSION} found — building PiCapture and picapture_tests")
 else()
     message(STATUS
-        "OpenCV 4 NOT found — building config_tests ONLY, without PiCapture.\n"
+        "OpenCV 4 NOT found — building picapture_tests ONLY, without PiCapture.\n"
         "   This is the expected result on a development laptop.\n"
         "   On the Raspberry Pi this is a fault: install OpenCV with\n"
         "       sudo apt install libopencv-dev\n"
@@ -42,10 +42,10 @@ endif()
 # round-tripping are the parts most likely to be wrong and the parts least
 # convenient to debug standing at a fridge. They build and run on any laptop.
 #
-#   cmake -S . -B build && cmake --build build && ./build/config_tests
-add_executable(config_tests
+#   cmake -S . -B build && cmake --build build && ./build/picapture_tests
+add_executable(picapture_tests
     tests/test_vision_config.cpp
     src/vision_config.cpp
 )
-target_include_directories(config_tests PRIVATE src)
-target_compile_options(config_tests PRIVATE -Wall -Wextra)
+target_include_directories(picapture_tests PRIVATE src)
+target_compile_options(picapture_tests PRIVATE -Wall -Wextra)

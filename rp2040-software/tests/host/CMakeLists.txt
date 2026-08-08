@@ -7,7 +7,7 @@ cmake_minimum_required(VERSION 3.13)
 #
 #   cmake -S tests/host -B build-host
 #   cmake --build build-host
-#   ./build-host/fridge_tests
+#   ./build-host/firmware_tests
 #
 # Kept separate rather than added to the firmware's CMakeLists on purpose. That
 # file configures the Pico SDK and cross-compiles for the RP2040; trying to
@@ -18,14 +18,14 @@ cmake_minimum_required(VERSION 3.13)
 # call, that is a sign the logic and the hardware access want separating in the
 # firmware — not a sign that this project needs SDK stubs.
 
-project(fridge_host_tests CXX)
+project(firmware_tests CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 set(FIRMWARE_SRC ${CMAKE_CURRENT_LIST_DIR}/../../src)
 
-add_executable(fridge_tests
+add_executable(firmware_tests
     main.cpp
     test_basket.cpp
     test_coin_acceptor.cpp
@@ -40,11 +40,11 @@ add_executable(fridge_tests
     # compile for it beyond the include path below.
 )
 
-target_include_directories(fridge_tests PRIVATE
+target_include_directories(firmware_tests PRIVATE
     ${FIRMWARE_SRC}
     ${CMAKE_CURRENT_LIST_DIR}
 )
 
 # Same warning settings as the firmware, so a problem is caught in whichever
 # build runs first.
-target_compile_options(fridge_tests PRIVATE -Wall -Wextra)
+target_compile_options(firmware_tests PRIVATE -Wall -Wextra)

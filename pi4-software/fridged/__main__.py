@@ -187,7 +187,15 @@ def main(argv=None):
     # the board cannot tell who answers CMD SQUARE_LINK.
     payments = PaymentService(BACKENDS[args.square]())
     log.info("card payments: %s", payments.backend.name)
-    ingest = Ingest(store, link, camera, payments)
+
+    # `simulated` is what keeps a `--port sim` run from being mistaken for a real
+    # one later. It is passed here rather than sniffed inside Ingest because
+    # this is the only place that knows what --port was.
+    ingest = Ingest(store, link, camera, payments,
+                    simulated=(args.port == "sim"))
+    if args.port == "sim":
+        log.warning("SIMULATED BOARD - rows are tagged boot.reason='sim:*' so "
+                    "they can be told from real ones in %s", store.path)
 
     next_status = time.monotonic() + config.SELF_METRIC_INTERVAL_S
     log.info("running - Ctrl-C to stop")

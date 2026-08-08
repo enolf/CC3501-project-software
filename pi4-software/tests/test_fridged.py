@@ -526,6 +526,30 @@ def test_ingest():
           store2._conn.execute(
               "SELECT reason FROM boot").fetchone()[0] == "resumed")
 
+    # --- Simulated runs must be identifiable in the database -----------------
+    #
+    # `--port sim` is the DEFAULT and `--db` defaults to the file the dashboard
+    # reads, so `python -m fridged` with no arguments writes invented sales into
+    # the real revenue panels. That is allowed — it is how the panels were built
+    # before there was a fridge — but it must never be indistinguishable from a
+    # real board's data. If this check fails, that is what has been lost.
+    store3 = Store(temp_db()).open()
+    link3 = Link(StubTransport())
+    ingest3 = Ingest(store3, link3, simulated=True)
+    feed(ingest3, link3, protocol.build("EVT", "BOOT", "fw=0.2", ms=0))
+    feed(ingest3, link3, protocol.build("EVT", "HB", "", ms=10_000))
+    feed(ingest3, link3, protocol.build("EVT", "HB", "", ms=5))
+    sim_reasons = [r[0] for r in store3._conn.execute(
+        "SELECT reason FROM boot ORDER BY id")]
+    check("a simulated board tags its boot rows 'sim:'",
+          sim_reasons == ["sim:boot_frame", "sim:ms_rollback"])
+    check("the tag keeps WHICH path opened the row, not just that it was sim",
+          all(r.split(":", 1)[1] in ("boot_frame", "resumed", "ms_rollback")
+              for r in sim_reasons))
+    check("a real board is left untagged, so existing rows keep their meaning",
+          reasons == ["boot_frame", "ms_rollback"])
+    store3.close()
+
     # A type nobody has wired up yet must be visible, not silently dropped.
     # Asserted with a type that will never gain a handler, so this keeps testing
     # the mechanism rather than failing every time a stage lands.
