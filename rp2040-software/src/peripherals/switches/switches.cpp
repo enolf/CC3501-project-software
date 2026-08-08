@@ -4,7 +4,7 @@
 
 #include "timings.h"
 #include "board.h"
-#include "drivers/DigitalSwitch/DigitalSwitch.h"
+#include "drivers/digital_switch/digital_switch.h"
 #include "drivers/logging/logging.h"
 #include "peripherals/events/events.h"
 

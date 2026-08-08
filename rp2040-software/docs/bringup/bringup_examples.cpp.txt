@@ -49,7 +49,7 @@
 #include "peripherals/tft_display/tft_display.h"
 
 // Files for DS18B20 temperature sensor
-#include "drivers/DS18B20/DS18B20.h"
+#include "drivers/ds18b20/ds18b20.h"
 #include "peripherals/sensor_health/sensor_health.h"
 
 // Files for piicodev RFID board
@@ -126,7 +126,7 @@
 //     // Tracks the sensor set over time so faults (a sensor going missing, or
 //     // a still-present sensor whose reads keep failing) can be reported by
 //     // ROM code rather than just noticing the sensor count changed. See
-//     // src/tasks/sensor_health.h for the full design rationale, including why
+//     // src/peripherals/sensor_health/sensor_health.h for the full design rationale, including why
 //     // swapping a sensor needs a reset/power-cycle afterwards.
 //     SensorHealthMonitor health(FAULT_REMINDER_INTERVAL_CYCLES);
 

@@ -1,7 +1,7 @@
 // Generic debounced switch/button driver. See DigitalSwitch.h for the
 // wiring assumptions and the NO/NC design rationale.
 
-#include "DigitalSwitch.h"
+#include "drivers/digital_switch/digital_switch.h"
 #include "hardware/gpio.h"
 #include "pico/time.h"
 

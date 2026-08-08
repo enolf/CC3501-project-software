@@ -1,5 +1,4 @@
-#ifndef ILI9341_H
-#define ILI9341_H
+#pragma once
 
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
@@ -30,6 +29,4 @@ uint16_t xpt2046_spi_read(uint8_t command);
 
 #ifdef __cplusplus
 }
-#endif
-
 #endif

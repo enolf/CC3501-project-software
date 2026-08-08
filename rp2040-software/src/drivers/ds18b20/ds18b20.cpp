@@ -18,7 +18,7 @@
 #include "hardware/sync.h"
 #include "hardware/timer.h"
 
-#include "DS18B20.h"
+#include "drivers/ds18b20/ds18b20.h"
 #include "drivers/logging/logging.h"
 
 // --- 1-Wire ROM commands (address a device on the bus) ---

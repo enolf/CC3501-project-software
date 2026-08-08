@@ -5,7 +5,7 @@
 #include "hardware/adc.h"
 
 #include "board.h"
-#include "drivers/DS18B20/DS18B20.h"
+#include "drivers/ds18b20/ds18b20.h"
 #include "drivers/logging/logging.h"
 #include "peripherals/pi_link/pi_link.h"
 #include "peripherals/sensor_health/sensor_health.h"

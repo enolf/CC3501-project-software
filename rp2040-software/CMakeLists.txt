@@ -57,14 +57,14 @@ if(CrossCompiling)
         src/main.cpp
         src/drivers/logging/logging.cpp
         src/peripherals/events/events.cpp
-        src/drivers/DigitalSwitch/DigitalSwitch.cpp
+        src/drivers/digital_switch/digital_switch.cpp
         src/peripherals/switches/switches.cpp
         src/drivers/sd_card/sd_card.cpp
         src/drivers/sd_card/sd_diskio.cpp
         src/peripherals/sd_log/sd_log.cpp
         src/drivers/ili9341/ili9341.c
         src/peripherals/tft_display/tft_display.cpp
-        src/drivers/DS18B20/DS18B20.cpp
+        src/drivers/ds18b20/ds18b20.cpp
         src/peripherals/sensor_health/sensor_health.cpp
         src/drivers/mfrc522/mfrc522.cpp
         src/peripherals/access_control/access_control.cpp

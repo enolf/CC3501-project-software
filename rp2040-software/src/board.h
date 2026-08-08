@@ -1,8 +1,5 @@
 #pragma once
 
-#ifndef BOARD_H
-#define BOARD_H
-
 // board.h — ALL hardware connectivity lives here.
 //
 // This project targets a custom PCB, and the board may go through several
@@ -249,5 +246,3 @@
 // of one denomination, and divide reported grams by true grams to get the
 // correction factor.
 #define LOADCELL_COUNTS_PER_GRAM 3194.5
-
-#endif // BOARD_H

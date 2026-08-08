@@ -26,6 +26,20 @@ static inline void dc_data()
     gpio_put(DISPLAY_DC_PIN, 1);
 }
 
+// WHY THE SPI RETURN VALUES BELOW ARE NOT CHECKED, when every I2C call in
+// mfrc522.cpp is. The rule (CLAUDE.md section 7) exists because a bus
+// transaction can fail and report it; I2C genuinely can, since an absent or
+// wedged device NACKs its address and i2c_write_blocking() returns
+// PICO_ERROR_GENERIC. SPI has no acknowledgement in the protocol at all: the
+// controller clocks bits out regardless of whether anything is listening, and
+// spi_write_blocking() only returns once it has transferred every byte it was
+// given. Its return value is therefore always equal to the length passed in,
+// and a check against it could never be false.
+//
+// So the failure a check would be reaching for is not detectable here. It is
+// caught instead by reading the display back where the chip supports it, and
+// by the fact that a dead panel is immediately visible. Writing `if (n != 1)`
+// around each of these would look like diligence while testing nothing.
 static void ili9341_write_cmd(uint8_t cmd)
 {
     dc_command();
