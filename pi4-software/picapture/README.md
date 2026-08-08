@@ -258,8 +258,8 @@ the parsing and round-tripping are the parts most likely to be wrong and the
 parts least convenient to debug standing at a fridge.
 
 ```
-cmake --build build --target config_tests
-./build/config_tests
+cmake --build build --target picapture_tests
+./build/picapture_tests
 ```
 
 Runs on any laptop, with or without OpenCV installed.

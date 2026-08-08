@@ -27,7 +27,7 @@
 //
 // WHY TEXT RATHER THAN A PACKED BINARY STRUCT
 // -------------------------------------------
-// The brief asked for type, length and checksum; dashboard.md section 6 asked
+// The brief asked for type, length and checksum; documentation.md section 6 asked
 // for something readable in a plain serial monitor. This satisfies both. At
 // these data rates compactness is worth nothing, and being able to watch the
 // link in a terminal — or grep a captured log — is worth a great deal while

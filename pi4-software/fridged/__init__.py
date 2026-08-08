@@ -4,8 +4,8 @@ Reads the RP2040 over the serial link, answers the questions the board asks
 (inventory, payment links), writes everything to SQLite, and serves a small HTTP
 API. Grafana reads the database directly, read-only.
 
-Design and reasoning: ../../dashboard.md
-Order of work:        ../../dashboard-plan.md
+Design and reasoning: ../../documentation.md
+Order of work:        ../../documentation.md
 
     python -m fridged --port sim --db fridge.db        simulated board
     python -m fridged --port COM7 --db fridge.db       real board

@@ -262,7 +262,7 @@ bool poll_square_error()
 // --- Outbound notifications ---
 //
 // The simulator has nowhere to send these, so it prints them in the shape the
-// real frames will take (dashboard.md section 6). That makes the protocol
+// real frames will take (documentation.md section 6). That makes the protocol
 // visible and reviewable long before the transport exists, and means stage 12
 // is transcribing something already agreed rather than inventing it.
 

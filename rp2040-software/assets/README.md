@@ -26,10 +26,23 @@ That writes `../src/assets/idle_logo.c`. Re-run it whenever the artwork changes.
 
 ## Building with it
 
+**Edit the line in `rp2040-software/CMakeLists.txt`**, then reconfigure and
+rebuild:
+
+```cmake
+set(IDLE_LOGO ON)      # logo on the idle screen
+set(IDLE_LOGO OFF)     # black idle screen (the default)
 ```
-cmake -S . -B build -DIDLE_LOGO=ON      # logo on the idle screen
-cmake -S . -B build -DIDLE_LOGO=OFF     # black idle screen (the default)
-```
+
+> **`-DIDLE_LOGO=ON` on the command line does not work, and fails silently.**
+> That line is a plain `set()` rather than an `option()`, so it overwrites
+> anything passed with `-D` and the configure output still reports
+> `Idle screen: OFF`. This is deliberate — an `option()` writes the value into
+> CMake's cache on the first configure, and editing the file afterwards would
+> then appear to do nothing until the cache was deleted, which is a far more
+> confusing failure. The file is always the answer.
+>
+> Check the configure output for `-- Idle screen: ON` before flashing.
 
 The image is only compiled when `IDLE_LOGO=ON`, so a black-screen build carries
 none of the artwork. A 260 x 170 logo costs about 86 kB of flash, against

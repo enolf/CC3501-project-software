@@ -13,7 +13,7 @@ namespace switches {
 namespace {
 
 // Two instances of the same driver — which is exactly why DigitalSwitch is a
-// class rather than a set of file-scope statics (CLAUDE.md section 4).
+// class rather than a set of file-scope statics (documentation.md section 5.1).
 //
 // Both switches are Normally Open and wired to 3V3 through the switch, with the
 // 100 kOhm/100 nF network to ground defining the idle level, so both are
@@ -44,7 +44,7 @@ bool hold_fired = false;
 // Hence wasPressed() raises DoorClosed and wasReleased() raises DoorOpened.
 // That is not a mistake.
 //
-// The polarity is also deliberately fail-safe (dashboard.md section 4.1): a cut
+// The polarity is also deliberately fail-safe (documentation.md section 5.2): a cut
 // or disconnected wire lets the 100 kOhm pull the pin low, which reads as
 // "door open" — an obviously wrong state that gets investigated, rather than
 // "door closed" forever, which would silently hide the fault.

@@ -5,7 +5,7 @@ THIS IS THE ONE THING THAT FLOWS THE OTHER WAY
 Every other metric goes board -> Pi. Stock does not: the board asks
 (`CMD SCAN`) and the Pi answers (`EVT INV`), because the camera is the source
 of truth for what is on the shelf and the board has no way of knowing
-(dashboard.md section 6.3). The board then diffs two answers — one from when
+(documentation.md section 6). The board then diffs two answers — one from when
 the door opened, one from when it shut — and *that* is the basket.
 
 The consequence worth stating: `stock_snapshot` rows are written by `fridged`
@@ -16,7 +16,7 @@ WHY THE SHELF IS SELF-CORRECTING
 Counts are absolute, never differences. A restock needs no manual entry and no
 message of its own: the next scan simply reports more drinks, and the shelf is
 right again. A missed or corrupted frame costs one stale reading rather than
-permanently offsetting the count (dashboard.md section 2).
+permanently offsetting the count (documentation.md section 1).
 
 Two backends, one interface — the same shape as `pi_link` on the firmware side:
 
@@ -235,7 +235,7 @@ class SimCamera:
 
         No message announces this and none is needed — the next scan reports the
         higher counts. That is the whole argument for making the camera the
-        source of truth (dashboard.md section 2).
+        source of truth (documentation.md section 1).
         """
         total = sum(self.shelf.values())
         if total > self.capacity * len(DRINKS) * RESTOCK_AT:
@@ -250,8 +250,8 @@ class SimCamera:
     def scan(self):
         """Answer a `CMD SCAN`: absolute counts plus a confidence figure.
 
-        `conf` is the vision system's own reliability signal (dashboard.md
-        section 7). The real CV is the least trustworthy subsystem in the
+        `conf` is the vision system's own reliability signal
+        (documentation.md section 7.2). The real CV is the least trustworthy subsystem in the
         project, so the number exists to be graphed; here it wanders a little
         rather than sitting at 100, so a panel watching it has something to
         show.

@@ -5,7 +5,7 @@
 
 Same idea as `rp2040-software/tests/host/` on the firmware side: the parts that
 can be checked off-hardware are checked every time, so correctness is something
-re-verified rather than hoped for (CLAUDE.md section 8).
+re-verified rather than hoped for (documentation.md section 8).
 
 WHAT IS WORTH TESTING HERE
 --------------------------
@@ -1996,7 +1996,7 @@ def test_payments():
     # THE RACE THAT MATTERS. The board can give up while the Square API call is
     # still in flight, so the cancel names a link that does not exist yet. If
     # the cancellation is dropped, a live payable checkout is orphaned and
-    # nothing will ever kill it (plan.md stage 15.3).
+    # nothing will ever kill it (documentation.md section 7.5).
     service = PaymentService(FakeSquare())
     service.request_cancel(9)          # cancel FIRST
     time.sleep(0.05)
@@ -2062,7 +2062,7 @@ def expand_grafana(sql, now):
     Deliberately NOT supported, and the reason this function exists as a check
     rather than a convenience: `$__timeFilter()`, `$__timeFrom()` and
     `$__unixEpochFrom()` — all of which are common in Grafana SQL and none of
-    which this plugin implements. dashboard.md section 5.1 shipped an example
+    which this plugin implements. documentation.md section 7.3 shipped an example
     query using `$__timeFilter(ts)` that would never have run.
     """
     sql = sql.replace("${__from:date:seconds}", str(int(now - 86400)))

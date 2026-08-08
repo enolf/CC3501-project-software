@@ -7,8 +7,8 @@
 //
 // The RP2040 does not care what any of these readings mean. It emits raw ROM
 // codes and degrees; the Pi maps ROM code to zone name ("freezer", "top
-// fridge") on the way into the database. That is deliberate — dashboard.md
-// section 4.3: replacing a failed sensor is then editing one row on the Pi
+// fridge") on the way into the database. That is deliberate —
+// documentation.md section 7.3: replacing a failed sensor is then editing one row on the Pi
 // rather than rebuilding and reflashing firmware. The TFT never shows a
 // temperature at all, so zone names have no meaning on this side.
 //

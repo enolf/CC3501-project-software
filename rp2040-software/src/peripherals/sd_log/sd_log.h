@@ -6,7 +6,7 @@
 // read by pulling the card and opening it on a laptop.
 //
 // SCOPE: a demonstration that the board can write storage a PC can read. It is
-// not the event buffer described in plan.md Stage 14 — that needs the state
+// not the event buffer described in documentation.md section 5.4 — that needs the state
 // machine, so that writes can be confined to Idle.
 //
 // EVERY CALL HERE BLOCKS. A card doing an internal erase can hold the bus for

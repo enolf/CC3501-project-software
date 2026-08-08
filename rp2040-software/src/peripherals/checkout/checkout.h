@@ -4,10 +4,12 @@
 
 // The transaction state machine.
 //
-// Stage 2 defines only the vocabulary: the states and the timing constants.
-// run_checkout(), which owns every transition between them, arrives in stage 5.
-// See plan.md section 1 for the state diagram and section 4 for what each state
-// puts on the screen.
+// This header defines the vocabulary — the states, the outcomes and the fault
+// codes. run_checkout() in checkout.cpp owns every transition between them, and
+// is the only function in the system that changes state.
+//
+// See documentation.md section 5.6 for what each state is for, and section 1
+// for the transaction flow as a whole.
 //
 // The flow in one line:
 //   door opens -> customer takes drinks -> door closes -> the Pi recounts ->
@@ -22,7 +24,7 @@
 //
 // The door is what gates progress. Nothing advances toward payment until the
 // door is shut, because that is the only moment the camera can see a stable,
-// unobstructed shelf (dashboard.md section 4.2).
+// unobstructed shelf (documentation.md section 1).
 
 namespace checkout {
 

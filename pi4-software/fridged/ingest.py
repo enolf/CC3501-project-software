@@ -4,7 +4,7 @@ Knows what every message *means*, and no SQL: it calls named methods on `Store`.
 Knows nothing about transports either. So the handlers below run identically
 against a real board and a simulated one, which is the whole reason the
 simulation happens at the wire rather than at the database
-(dashboard-plan.md section 0).
+(documentation.md section 7.3).
 
 STAGE D1 HANDLES: BOOT, HB, and recording the raw stream.
 Anything else is counted as unhandled and left for the stage that owns it — so
@@ -209,7 +209,7 @@ class Ingest:
 
         Stored under the ROM code, never under a zone name — see the
         `temperature` view in store.py for why that distinction matters. The
-        board deliberately knows nothing about zones (dashboard.md section 4.3):
+        board deliberately knows nothing about zones (documentation.md section 7.3):
         it reports which physical sensor said what, and where that sensor is
         installed is a fact about maintenance, resolved here.
         """
@@ -369,7 +369,7 @@ class Ingest:
         """`EVT DOOR state=open|closed`.
 
         The door is on the critical path for the whole transaction flow, not
-        just a graph annotation (dashboard.md section 4.2) — it is what tells
+        just a graph annotation (documentation.md section 1) — it is what tells
         the camera when the scene is stable enough to count. Here it is only
         recorded; stage D6 uses it to trigger a scan.
         """
@@ -726,7 +726,7 @@ class Ingest:
         on a timer.
 
         These go into `measurement` alongside the fridge's own metrics rather
-        than into a table of their own — dashboard.md section 5.1 exists so that
+        than into a table of their own — documentation.md section 7.3 exists so that
         adding a metric is never a schema change, and the health row is exactly
         the case it was meant for.
         """

@@ -44,8 +44,11 @@ plan.md
 # =============================================================================
 # Build output
 # =============================================================================
+# The names README.md's install steps use, plus anything else matching, since a
+# second build tree (a different Pi link backend, say) is a normal thing to want
+# and a build directory is never worth committing.
 build/
-build-host/
+build-*/
 build-baseline.txt
 
 # =============================================================================

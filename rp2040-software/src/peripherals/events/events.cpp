@@ -1,5 +1,5 @@
 // Event queue. State is file-scope, following the course convention for a
-// one-of-a-kind module (CLAUDE.md section 4): there is exactly one event queue
+// one-of-a-kind module (documentation.md section 5.1): there is exactly one event queue
 // in the system, so there is nothing to gain from making it a class.
 
 #include "peripherals/events/events.h"

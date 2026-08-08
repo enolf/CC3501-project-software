@@ -90,7 +90,7 @@ that only ever wanted the simulator.
 
 `--square` is independent of `--port`, so a **real payment against a simulated
 board** works: the board cannot tell who answers `CMD SQUARE_LINK`. That is the
-hybrid test in plan.md stage 15.5.
+hybrid test in documentation.md section 7.5.
 
 > Square is still on the **sandbox** (`SANDBOX = True` in `square.py`). Moving to
 > production needs three changes, not one: that flag, plus a production token and
@@ -174,7 +174,7 @@ the home directory's traversal permissions, whose default mode has changed
 between Raspberry Pi OS releases.
 
 Grafana is still read-only in the sense that matters: the datasource only ever
-runs `SELECT`s, and `fridged` remains the single writer (dashboard.md §3.1).
+runs `SELECT`s, and `fridged` remains the single writer (documentation.md §7.3).
 
 `fridged` sets `umask 002` itself so the files it creates are group-writable —
 otherwise the `-shm` comes out mode 644 and every Grafana query fails with
@@ -184,7 +184,7 @@ file-mode one.
 ### The temperature tiles start empty, and that is correct
 
 The board reports ROM codes and knows nothing about which shelf a sensor is on
-(dashboard.md §4.3), so until the sensors are named there is no `freezer` for the
+(documentation.md §7.3), so until the sensors are named there is no `freezer` for the
 tile to find.
 
 The table at the bottom of the dashboard shows every sensor with a live reading
@@ -200,8 +200,12 @@ Labels must be exactly **`freezer`**, **`fridge_top`**, **`fridge_bottom`**.
 
 Naming a sensor relabels its **entire history**, not just readings from that
 moment on — readings are stored under the ROM code and the name is joined on at
-read time by the `temperature` view. The browser endpoint that does this without
-SQL arrives at stage D4.
+read time by the `temperature` view. That is what makes the "warm one and see
+which row moves" procedure above work at all.
+
+There is no browser page for this: naming a sensor is a rare, deliberate act,
+and the alternative would be an HTTP endpoint with write access to the database
+for the sake of three `UPDATE`s in the fridge's lifetime.
 
 ---
 

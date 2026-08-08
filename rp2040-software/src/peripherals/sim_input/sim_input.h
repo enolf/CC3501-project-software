@@ -2,9 +2,9 @@
 
 // The one and only reader of the debug serial input.
 //
-// Several modules want to be driven from the keyboard while the hardware they
-// stand in for does not exist yet — the Pi link simulator, the fake coin
-// events, the fake door. If each called getchar_timeout_us() itself, they would
+// Several modules want to be driven from the keyboard so the system can be
+// exercised without the hardware they stand in for — the Pi link simulator, the
+// fake coin events, the fake door. If each called getchar_timeout_us() itself, they would
 // race for the same character stream and keystrokes would vanish into whichever
 // module happened to be polled first. So exactly one module reads stdin, and
 // everything else is handed the result.

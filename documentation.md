@@ -1,186 +1,205 @@
-# CC3501 Design Project — Software Documentation
+# CC3501 Smart Fridge — Software Documentation
 
 Closed-loop vending system for the Cairns Engineering Society fridge. Product
-selection is recognised visually, payment is taken by cash or card, and stock
-and faults are tracked for a dashboard.
+selection is recognised visually, payment is taken by cash or card, and stock,
+temperature and faults are recorded for a dashboard.
 
 **Authors:** Alister Maltby, Damien Turner, Nils Eisen
 **Repository:** `github.com/enolf/CC3501-project-software`
-**This document reflects the state of the code as of 29 July 2026.** It is a
-living document — update it as subsystems land.
+
+This is the technical reference: how each part works and, more importantly, why
+it works that way. For getting it installed and running, start with
+[README.md](README.md).
+
+**State of the code as of 8 August 2026.** Every subsystem below is written and
+building; §8.2 records which have been proven on the fridge and which have not.
+
+---
+
+## Contents
+
+1. [System overview](#1-system-overview)
+2. [Repository layout](#2-repository-layout)
+3. [Building, and the switches that matter](#3-building-and-the-switches-that-matter)
+4. [Secrets, and what must never be committed](#4-secrets-and-what-must-never-be-committed)
+5. [RP2040 software](#5-rp2040-software)
+6. [The RP2040 ↔ Pi link](#6-the-rp2040--pi-link)
+7. [Pi4 software](#7-pi4-software)
+8. [Testing](#8-testing)
+9. [Known issues](#9-known-issues)
+10. [Decisions, settled](#10-decisions-settled)
 
 ---
 
 ## 1. System overview
 
-Two computers share the work:
+Two computers share the work.
 
 | | RP2040 (custom PCB) | Raspberry Pi 4 |
 |---|---|---|
-| **Role** | Sensing, user interface, payment | Vision, internet |
-| **Language** | C++17 / C11, Pico SDK 2.2.0 | C++20 (OpenCV), Python 3 |
-| **Handles** | TFT + touch, RFID, temperature, load cell / coins | Camera, can recognition, Square API |
+| **Role** | Sensing, user interface, payment terminal | Vision, internet, storage |
+| **Language** | C++17 / C11, Pico SDK 2.2.0 | Python 3, C++17 (OpenCV) |
+| **Owns** | TFT + touch, RFID, temperature, coin scale, door switch, SD log | Camera, can recognition, Square API, SQLite, Grafana |
 
-### Intended transaction flow
+The board is the thing that decides. The Pi answers questions and records
+answers; it never drives the transaction.
+
+### The transaction, end to end
 
 ```
-IDLE
-  -> Pi4 recognises cans removed from the fridge
-  -> RP2040 shows the total owed and the payment choice on the TFT
-  -> Customer picks cash or card on the touchscreen
-       |
-       +-- CARD: Pi4 asks Square for a payment link, QR shown on the TFT,
-       |         Pi4 polls until the order is paid
-       |
-       +-- CASH: customer drops $1/$2 coins into the money box; the load
-                 cell works out what was added; TFT shows a running total
-  -> THANK YOU screen
-  -> IDLE
+IDLE  (black screen, or the society logo)
+  |
+  |  door opens, or an approved card is tapped (-> GREETING, by name)
+  v
+SELECTING          the Pi is asked to scan. It answers with the shelf as it
+  |                was BEFORE the door moved — see §7.1
+  |  door closes
+  v
+RECOUNT            the Pi waits for the picture to hold still, then counts
+  |                again. basket = baseline - recount
+  |
+  +-- nothing taken ------------------------------> IDLE
+  +-- more on the shelf than before (a restock) --> IDLE
+  |
+  v
+PAYMENT SELECT     the basket and the total, with CASH and ONLINE targets
+  |
+  +-- CASH    -> coins land on the load cell, $1 and $2 told apart by mass,
+  |              screen counts up to the total
+  |
+  +-- ONLINE  -> the Pi asks Square for a payment link, the board renders it
+  |              as a QR code and waits for Square to confirm
+  v
+THANK YOU  ->  IDLE
 
-  (timeout on either path -> log the drink as stolen -> IDLE)
+  timeout on either path -> ABANDONED: the drink is recorded as stolen, and
+  the system returns to IDLE. Theft is logged, not prevented — there is no lock.
 ```
 
-### What is actually implemented
-
-**Individually working subsystems, none of them yet connected to each other.**
-Each is currently exercised by its own standalone test program. See
-[§6 Integration status](#6-integration-status) for the gap list — it is the
-most important section in this document.
-
----
+The door is what gates progress: nothing advances toward payment until it is
+shut, because that is the only moment the camera can see a stable, unobstructed
+shelf.
 
 ## 2. Repository layout
 
 ```
 CC3501-project-software/
-├── documentation.md            <- this file
-├── README.md                   project blurb
-├── .gitmodules                 lvgl + pico-scale submodule definitions
+├── README.md                     what it is, and how to install it
+├── documentation.md              this file
+├── .gitmodules                   lvgl + pico-scale
 │
 ├── rp2040-software/
-│   ├── CMakeLists.txt          firmware build (+ a legacy native branch)
-│   ├── CLAUDE.md               coding standards for team-written code
+│   ├── CMakeLists.txt            firmware build and all its switches
 │   ├── src/
-│   │   ├── board.h             ALL board wiring & calibration
-│   │   ├── main.cpp            entry point — a set of switchable test blocks
-│   │   ├── drivers/            hardware adapters (one per device)
-│   │   └── peripherals/        behaviour / application logic
+│   │   ├── board.h               ALL wiring and calibration
+│   │   ├── timings.h             every interval that shapes how it feels
+│   │   ├── sim_config.h          which keyboard stand-ins are compiled
+│   │   ├── main.cpp              the superloop, and nothing else
+│   │   ├── drivers/              hardware adapters, one per device
+│   │   └── peripherals/          behaviour and application logic
 │   ├── lib/
-│   │   ├── lv_conf.h           LVGL configuration
-│   │   ├── lvgl/               submodule, v9.2
-│   │   └── pico-scale/         submodule (has its OWN nested submodule)
-│   └── tests/mocks/            LEGACY — see §4.7
+│   │   ├── lv_conf.h             LVGL configuration
+│   │   ├── lvgl/                 SUBMODULE, release/v9.2
+│   │   ├── pico-scale/           SUBMODULE (has a nested submodule)
+│   │   └── fatfs/                vendored ChaN FatFs R0.16
+│   ├── tests/host/               off-hardware unit tests (firmware_tests)
+│   └── docs/bringup/             standalone per-device bring-up programs
 │
 └── pi4-software/
-    ├── picapture/              OpenCV can recognition
-    │   ├── CMakeLists.txt
-    │   ├── src/main.cpp        the pipeline: capture, classify, count, print
-    │   ├── src/vision_config.h  EVERY threshold. No bare numbers in main.cpp
-    │   ├── src/vision_config.cpp  load/save picapture.conf; no OpenCV
-    │   ├── tests/              off-camera tests for the tuning file
-    │   └── cans_test/          sample images for offline testing
-    └── online-payment/
-        └── square.py           Square payment link + QR + polling
+    ├── fridged/                  the service
+    │   ├── __main__.py           argument parsing and the service loop
+    │   ├── link.py               framed serial transport, self-reopening
+    │   ├── ingest.py             frames -> meaning. No SQL.
+    │   ├── store.py              the schema and every write. No protocol.
+    │   ├── camera.py             what answers CMD SCAN
+    │   ├── payments.py           Square, on a worker thread
+    │   ├── config.py             every path, interval and host quirk
+    │   └── seed.py               backfill plausible history for the dashboard
+    ├── picapture/                OpenCV can recognition (C++)
+    ├── grafana/                  dashboard JSON + provisioning
+    ├── deploy/                   systemd units, install and backup scripts
+    ├── tools/                    protocol.py, fake_board.py, fake_pi.py
+    └── tests/                    test_fridged.py
 ```
 
----
+### The rule that shapes all of it
 
-## 3. Building and running
+`ingest.py` knows the wire protocol and no SQL. `store.py` knows SQL and nothing
+about the wire. That line is what makes a protocol change one file and a schema
+change one other file. The firmware has the same split: `drivers/` know
+hardware, `peripherals/` know behaviour, and `main.cpp` knows only sequencing.
 
-### 3.1 Cloning — read this first
+## 3. Building, and the switches that matter
 
-The repository uses submodules, and `pico-scale` has a **nested** submodule of
-its own. A plain `git clone` leaves you with empty directories and a build that
-fails on missing `hx711.h`.
+[README.md](README.md) has the step-by-step install. This section covers what
+the build options do.
 
-```bash
-git clone --recurse-submodules https://github.com/enolf/CC3501-project-software.git
+### 3.1 Submodules
+
+`lvgl` and `pico-scale` are submodules, and `pico-scale` carries a nested one
+(`hx711-pico-c`). A plain `git clone` leaves them empty and the firmware fails
+on a missing `lvgl.h` or `hx711.h`. Clone with `--recurse-submodules`, or run
+`git submodule update --init --recursive` afterwards, and confirm with
+`git submodule status --recursive` that all three appear.
+
+> **Historical note, because the symptom was confusing.** `lvgl` was declared in
+> `.gitmodules` but its 2,775 files were also committed directly to this
+> repository, so `--init` populated nothing and the declaration was simply
+> untrue. Both its gitdir pointer and its `core.worktree` were left over from
+> before the repository was split into `rp2040-software/` and `pi4-software/`
+> and pointed one level too high. Fixed by verifying the vendored tree was
+> byte-identical to upstream `release/v9.2` and then converting it to a real
+> gitlink.
+
+### 3.2 Firmware build switches
+
+| Switch | Default | Effect |
+|---|---|---|
+| `PI_LINK_BACKEND` | `sim` | Which implementation of `pi_link.h` is compiled. `sim` fabricates the camera and Square from the keyboard; `serial` is the real transport. Only one is built, so the other costs no flash. |
+| `SIM_ALL` (and `SIM_DOOR`, `SIM_NFC`, `SIM_COINS`, `SIM_TOUCH`) | `ON` | Whether keyboard stand-ins exist alongside the real hardware. Real hardware is *always* compiled and always attempted; these only add the fake inputs. |
+| `IDLE_LOGO` | `OFF` | Black idle screen, or the society logo. A plain `set()` rather than `option()` so editing the file always wins over a stale cache. |
+
+**A build that goes in the fridge must be `-DSIM_ALL=OFF`.** With the stand-ins
+compiled in, anyone who can reach the USB socket can fake a paid transaction by
+typing a character. The firmware says which kind of build it is in its banner,
+at `WARNING` level, so the two can never be confused in a log.
+
+### 3.3 Footprint
+
+Measured on the `sim` backend, `-DSIM_ALL=ON`, `IDLE_LOGO=OFF`:
+
+```
+   text     data      bss
+ 597776        0   111868
 ```
 
-Already cloned without them:
+That is roughly **584 KB of the RP2040's 2 MB flash** and **109 KB of its
+264 KB RAM**. The great majority of both is LVGL and its buffers.
 
-```bash
-git submodule update --init --recursive
-```
+### 3.4 Warnings
 
-To make future pulls keep submodules in step (run once per machine — git will
-not let the repository configure this for you):
+`-Wall -Wextra` is applied to *this project's* sources only, listed by name in
+`PROJECT_SOURCES`. It is applied per source file rather than with
+`target_compile_options`, which looks like the obvious choice but is wrong here:
+`pico-scale` is an INTERFACE library, so its sources compile into the `labs`
+target and would inherit the flags, producing 67 warnings in vendored code this
+project does not police.
 
-```bash
-git config --global submodule.recurse true
-```
+**The baseline is 2 warnings, both third-party**, from
+`hx711_multi.h` reporting `static` functions declared but never defined,
+surfaced through `mass_sensor.cpp`. GCC raises `-Wunused-function` at end of
+translation unit rather than at the header, so `-isystem` does not suppress it.
+Silencing it would need `-Wno-unused-function` on that file, which would also
+hide genuinely unused statics in our half of it.
 
-Verify with `git submodule status --recursive`; you should see two lines, one
-for `lvgl` and one for `pico-scale`, plus the nested `hx711-pico-c`.
+**"No new warnings" means this build stays at 2, with 0 from `src/`.**
 
-### 3.2 RP2040 firmware
+## 4. Secrets, and what must never be committed
 
-**Via VS Code (normal route):** install the *Raspberry Pi Pico* extension. It
-supplies the SDK, the ARM toolchain, CMake and Ninja, and adds the build/flash
-buttons to the status bar. `CMakeLists.txt` auto-detects the cross-compiler.
-
-**From the command line (verified working):**
-
-```bash
-cd rp2040-software
-export PICO_SDK_PATH=~/.pico-sdk/sdk/2.2.0
-export PICO_TOOLCHAIN_PATH=~/.pico-sdk/toolchain/14_2_Rel1
-cmake -S . -B build -G Ninja \
-  -DCMAKE_MAKE_PROGRAM=~/.pico-sdk/ninja/v1.12.1/ninja.exe \
-  -DPICO_BOARD=pico \
-  -DCMAKE_C_COMPILER=$PICO_TOOLCHAIN_PATH/bin/arm-none-eabi-gcc.exe \
-  -DCMAKE_CXX_COMPILER=$PICO_TOOLCHAIN_PATH/bin/arm-none-eabi-g++.exe
-ninja -C build
-```
-
-Output: `build/labs.uf2`. Flash by holding BOOTSEL while plugging in the board
-and copying the file across, or use the extension's Run button.
-
-Current footprint: **108 KB flash, 4.9 KB RAM (bss)** — comfortable on the
-RP2040's 2 MB / 264 KB.
-
-**Serial output is on USB CDC** (`pico_enable_stdio_usb`), so the same cable
-used to flash the board carries the debug console. To move it back to the UART
-header, swap the two `pico_enable_stdio_*` lines in `CMakeLists.txt`.
-
-### 3.3 Pi4 — camera
-
-On the Raspberry Pi:
-
-```bash
-sudo apt install libopencv-dev gstreamer1.0-tools \
-                 gstreamer1.0-plugins-base-apps gstreamer1.0-libcamera
-cd pi4-software/picapture && mkdir build && cd build
-cmake .. && make && ./PiCapture
-```
-
-Requires **OpenCV 4.x** — OpenCV 5.0.0 lacks the `moments` class this code
-uses. Needs a real display; VNC or X-forwarding is too slow for the preview
-windows. A direct HDMI output is recommended.
-
-### 3.4 Pi4 — payments
-
-```bash
-pip install requests qrcode[pil]
-cd pi4-software/online-payment && python square.py
-```
-
-Needs a `tokens.py` alongside `square.py`, which is **deliberately gitignored**
-and therefore absent from a fresh clone. Create it with:
-
-```python
-SQUARE_ACCESS_TOKEN = "<your sandbox token>"
-LOCATION_ID         = "<your sandbox location id>"
-```
-
-Currently points at `connect.squareupsandbox.com` — sandbox, not live money.
-
-### 3.5 Secrets and what must never be committed
-
-**The rule.** Credentials live in `tokens.py`, which every developer creates by
-hand and nobody commits. Nothing else in the repository may contain a token, a
-key, or a password — not in a comment, not in a test fixture, not in a commit
-message.
+**The rule.** Credentials and personal data live in files every developer
+creates by hand and nobody commits. Nothing else in the repository may contain a
+token, a key, a password, or a card UID — not in a comment, not in a test
+fixture, not in a commit message.
 
 | Pattern | Ignored in | Why |
 |---|---|---|
@@ -188,17 +207,16 @@ message.
 | `__pycache__/`, `*.py[cod]` | root + `pi4-software/` | **Compiled bytecode contains the token — see below** |
 | `credentials.json`, `*.pem`, `*.key` | root | Standard credential formats, ignored pre-emptively |
 | `.env`, `.env.*` | root | Ditto |
-| `access_list.h` | `rp2040-software/` | Card UIDs paired with people's names — see below |
+| `access_list.h` | `rp2040-software/` | Card UIDs paired with people's names |
 
 Both `tokens.py` rules are written twice, once as a path and once as a bare
-name, so a copy left in `tools/` or a scratch folder is caught as well. A
-credential that leaks because it sat in an unexpected directory is no less
-leaked. `access_list.h` is written twice for the same reason.
+name, so a copy left in a scratch folder is caught as well. `access_list.h` is
+written twice for the same reason.
 
-#### `access_list.h` — the approved card list
+### 4.1 `access_list.h` — the approved card list
 
 `src/peripherals/access_control/access_list.h` holds the RFID UIDs the fridge
-will unlock for, each next to the name of the person who carries that card.
+greets by name. README.md §2 has the file to create.
 
 **Why this is treated as a secret, and why it is worse than a token.** A UID is
 not a credential you can change. It is burned into the card at manufacture, so
@@ -206,43 +224,16 @@ there is no rotation step — the only remedy for publishing one is issuing that
 person a new card. Paired with a name it is also personal data about somebody
 who did not choose to be in a public repository.
 
-**It does not arrive with a clone**, so a fresh checkout will not build until you
-write it. That is deliberate: a build that failed loudly is better than one that
-silently shipped somebody else's placeholder UIDs. The error names this section.
-
-Create `rp2040-software/src/peripherals/access_control/access_list.h`:
-
-```c
-#pragma once
-
-// Card UIDs, paired with names. GITIGNORED - see documentation.md section 3.5.
-//
-// uid_len is 4 for single-size UIDs (Mifare Classic) or 7 for double-size
-// (NTAG, Mifare Ultralight, DESFire). Only the first uid_len bytes are
-// compared, so a 4-byte entry can leave the remaining slots at zero.
-
-static const ApprovedUser approved_users[] = {
-    { "Jane Smith", 7, { 0x04, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 } },
-    { "Spare Fob",  4, { 0xDE, 0xAD, 0xBE, 0xEF } },
-};
-```
-
-**To enrol somebody**, put their card on the reader and read the serial line:
-
-```
-Card detected, UID: AA BB CC DD EE FF 00
-```
-
-Copy those bytes into a new row, set `uid_len` to how many there are, give them
-a name, and rebuild. To revoke access, delete their row. Nothing else changes —
-`access_lookup()` sizes itself from the table, and an empty table is a valid
-state (a fridge nobody is enrolled on yet).
+**It does not arrive with a clone**, so a fresh checkout will not build until
+you write it. That is deliberate, and the `#error` names this section. A build
+that failed loudly is better than one that silently shipped somebody else's
+placeholder UIDs.
 
 The type it fills in, `ApprovedUser`, is declared in `access_control.cpp`
 immediately above the `#include`. That ordering is why the include sits in the
 middle of the file rather than at the top.
 
-#### The bytecode trap — a real incident, not a hypothetical
+### 4.2 The bytecode trap — a real incident, not a hypothetical
 
 `tokens.py` was correctly gitignored from the start. **The token still reached a
 public GitHub repository**, inside
@@ -251,16 +242,16 @@ public GitHub repository**, inside
 Importing a module makes CPython write a `.pyc` next to it, and **a `.pyc`
 embeds the string constants of the module it compiled**. So the moment
 `square.py` ran `import tokens`, a second file containing
-`SQUARE_ACCESS_TOKEN` in plain text appeared — one that the `tokens.py` rule
-did not match. `strings` recovers both the token and the location id from it
-without any tooling. The `.pyc` also embedded the absolute source path,
-exposing the build machine's username.
+`SQUARE_ACCESS_TOKEN` in plain text appeared — one the `tokens.py` rule did not
+match. `strings` recovers both the token and the location id from it without any
+tooling. The `.pyc` also embedded the absolute source path, exposing the build
+machine's username.
 
 The lesson generalises past Python: **ignoring a secret file is not the same as
-ignoring its derivatives.** Compiled output, caches, editor backups (`*.py~`),
-logs and core dumps can all carry a copy of something the original rule
-protected. When adding a secret to `.gitignore`, ask what else on disk will
-contain the same bytes.
+ignoring its derivatives.** Compiled output, caches, editor backups, logs and
+core dumps can all carry a copy of something the original rule protected. When
+adding a secret to `.gitignore`, ask what else on disk will contain the same
+bytes.
 
 **Checking before you commit** — this catches the whole class, not just Python:
 
@@ -276,19 +267,14 @@ Both should print nothing.
 
 **If a credential does get committed, rotate it.** Removing the file in a later
 commit does not help — the old commit still contains it, and on a public repo it
-must be assumed to have been scraped within minutes. Rotation at the provider is
-the only fix that actually works; history rewriting is optional cleanup
-afterwards, and on a shared branch it needs everyone to re-clone.
+must be assumed scraped within minutes. Rotation at the provider is the only fix
+that works; history rewriting is optional cleanup afterwards.
 
----
+## 5. RP2040 software
 
-## 4. RP2040 software
+### 5.1 Conventions
 
-### 4.1 Conventions
-
-Set out in `rp2040-software/CLAUDE.md`. The rules apply to team-written code
-only; the vendored submodules (`lvgl`, `pico-scale`, the Pico SDK) are exempt.
-The three that shape the layout:
+Three rules shape the layout:
 
 - **All board wiring lives in `board.h`.** Pin numbers, bus addresses,
   calibration constants. A board revision should be a header edit, nothing more.
@@ -296,128 +282,169 @@ The three that shape the layout:
   calls driver functions and never touches a register.
 - **`main` stays thin** — top-level sequencing only.
 
-Two places currently break the first rule; see §7.
+These apply to code this team wrote. The vendored libraries (`lvgl`,
+`pico-scale`, `fatfs`, the Pico SDK) are exempt: they are dependencies, not our
+source.
 
-### 4.2 `board.h`
+### 5.2 `board.h`
 
-Single source of truth for wiring. Covers:
+Single source of truth for wiring. Set `ACTIVE_DISPLAY_ORIENTATION` and the
+resolution, MADCTL value and touch axis flags all follow from it — a pattern
+worth keeping.
 
 | Group | Contents |
 |---|---|
-| DS18B20 | Bus pin (GP7), parasite-power mode, strong-pull-up FET pin (GP8) and polarity |
-| RFID | I2C instance, SDA/SCL (GP4/GP5), 100 kHz, module address `0x2C` |
-| TFT | Orientation selector that cascades resolution, MADCTL value and touch axis flags; raw touch calibration bounds; calibration mode flag |
-| HX711 | Data/clock (GP10/GP11), sample rate strap, counts-per-gram calibration |
+| DS18B20 | Bus pin (GP7), power mode, strong-pull-up FET pin (GP8) and polarity |
+| RFID | `i2c1` on GP2/GP3, 100 kHz, module address `0x2C` |
+| Switches | Door limit switch (GP6), user button (GP15), both active-high |
+| TFT | `spi0` on GP16–GP22, touch CS/IRQ on GP24/GP25, two bus rates |
+| microSD | Shares the display's SPI bus; only CS (GP23) is its own |
+| HX711 | Data/clock (GP10/GP11), rate strap, counts-per-gram calibration |
 
-The orientation block is a nice pattern worth keeping: set
-`ACTIVE_DISPLAY_ORIENTATION` and every dependent constant follows from it.
+**One nuance worth knowing about the SPI bus.** The display, the touch
+controller and the SD card all share SCK/MOSI/MISO and run at very different
+clock rates, so every device has to leave the other two deselected and put the
+bus rate back where it found it. A card that fails to release MISO when
+deselected will corrupt touch readings — suspect that first if touch misbehaves
+after fitting one.
 
-### 4.3 Drivers
+### 5.3 Drivers
 
-| Driver | Lines | Device | Status |
-|---|---:|---|---|
-| `DS18B20/` | 684 | 1-Wire temperature sensors | Complete |
-| `mfrc522/` | 420 | PiicoDev RFID reader (I2C) | Complete |
-| `ili9341/` | 242 | TFT + XPT2046 touch (SPI) | Complete |
-| `mass_sensor/` | 250 | HX711 load cell amplifier | Complete |
-| `logging/` | 60 | Severity-filtered serial log | Complete |
+| Driver | Lines | Device |
+|---|---:|---|
+| `ds18b20/` | 684 | 1-Wire temperature sensors |
+| `sd_card/` | 624 | microSD over SPI, plus the FatFs disk layer |
+| `mfrc522/` | 420 | PiicoDev RFID reader (I2C) |
+| `mass_sensor/` | 252 | HX711 load cell amplifier |
+| `ili9341/` | 230 | TFT + XPT2046 touch (SPI) |
+| `digital_switch/` | 179 | Debounced GPIO switch |
+| `logging/` | 116 | Severity-filtered serial log |
 
-**`DS18B20`** is the most thorough piece of code in the repository. Full 1-Wire
-ROM search so multiple sensors share one pin, CRC-8 verification on both ROM
-codes and scratchpad reads, and both power modes. The parasite-power path
-interlocks the data pin against the strong-pull-up FET so the two can never
-fight — without that, driving the data line low while the FET is on shorts 3V3
-to ground through the RP2040 pin. Supports blocking and non-blocking conversion.
+**`ds18b20`** is the most thorough piece of code here. Full 1-Wire ROM search so
+multiple sensors share one pin, CRC-8 verification on both ROM codes and
+scratchpad reads, and both power modes. The parasite-power path interlocks the
+data pin against the strong-pull-up FET so the two can never fight — without
+that, driving the data line low while the FET is on shorts 3V3 to ground through
+the RP2040 pin.
 
 **`mfrc522`** implements the ISO 14443A stack: REQA, anticollision across
 cascade levels, and both 4-byte and 7-byte UIDs. Verifies `VersionReg` at init
-before configuring anything. Registers and bit masks are all named with
-datasheet references.
+before configuring anything. **Every I2C return value is checked** and a failure
+is logged once rather than on every retry.
 
-**`ili9341` / `xpt2046`** share one SPI bus at two different clock speeds
-(30 MHz display, 2 MHz touch), switching baud rate around each touch read. The
-touch controller needs a dummy transaction at init to clear the RP2040's RX
-FIFO, otherwise it locks up — a hardware quirk that cost real debugging time and
-is commented in place.
+**`ili9341` / `xpt2046`** share one SPI bus at two clock speeds (30 MHz display,
+2 MHz touch), switching baud rate around each touch read. The touch controller
+needs a dummy transaction at init to clear the RP2040's RX FIFO, otherwise it
+locks up — a hardware quirk that cost real debugging time and is commented in
+place. The SPI writes deliberately do not check their return values, and the
+reason is stated in the file: SPI has no acknowledgement, so `spi_write_blocking`
+always returns the length it was given and a check could never be false.
 
-**`mass_sensor`** wraps the HX711 for coin detection. Two deliberate choices:
-reads are **non-blocking** (`poll()` returns false until a conversion is ready,
-so the caller is never stalled for 100 ms), and readings are **relative to a
-baseline** captured by `tare()` rather than absolute. The latter means the money
-box's own weight and any coins already in it drop out of the arithmetic, and the
-stored zero offset never has to be correct. `init()` proves the chip is present
-by demanding an actual conversion within a timeout — a missing HX711 never pulls
-DOUT low, so no data is ever clocked out — and rejects a saturated first reading,
-which indicates an open load cell bridge.
+**`mass_sensor`** wraps the HX711 for coin detection. Reads are **non-blocking**
+(`poll()` returns false until a conversion is ready, so the caller is never
+stalled for 100 ms), and readings are **relative to a baseline** captured by
+`tare()` rather than absolute — so the money box's own weight and any coins
+already in it drop out of the arithmetic. `init()` proves the chip is present by
+demanding an actual conversion within a timeout, and rejects a saturated first
+reading, which indicates an open load cell bridge.
 
-**`logging`** prints `[seconds.millis Level]: message` with a global threshold.
-Takes a plain string, so formatted output needs `snprintf` into a buffer first.
+### 5.4 Peripherals
 
-### 4.4 Peripherals
+| Peripheral | Lines | Purpose |
+|---|---:|---|
+| `pi_link/` | 1535 | The link to the Pi: codec, plus a `sim` and a `serial` backend |
+| `checkout/` | 1368 | The transaction state machine |
+| `tft_display/` | 855 | LVGL port, touch input, and every screen |
+| `sd_log/` | 403 | RAM-buffered log, dumped to the card on demand |
+| `coin_acceptor/` | 309 | Identify $1/$2 coins by mass |
+| `events/` | 290 | The single-producer event queue |
+| `basket/` | 278 | Inventory diffing and the cash payment gate |
+| `scale_task/` | 247 | Drives `mass_sensor`, raises coin events |
+| `temperature_task/` | 243 | Samples the sensors and the RP2040 die |
+| `sensor_health/` | 225 | Tracks sensors going missing or failing |
+| `nfc_task/` | 221 | Polls the reader, raises card events |
+| `switches/` | 157 | Door and button, debounced, raises events |
+| `access_control/` | 120 | UID → name lookup |
+| `catalogue/` | 111 | The drink list and the prices, header-only |
+| `sim_input/` | 79 | Reads the debug keyboard |
 
-| Peripheral | Lines | Purpose | Status |
-|---|---:|---|---|
-| `coin_acceptor/` | 283 | Identify $1/$2 coins by mass | Complete, tested |
-| `sensor_health/` | 225 | Track sensors going missing / failing | Complete |
-| `access_control/` | 72 | UID → name whitelist | Works; list is hardcoded |
-| `tft_display/` | 232 | LVGL port + touch input | Port done, UI is a demo |
-| `load_cell/` | 316 | Original HX711 example | Superseded, see §7 |
-| `camera_side/` | 95 | Inventory + prices | Skeleton only |
+**`sensor_health`** tracks sensors by ROM code rather than by count, so it
+reports *which* sensor stopped answering rather than just that the number
+changed. It takes arrays of ROM codes rather than a driver object, so it can be
+exercised with synthetic data off hardware.
 
-**`sensor_health`** tracks sensors by ROM code rather than by count, so it can
-report *which* sensor stopped answering rather than just that the number
-changed. Tolerates a few consecutive read failures before declaring a fault,
-and rate-limits reminder logs. Takes arrays of ROM codes rather than a driver
-object, so it can be exercised with synthetic data off hardware.
+**`catalogue`** owns the drink list and the prices, and `basket` owns the counts
+and the diffing. Keeping those separate is what guarantees there is exactly one
+definition of what a drink costs.
 
-**`tft_display`** is a working LVGL 9.2 port: partial-render framebuffer, flush
-callback into the ILI9341 window, a 5 ms repeating timer for LVGL's tick, and a
-touch input device with rotation/inversion handled from `board.h`. What is
-missing is any actual UI — the public API is `init()`, `write_text()`, `run()`
-and `create_dual_switches()`, the last being a two-toggle demo that only prints.
+### 5.5 `main.cpp` — the superloop
 
-#### Planned UI — payment terminal only
+`main.cpp` holds top-level control flow and nothing else: bring the hardware up,
+then call each task once per pass, forever.
 
-**Scope is deliberately narrow: the TFT is the payment terminal and nothing
-else.** It displays no temperatures, no stock, no diagnostics — all of that
-belongs on the dashboard (see [dashboard.md](dashboard.md)). Five screens:
+```
+run_debug_input()          keyboard stand-ins
+switches::run_switches()   door and button
+scale::run_scale()         coin events from the load cell
+nfc::run_nfc()             card events, self-throttling
+temperature::run_temperature()
+pi_link::run()             scan results and Square replies
+checkout::run_checkout()   THE ONLY CONSUMER, and the only thing that decides
+Display::run()             LVGL redraws, animations, touch sampling
+run_health_report()
+run_heartbeat()
+```
 
-| Screen | Shows | Leaves when |
-|---|---|---|
-| **Idle** | Black | Items are removed and a transaction starts |
-| **Payment select** | Total owed, plus two touch targets: Cash / Card | One is tapped |
-| **Cash** | Paid vs owed, updating live as coins land (e.g. `$2.00 / $4.00`) | Paid reaches owed, or timeout |
-| **Card** | QR code linking to the Square payment page | Square reports the order paid, or timeout |
-| **Thank you** | Confirmation message | Short delay, then back to Idle |
+**The one rule for everything called from here: return promptly.** No
+`sleep_ms()`, no waiting for a sensor, no blocking bus transaction. A task that
+needs to wait remembers where it got to in a `static` local and picks up on the
+next pass. The whole system shares one thread, so anything that blocks freezes
+the display, stops coins being counted and stalls the link at the same time.
+`run_heartbeat()` measures each pass and logs a warning past
+`LOOP_TIME_WARN_MS` (50 ms), so a violation announces itself.
 
-Notes for whoever builds this:
+Producers run before the consumer, so an event raised this pass is handled on
+the same pass rather than waiting for the next one.
 
-- **There is no separate basket screen.** An earlier description of the flow
-  mentioned "showing purchases", but the confirmed scope is five screens, so the
-  total owed is shown on the payment-select screen instead. If an itemised list
-  ("2 × Coke, 1 × Fanta") is wanted, that screen is where it goes — worth
-  confirming before building.
-- The cash figure comes from `CoinAcceptor::cents_total()`; redraw on coin
-  events only, not every loop.
-- The QR needs LVGL's `lv_qrcode` widget — present in the vendored LVGL, not
-  currently used. The URL arrives from the Pi (dashboard.md §6).
-- Idle being **black** is deliberate: no burn-in, low power, and an unambiguous
-  "nothing in progress" state.
-- On timeout, both payment paths log a stolen drink and return to Idle.
-- Keep LVGL detail inside this module; expose semantic calls such as
-  `show_cash_progress(paid_cents, owed_cents)` and `show_qr(url)` so the
-  checkout state machine never touches a widget.
+Three things deliberately block, and all three are outside the loop or behind a
+keypress: display init (~750 ms, required by the datasheet), the coin scale tare
+(~1 s, refused unless idle), and the SD card probe (up to ~1 s, on demand only).
 
-**`camera_side/inventory`** holds per-can price and count with a `Can` enum
-(Coke, Fanta, Mountain Dew, Solo) and a `sync_dashboard()` hook for cloud price
-overrides. The hook is a stub (see §7), so it is not yet usable. The module is
-superseded and not compiled — `catalogue` owns the drink list and the prices,
-and `basket` owns the counts.
+The previous contents of this file — one standalone `main()` per peripheral, all
+commented out but one — are preserved in `docs/bringup/bringup_examples.cpp.txt`.
+Each is still a known-good minimal program for exercising one device in
+isolation, which is what you want when a peripheral misbehaves and you need to
+know whether the fault is in the driver or in the system around it.
 
-### 4.5 Coin payment subsystem
+### 5.6 The state machine
 
-The most recently completed subsystem, and the one with the least obvious
-design, so it is documented in full.
+`checkout.cpp` is **the only code in the system that changes state.** Peripheral
+tasks raise events; what those events mean is decided in one place.
+
+Seventeen states. Beyond the transaction flow in §1:
+
+| State | What it is for |
+|---|---|
+| `Greeting` | An approved card was tapped. Makes "someone has identified themselves but has not opened the door" visible, rather than indistinguishable from a customer already choosing. Deliberately does *not* request a scan — that happens when the door opens, so both ways in produce the same sequence. |
+| `AccessDenied` | An unknown card. A message, not an enforcement point; there is no lock. |
+| `RefundOwed` | Every drink was put back *after* coins went in. There is no hopper, only a one-way box, so the only honest thing it can do is say so on screen and log the amount for a human to settle. |
+| `Fault` | Not fit to trade. A terse code on screen; the detail goes to the log. |
+| `UtilityMenu`, `SdResult`, `TareResult`, `UselessButton` | Maintenance, reached from Idle by holding the panel button. Things a person does *to* the fridge rather than things a customer does *with* it. |
+
+There is no state for the SD write itself: `sd_log::dump_to_card()` blocks the
+superloop start to finish, so no state machine pass could observe one. The
+"Writing…" screen is drawn and forced out to the panel immediately before the
+call.
+
+Every timeout lives in `src/timings.h` rather than next to the state machine,
+because several of them have to agree with numbers nowhere near it —
+`SQUARE_LINK_TIMEOUT_MS` against the Pi's HTTP timeout, `LINK_TIMEOUT_MS`
+against `fridged/config.py`. A constant whose correctness depends on another
+file is best kept with the others.
+
+### 5.7 Coin payment
+
+The subsystem with the least obvious design, so it is documented in full.
 
 **The problem.** Australian gold coins:
 
@@ -436,8 +463,8 @@ Distinguishing arbitrary combinations from absolute mass alone would need better
 than ±0.3 g, and it gets harder as the box fills.
 
 **What is done instead.** Each *change* is classified. A single coin is either
-+9.0 g or +6.6 g — **2.4 g apart**, a wide margin against sub-gram noise, and one
-that stays constant no matter how full the box is.
++9.0 g or +6.6 g — **2.4 g apart**, a wide margin against sub-gram noise, and
+one that stays constant no matter how full the box is.
 
 `CoinAcceptor::update()` runs four stages per sample:
 
@@ -453,80 +480,148 @@ that stays constant no matter how full the box is.
 **Why 0.80 g.** Across all 1-to-3 coin combinations the two closest possible
 masses are 18.0 g (two $1) and 19.8 g (three $2) — 1.8 g apart. Staying under
 half that gap guarantees a reading can never be in range of two answers at once.
-For a single coin the nearest rival is a full 2.4 g away.
-
-**Multi-coin events.** Coins landing within one settle window merge into a single
-step. Handled: two-coin totals (13.2 / 15.6 / 18.0 g) are still 2.4 g apart.
 
 **Timing.** At the board's strapped 10 samples/second, expect **~1 s per coin** —
-about 400 ms for the HX711's filter to track the step (datasheet figure at
-10 Hz), then 500 ms of stability. 10 Hz is the *lower noise* of the chip's two
-modes, so this costs latency, not accuracy.
+about 400 ms for the HX711's filter to track the step, then 500 ms of stability.
+10 Hz is the *lower noise* of the chip's two modes, so this costs latency, not
+accuracy.
 
-**Verification.** 17 synthetic tests pass, covering every 1-to-3 coin
-combination, a worn 6.45 g $2 still reading correctly, a 4 g foreign object
-rejected and not counted, 1.2 g of drift producing no event, and a ringing beam
-refusing to settle then reporting correctly once it stops. `CoinAcceptor` takes
-grams and returns coin counts with no hardware dependency, which is what makes
-this testable off-board.
-
-**Note for the checkout logic, when it exists.** The eventual "has the customer
-paid?" decision should **not** simply trust `cents_total()`. For a known amount
+**The payment gate does not simply trust the running total.** For a known amount
 owed, the valid ways to pay it differ in mass by **11.4 g** at a time
 (`W(b) = 9v − 11.4b` for `v` dollars owed and `b` two-dollar coins), so checking
 total mass against that short list is far more robust than assuming every coin
 was tracked correctly. Running total for showing the customer progress; mass
 check for deciding payment.
 
-### 4.6 `main.cpp` — the test-block convention
+## 6. The RP2040 ↔ Pi link
 
-`main.cpp` holds several complete `main()` functions, **all commented out except
-one**. Each is a self-contained bring-up program for one subsystem. To switch,
-comment the active block and uncomment another.
+A framed line protocol over USB CDC.
 
-| Block | Exercises | State |
+```
+<PREFIX> <MS> <TYPE> <LEN> <PAYLOAD> *<CRC>\n
+
+EVT 12345 DOOR 10 state=open *3F
+CMD 12350 SCAN 0 *A1                    (no payload, so no payload field)
+```
+
+| Field | Format | Why it is there |
 |---|---|---|
-| TFT display | Text on screen | Commented |
-| DS18B20 | Multi-sensor temperature + health | Commented |
-| RFID | UID read + access decision | Commented |
-| HX711 (original) | `Load_cell::measure()` | Commented |
-| **Coin detector** | **$1/$2 discrimination** | **ACTIVE** |
+| PREFIX | `EVT` / `CMD` / `RSP` | Direction, and the sync token |
+| MS | decimal | Ordering, and reset detection when it jumps backwards |
+| TYPE | uppercase token | Message type, so everything shares one link |
+| LEN | decimal | Byte count of PAYLOAD; a mismatch rejects the frame before anything parses it |
+| PAYLOAD | `key=value` pairs | Omitted entirely when LEN is 0 |
+| CRC | 2 hex digits | CRC-8/ATM over every byte up to but not including the space before `*` |
 
-This is a bring-up convention, not the final architecture — the real system
-needs one `main()` running a state machine (§6).
+**Why text rather than a packed binary struct.** The brief asked for type,
+length and checksum; being able to watch the link in a plain serial monitor, or
+grep a captured log, is worth a great deal while two machines are being brought
+up against each other. At these data rates compactness is worth nothing.
 
-**Coin detector usage.** Flash, open the serial monitor over USB. It banners,
-waits 2 s for the terminal to reattach, initialises the scale, tares, then
-waits. Type into the monitor while it runs:
+**Why the prefix doubles as a sync token.** Debug logging and protocol frames
+share one USB CDC stream, so the parser must cope with lines it did not send.
+Any line not beginning with a known prefix is discarded in silence — that is how
+`[12.345 Information]: ...` passes through harmlessly. A log line landing in the
+*middle* of a frame corrupts it, and that is what the CRC is for: rejected and
+counted, never acted on.
 
-| Key | Action |
+**There are two implementations of this codec** — `frame.{h,cpp}` in C++ and
+`tools/protocol.py` in Python — because the two ends are different languages.
+Two is one more than ideal and they would drift, so `python tools/protocol.py`
+reads the limits straight out of the C++ header and fails if they no longer
+agree. That check exists because the drift already happened once in miniature:
+`MAX_TYPE_LEN` was one byte too small for `SQUARE_CANCELLED`, which would have
+made every cancellation silently never leave the board.
+
+**Heartbeats are not cosmetic.** The board declares the link dead after
+`LINK_TIMEOUT_MS` (30 s) without a valid frame and takes itself out of service,
+and the Pi has nothing to say while the fridge is idle — so without `EVT HB`
+every 10 s a perfectly healthy link looks dead after half a minute.
+
+## 7. Pi4 software
+
+### 7.1 `fridged/camera.py` — what answers `CMD SCAN`
+
+Two backends behind one interface: `--camera sim` is a modelled shelf,
+`--camera picapture` runs the real vision.
+
+**picapture is a child process of `fridged`, not a service of its own.** That
+keeps the serial link owned by exactly one process, so there is never a window
+where the board asks and two things try to answer, and none where the camera is
+up but the link is not. A second systemd unit would have to be ordered against
+the first and could still drift out of step.
+
+**Newest wins; there is no queue.** `payments.py` queues because every card
+request must be processed. Here only the most recent count means anything, and a
+backlog would be actively harmful: after a stall it would hand the board a
+reading of the shelf as it was seconds ago, presented as current.
+
+#### The two scans are answered differently
+
+This is the part with the real design content in it.
+
+**Baseline, at door-open.** The door is swinging, light is flooding in, and a
+hand may already be reaching. This is the *worst* frame of the whole cycle. So
+the answer comes from the last stable reading taken **while the door was still
+shut** — which is what a baseline is supposed to describe anyway.
+
+This is possible because the board sends `EVT DOOR state=open` *before*
+`CMD SCAN`, so `fridged` always sees the door move first and can freeze the
+pre-open value before the scan arrives.
+
+**Recount, at door-close.** The scene is good but not yet settled: the door has
+just moved, the light is changing back, and cans may still be rocking. Wait for
+`SETTLE_FRAMES` (3) consecutive agreeing packets, then answer.
+
+**A baseline is *supposed* to be old.** The age penalty is measured up to the
+moment the baseline was *frozen*, not up to the present. Measured to the present,
+a perfectly healthy camera and a customer deliberating for fifteen seconds drove
+the baseline's confidence to zero — but nothing could have changed the shelf
+between that reading and the door opening, so the time since is not evidence
+against it. What the penalty still catches is a baseline that was already stale
+*when it was frozen*.
+
+#### When it cannot answer, it does not
+
+| Age of the newest count | What happens |
 |---|---|
-| `d` | Toggle raw sample dump |
-| `t` | Re-tare (zero where it currently sits) |
-| `r` | Reset the coin tally |
+| under `CAMERA_STALE_S` (1 s) | Answered at full confidence |
+| 1 s to `CAMERA_DEAD_S` (5 s) | Answered, confidence ramped down with age |
+| over 5 s, or never | **Not answered at all** |
 
-**Do the `d` check first**, with nothing touching the box. The spread you see is
-the noise floor and must be well under 0.50 g or the reading will never settle.
-If it is not, the cause is almost always mechanical — the beam clamped at both
-ends instead of free to flex, or the box resting against something.
+Two different faults, two different responses:
 
-**Calibration check:** three $1 coins should read 27.0 g. A consistent
-proportional error means `LOADCELL_COUNTS_PER_GRAM` in `board.h` needs redoing;
-the 2945 figure came from an earlier bare-Pico test rig.
+- **Wobbling** — picapture is running and answering, but the frames have not
+  settled by the deadline. Answer anyway, from the most recent reading, with a
+  low confidence that is logged and graphed. The sale proceeds. This is the
+  common case and it must not stop the fridge.
+- **Dead** — the subprocess is not running, or has produced nothing for long
+  enough that "most recent reading" is meaningless. Do not answer. The board
+  faults after `RECOUNT_TIMEOUT_MS` and goes out of service, which is honest: a
+  fridge whose camera is gone cannot know what it is selling.
 
-### 4.7 `tests/mocks/` — legacy
+`CAMERA_DEAD_S` is checked **before** settling, not after. There is nothing to
+wait for if the reading everything would be built on is already dead.
 
-Stub implementations of Pico SDK functions (`gpio`, `pio`, `sync`, `timer`,
-`stdlib`, `time`) that once let parts of the firmware build natively for
-off-hardware testing. **They are dev-board leftovers and are not part of this
-project's build.** The native branch of `CMakeLists.txt` that consumes them is
-broken (§7). The ARM/firmware target is the only build that matters.
+Three timers, nested deliberately so a fault is our verdict rather than a
+timeout nobody decided on:
 
----
+```
+door shuts ──┬─ SETTLE_TIMEOUT_S (4 s) ── camera gives up, answer marked down
+             └─ SCAN_ANSWER_BUDGET_S (6 s) ── service forces a reply
+                                     └─ RECOUNT_TIMEOUT_MS (8 s) ── board faults
+```
 
-## 5. Pi4 software
+A test asserts that ordering, so shortening the board's budget without revisiting
+these fails loudly.
 
-### 5.1 `picapture` — can recognition
+**Parsing is strict, and checks the key set as a whole.** A picapture built from
+a different brand list is refused outright rather than filtered down to the
+drinks that happen to match — partial acceptance puts counts on the wrong drinks
+and both ends go on agreeing about the wrong numbers with nothing reporting a
+fault.
+
+### 7.2 `picapture` — can recognition
 
 Classical colour-blob vision, no machine learning. Per frame:
 
@@ -542,207 +637,273 @@ Classical colour-blob vision, no machine learning. Per frame:
    `findContours`, filter by area, count.
 6. Print one line: `coke:5,fanta:4,mtndew:5,solo:3;conf=87;`
 
-**`conf=` is how a wrong count becomes visible.** Every other fault in this
-system announces itself — a corrupt frame fails its CRC, a missing payment has
-no row. A miscounted shelf produces a perfectly well-formed packet with the
-wrong numbers in it, and nothing anywhere reports a fault. The only evidence
-available is how equivocal the measurement was, so it is measured and carried:
-how far each blob sits from a whole number of cans, whether the drink had ever
-been calibrated, how much was discarded by the area filter, and how the frame
-was exposed. Deductions from 100 rather than a product of factors, because the
-number has to be explainable — `--debug-all`'s `a` key prints the arithmetic.
-
-It is a **per-frame** figure: how well-formed this one look was. It is not the
-same as the confidence eventually reported to the board, which also has to
-account for whether successive frames agreed. One says the picture was good; the
-other says the shelf held still.
-
 **Why nearest-centre and not `inRange` per brand.** The original ran an
 independent threshold per drink against the full frame. Coke, Fanta, Mountain
 Dew and Solo occupy adjacent hue bands, so glare, JPEG blocking and anti-aliased
 edges routinely satisfy two or three at once and a single can picks up several
 labels simultaneously. Assigning each pixel to whichever brand centre it is
-nearest gives every pixel exactly one owner, so two brands cannot claim the same
-region. Hue is weighted above saturation and value because it is the only one of
-the three that does not move with lighting across a single can.
+nearest gives every pixel exactly one owner. Hue is weighted above saturation and
+value because it is the only one of the three that does not move with lighting
+across a single can.
 
 **Closing is deliberately asymmetric** — the kernel is seven times taller than
 it is wide. A can is a tall thin blob and a band of glare across its middle
 splits it in two; closing vertically rejoins it without bridging two cans
 standing side by side.
 
+#### `conf=` is how a wrong count becomes visible
+
+Every other fault in this system announces itself — a corrupt frame fails its
+CRC, a missing payment has no row. A miscounted shelf produces a perfectly
+well-formed packet with the wrong numbers in it, and nothing anywhere reports a
+fault. The only evidence available is how equivocal the measurement was, so it
+is measured and carried. Four deductions from 100:
+
+- **Uncalibrated drinks** — a drink with no `can_area` counts one can per blob,
+  so it cannot notice two touching cans. It reports lower confidence rather than
+  pretending.
+- **Blobs off a whole can** — the most direct evidence available. A blob at
+  1.02× or 1.98× the size of one can says plainly what it is; one at 1.5× is a
+  coin toss whose outcome decides whether somebody is charged.
+- **Discarded blobs** — something the camera saw and could not explain. Only
+  ones at least half of `contour_min_area` count, or the deduction would sit at
+  its cap permanently and carry no information.
+- **Exposure** — outside a sensible brightness band, hue is guessed rather than
+  measured. Ramped, not a cliff.
+
+Deductions from 100 rather than factors multiplied together, because the number
+has to be explainable — `--debug-all`'s `a` key prints the arithmetic, and it is
+the same arithmetic that produced the figure on the wire. An empty shelf scores
+100: correctly seeing nothing is a good frame.
+
+**What the hardware taught that the tests could not: a hand held across the
+shelf scores 76 and reports cans taken.** Confidence measures how sure the vision
+is of its own decisions, not whether they are right — a still hand is three
+identical frames, well exposed, with colours near a brand centre.
+
 **Tuning.** Every threshold lives in `src/vision_config.h` and loads from
-`picapture.conf` if present. `--debug-all` gives live sliders and click-to-
-sample: pick a drink with `1`-`4`, click its brightest then dullest part, and
-`s` writes the result back to the file. Tuning therefore survives a rebuild and
-never needs a compiler. A malformed or unknown key in the file is refused at
-startup rather than ignored — running with tuning nobody chose looks identical
-to running with tuning that was applied.
+`picapture.conf` if present, so tuning survives a rebuild and never needs a
+compiler. `--debug-all` gives live sliders and click-to-sample. A malformed or
+unknown key is refused at startup rather than ignored — running with tuning
+nobody chose looks identical to running with tuning that was applied.
 
-`vision_config` has no OpenCV dependency, so `tests/test_vision_config.cpp`
-builds and runs on any laptop.
+`vision_config` has no OpenCV dependency, deliberately, so its tests build and
+run on any laptop.
 
-**Current limitation: a contour is not a can.** The count is the number of
-blobs of a drink's colour, so two cans of the same drink touching each other
-merge into one blob and report as one; `contour_max_area` only rejects the
-merged blob, making it report as none. Since the firmware charges for the
+**Current limitation: a contour is not a can.** Two cans of the same drink
+touching each other merge into one blob. Since the firmware charges for the
 *difference* between two counts, a merge appearing or disappearing between the
-baseline and the recount invents or hides a purchase. Separating the cans on the
-shelf is the current mitigation; dividing blob area by a calibrated single-can
-area is the fix.
+baseline and the recount invents or hides a purchase. Separating the cans is the
+current mitigation; dividing blob area by a calibrated single-can area is the
+fix, and is what `can_area` above exists for.
 
-### 5.2 `online-payment/square.py` — card payments
+### 7.3 The database
 
-Three functions against the Square sandbox:
+SQLite, WAL mode, one writer. Having the firmware bridge, the vision program and
+the payment script all write directly is how you get `database is locked` during
+a demo, plus three copies of the schema drifting apart in three languages.
+Everything that writes goes through `store.py`; Grafana connects read-only.
 
-- `create_payment_link()` — POSTs a `quick_pay` order, returns the checkout URL
-  and order ID. Uses a timestamp as the idempotency key.
-- `display_qr_code(url)` — renders a QR and opens it with `img.show()`.
-- `poll_for_payment(order_id)` — GETs the order every 3 s for up to 120 s.
+Notable choices:
+
+- **`txn` rather than `transaction`**, which is a reserved word in SQL. Every
+  panel query would have to quote it forever, and a forgotten quote is a syntax
+  error at display time rather than at write time.
+- **One generic `measurement` table** for every scalar, so adding a metric is
+  never a schema change.
+- **A `boot` table**, because a transaction id is `ms_since_boot` and is
+  therefore unique only *within* a boot. Two reboots in a day can mint the same
+  id, and without this the second would overwrite the first.
+- **Temperatures are stored under the sensor's ROM code**, never its zone name,
+  with the name attached at read time by the `temperature` view. That is the
+  difference between naming a sensor relabelling its whole history and naming a
+  sensor putting a discontinuity in the graph at the moment you named it.
+- **`raw_line` keeps everything that came down the wire**, including lines that
+  were not frames. A rising bad-frame count next to the offending bytes is a
+  five-minute debug; the counter on its own is a two-hour one.
+
+#### Telling real data from invented data
+
+Three kinds of row can reach the same database, and `boot.reason` is what
+separates them:
+
+| `boot.reason` | Means |
+|---|---|
+| `boot_frame`, `resumed`, `ms_rollback` | A real RP2040 |
+| `sim:boot_frame`, `sim:resumed`, `sim:ms_rollback` | A `--port sim` run against `fake_board` |
+| `seed` | Invented history from `seed.py` |
+
+**This matters because `--port sim` is the default and `--db` defaults to the
+file the dashboard reads.** `python -m fridged` with no arguments writes invented
+sales into the real revenue panels under exactly the same table and metric names
+as genuine ones. That is intended — it is how the panels were designed before
+there was a fridge — but a demonstration and a week of real takings must not
+become one indistinguishable pile. Everything else in the schema is keyed to a
+boot, so this one column answers "was this real?" for every transaction and coin
+event too.
+
+`seed.py` additionally writes a `raw_line` marker with `source='seed'`, so
+`python -m fridged.seed --clear` knows exactly what it may delete.
+
+### 7.4 Reopening the serial port
+
+`serial.Serial` was originally opened once, at startup, and never again. Two
+consequences, the second serious:
+
+1. At boot the port may not exist yet — the Pi and the RP2040 power up together,
+   and systemd would restart every 5 s until it appeared.
+2. **A device that goes away never came back.** `link.poll()` caught the
+   `OSError` and returned "no data", so the loop kept running with a dead file
+   descriptor: service alive, reporting itself healthy, permanently deaf.
+
+The second had already been hit; the workaround during testing was *stop the
+service, reset the board, start the service* — three manual steps at a keyboard,
+which is not available mid-demonstration. Pressing RESET on the board or nudging
+the cable is enough to trigger it.
+
+`ReconnectingSerial` reopens with backoff from 1 s to 10 s and never raises on
+open. The 10 s ceiling is chosen against the board's 30 s `LINK_TIMEOUT_MS`, so
+recovery lands inside the window where the board has not yet declared the Pi
+dead. `Link` discards its buffer across a reconnect — without that, the front
+half of a frame cut off mid-flight gets glued to the first bytes after recovery,
+and a clean reconnect reports a corrupt frame that never existed on the wire.
+
+**The cost, taken deliberately:** a mistyped port path now retries forever
+instead of failing loudly. Mitigated by logging the first failure at ERROR *with
+the ports that do exist*, so a typo is obvious in `journalctl`.
+
+### 7.5 Card payments
+
+`payments.py` runs Square on a worker thread with a queue, because every card
+request must be processed and an HTTP call must never block the service loop.
 
 **Detecting payment.** It checks the `tenders` array rather than the order
 `state`, because a Square order can report a state that does not guarantee money
-arrived; a non-empty `tenders` array means a payment is actually attached. The
-inline comment calls this "the fix", so it was learned the hard way. Worth
-preserving in any rewrite.
+arrived; a non-empty `tenders` array means a payment is actually attached. This
+was learned the hard way and is worth preserving in any rewrite.
 
-On timeout it prints that the drink is flagged as stolen — the theft-logging
-behaviour the RP2040 side will eventually own.
+`--square fake` needs no credentials or network and is the default. It is
+independent of `--port`, so a real payment against a simulated board is
+available.
 
-### 5.3 `fridged/camera.py` — what answers `CMD SCAN`
+## 8. Testing
 
-Two backends behind one interface, the same shape as `pi_link` on the firmware
-side. `--camera sim` (the default) is a modelled shelf; `--camera picapture`
-runs the real vision.
+### 8.1 Off-hardware — any machine, no fridge, no board
 
-**picapture is a child process of `fridged`, not a service of its own.** That
-keeps the serial link owned by exactly one process, so there is never a window
-where the board asks and two things try to answer, and none where the camera is
-up but the link is not. A second systemd unit would have to be ordered against
-the first and could still drift out of step.
+Run after every `git pull`. If any of these fails, stop.
 
-**Newest wins; there is no queue.** `payments.py` queues because every card
-request must be processed. Here only the most recent count means anything, and a
-backlog would be actively harmful: after a stall it would hand the board a
-reading of the shelf as it was seconds ago, presented as current. One value
-under a lock, with the time it arrived.
+```bash
+cmake -S rp2040-software/tests/host -B build-host
+cmake --build build-host
+./build-host/firmware_tests                      # 367 checks, 0 failed
 
-**Parsing is strict, and checks the key set as a whole.** A picapture built from
-a different brand list is refused outright rather than filtered down to the
-drinks that happen to match — partial acceptance puts counts on the wrong drinks
-and both ends go on agreeing about the wrong numbers with nothing reporting a
-fault.
+cmake -S pi4-software/picapture -B build-picapture
+cmake --build build-picapture
+./build-picapture/picapture_tests                # 102 checks, 0 failed
 
-**When it cannot answer, it does not** (decision D1):
+cd pi4-software
+python3 tools/protocol.py                        # ALL CHECKS PASSED
+python3 tests/test_fridged.py                    # ALL CHECKS PASSED
+```
 
-| Age of the newest count | What happens |
+What is worth testing here is not "does SQLite insert a row". It is the things
+where being wrong produces no symptom at the time and a hole in the data later:
+`close()` flushing queued rows, boot tracking, the ms-rollback path, and
+unhandled message types being counted rather than dropped.
+
+`tests/host/` deliberately does **not** use Pico SDK stubs. That approach needs
+a fake for every SDK function the code touches and breaks whenever the firmware
+grows a new dependency; testing only the hardware-free modules needs no fakes at
+all. (An older `tests/mocks/` tree did exactly that and has been deleted along
+with the build target that consumed it.)
+
+### 8.2 On hardware — what has and has not been proven
+
+| | Status |
 |---|---|
-| under `CAMERA_STALE_S` | answered at full confidence |
-| up to `CAMERA_DEAD_S` | answered, confidence ramped down with age |
-| beyond that, or never | no `EVT INV` at all — the board faults out of service |
+| Firmware host tests, picapture config tests, `protocol.py`, `test_fridged.py` | Passing, off hardware |
+| `checkout.cpp` re-entrant basket, `RefundOwed` | **PASSED on the board** |
+| Drink rename end to end (Coke/Fanta/Mountain Dew/Solo) | **PASSED on the board** |
+| picapture patch sampling + colour-centre storage | **PASSED on the Pi** |
+| Area-based can counting after the colour refactor | **PASSED** — 2 touching Cokes held at `coke:2` for 567 frames |
+| Per-frame confidence (`conf=`) | **PASSED on the Pi** — 87–90 still, 50–83 with a hand in frame |
+| Baseline latch and recount settling | **PASSED on the fridge** — 15/15 door cycles, recount settling in 550–650 ms, no timeout ever fired |
+| Confidence + trigger stored, dashboard panels | **PASSED on the fridge** — 40 scans paired one-for-one with 40 confidence readings |
+| `fridged` running picapture as a subprocess | Tested against a stand-in, **never run against the real binary** |
+| The service under systemd with real board + camera | **Never run.** Every hardware test so far was a foreground process with a terminal attached |
+| Surviving a power cut | **Never tried** |
+| Reopening the port after a board reset | Covered by host tests; **never seen against a real USB device** |
 
-The third row is the important one. A fridge that cannot see its shelf does not
-know what it is selling, and going out of service is more honest than repeating
-a stale count as though it were current. There is no code path that invents a
-number.
+Record which commit you tested, so results can be matched to code:
+`git rev-parse --short HEAD`.
 
----
+### 8.3 The acceptance tests that decide whether it can take money
 
-## 6. Integration status
+Not code. The tests that decide whether this is fit for the fridge.
 
-**This is the critical section.** Every subsystem works alone; almost none are
-connected.
+1. **Stock a real shelf.** Counts match reality for five minutes untouched.
+2. **Buy one can.** Charged for exactly that can, at $2.00.
+3. **Put it back.** Returns to Idle, nobody charged.
+4. **Swap it.** The new drink and the right price.
+5. **Take three.** $6.00.
+6. **Touching cans.** Two of one drink pushed together still count as two.
+7. **Restock.** Refill mid-session; nobody charged.
+8. **Twenty cycles.** Count the disagreements.
+9. **Pull the camera cable mid-transaction.** The board should fault out of
+   service, per §7.1.
 
-| Link | Status |
-|---|---|
-| Pi4 camera → RP2040 | **Missing entirely** |
-| RP2040 → Square payments | **Missing entirely** |
-| QR code → TFT display | **Missing entirely** |
-| Coin acceptor → checkout logic | **Missing** (subsystem ready) |
-| Transaction state machine | **Does not exist** |
-| Theft tally | **Does not exist** |
-| Cloud dashboard | **Does not exist** |
+**Test 8 is the real gate.** A system that is right nineteen times in twenty is
+wrong about one sale a day, and each wrong sale is somebody's $2.
 
-> **Section 6 below is stale and describes the project as it was before the
-> serial link, the checkout state machine, the TFT screens and the dashboard
-> were built.** 6.1 has been corrected; the rest has not been re-checked
-> line by line and should not be relied on. See `IMPLEMENTATION.md` for where
-> things actually stand.
+### 8.4 If the vision does not work well enough
 
-### 6.1 RP2040 ↔ Pi4 link — **built**
+Worth deciding early rather than at the end. `fridged` keeps a camera
+*interface*, not a camera, so the options are:
 
-A framed line protocol over USB CDC, with a CRC and a shared codec pinned to
-golden frames at both ends (§4). Counts flow Pi → board as `EVT INV` in answer
-to `CMD SCAN`; everything else flows board → Pi.
+1. **Change the physical problem, not the software.** Separate the cans, add a
+   diffuse light, move the camera square-on. Most of the difficulty so far has
+   been lighting and geometry rather than algorithm.
+2. **Reduce what is asked of it.** Detecting *that the shelf changed* is much
+   easier than detecting *by how much*; a flat price per door cycle is worse but
+   workable.
+3. **Fall back to `--camera sim`** for a demo, with the limitation stated
+   plainly rather than hidden.
 
-picapture no longer prints into the void: `fridged` runs it as a subprocess and
-reads its stdout (§5.3). What remains unproven is not the transport but the
-*counting* — the two scans of a door cycle are currently answered from whatever
-the newest frame said, with no settling, which is the subject of stage 4.
-
-### 6.2 No state machine
-
-None of the five screens in §4.4 exist in any form. The TFT can print one
-centred string. `main.cpp` runs one bring-up block.
-
-### 6.3 QR never reaches the display
-
-The QR is a PIL image opened on the Pi's own desktop. LVGL ships `lv_qrcode`,
-unused — and there is no path to get the URL to the RP2040 anyway.
-
-### 6.4 Pricing is not wired up
-
-`square.py` has a hardcoded `PRICE = 500`. `Inventory` has its own default.
-`CoinAcceptor` reports cents. Three unconnected notions of money.
-
----
-
-## 7. Known issues
-
-Ordered by how much they will hurt.
+## 9. Known issues
 
 | # | Issue | Location | Impact |
 |---|---|---|---|
-| 1 | `opt.buffer` is set to a **stack-local** array that dies when `init()` returns; later `scale_weight()` calls write through the dangling pointer | `load_cell.cpp:98-101` | Memory corruption if used. Not currently called — `mass_sensor` replaces it |
-| 2 | Native/test-harness CMake branch references `src/tasks/sensor_health.cpp`, which does not exist (moved to `src/peripherals/`) | `CMakeLists.txt:136` | That build target is broken. Legacy, see §4.7 |
-| 3 | `DEFAULT_PRICE_CENTS = 2000` is **$20**, not the intended $2 | `inventory.hpp:24` | Wrong prices once wired up |
-| 4 | `fetch_price()` returns a default-constructed value, so `sync_dashboard()` resets every can to the default on every call | `inventory.cpp:24-28` | Price overrides silently do nothing |
-| 5 | `simulate_dashboard_get()` is a **non-inline function defined in a header** | `inventory.hpp:13` | Multiple-definition link error the moment a second file includes it |
-| 6 | ~~Four identical `visualise_contours()` calls, each overwriting the last~~ | `picapture/main.cpp` | **FIXED.** Each brand now gets its own mask and its own result vector, and per-pixel nearest-brand classification means two drinks can no longer claim the same region |
-| 7 | Display pins live in `ili9341.h`; superseded HX711 pins (GP14/15) live in `load_cell.h` | both | Violates the `board.h` rule; two sets of HX711 pins now exist |
-| 8 | ~~`main2.cpp` is a stale copy of `main.cpp` with `TEST` enabled, not in the build~~ | `picapture/src/` | **FIXED.** Deleted. It had drifted, as predicted, and depended on `trackbar.h`, which `vision_config.h` replaced |
-| 9 | ~~Guard reads `if (a.size() != b.size() && "")` — a string literal is always truthy, so the `&& ""` does nothing~~ | `picapture/main.cpp` | **FIXED.** Gone with the rewrite |
-| 10 | `hx711_reader.pio.h` **defines** its init functions and has no `extern "C"` guard | submodule | Including it from a second C++ file causes duplicate symbols. Already hit and worked around in `mass_sensor.cpp` — do not include it there |
-| 11 | Signed/unsigned comparisons in `for` loops over `.size()` | `inventory.cpp:17` | Warnings only. The `picapture` half is fixed; that file now builds `-Wall -Wextra` clean |
-| 12 | `tokens.py` is gitignored, so `square.py` cannot run from a fresh clone without manual setup | `online-payment/` | Documented in §3.4 |
-| 13 | **Square sandbox credentials were committed and pushed to a public repo** inside `__pycache__/tokens.cpython-313.pyc` — the `.pyc` embeds the token as a plain-text string even though `tokens.py` itself was correctly ignored | `online-payment/__pycache__/`, commit `c8cd1b6` on `all_together` | Untracked and now ignored, **but still present in history**. Sandbox only, so play money — **rotate the token**. See §3.5 |
+| 1 | `hx711_reader.pio.h` **defines** its init functions and has no `extern "C"` guard | submodule | Including it from a second C++ file causes duplicate symbols. `mass_sensor.cpp` is the only includer and must stay that way; the failure would be at link time, naming neither file. |
+| 2 | Two cans of the same drink touching each other merge into one blob | `picapture` | Miscounts a purchase. `can_area` division is the fix; separating the cans is the mitigation. See §7.2. |
+| 3 | A hand held still across the shelf scores 76 and reports cans taken | `picapture` | Confidence measures certainty, not correctness. Recorded next to the penalty constants in `vision_config.h`. |
+| 4 | `tokens.py` is gitignored, so card payments need manual setup on a fresh clone | `online-payment/` | Documented in README.md §2 and §4 here |
+| 5 | **Square sandbox credentials were committed and pushed to a public repo** inside a `.pyc` | history, commit `c8cd1b6` | Untracked and now ignored, **but still present in history**. Sandbox only, so play money — **rotate the token.** See §4.2 |
+| 6 | `fridged` runs `--square real` in production | `deploy/fridged.default` | Worth confirming that is intended before a demonstration |
 
----
+Resolved during the pre-merge audit, recorded because earlier notes referenced
+them: the dangling `opt.buffer` in the old `load_cell` driver, the `$20` default
+price and the header-defined function in the old `camera_side/inventory`, and
+display pins living in `ili9341.h`. The first three were deleted with their
+modules; the fourth was moved into `board.h`.
 
-## 8. Next steps
-
-Roughly in dependency order:
-
-1. **Define the Pi4 ↔ RP2040 protocol.** Everything else waits on this. A
-   line-based serial format over UART is the obvious first choice — the Pi
-   already produces a string in `serialize_image()`.
-2. **Per-colour detection in `picapture`** so more than one can type is
-   reported.
-3. **Transaction state machine** on the RP2040, with the coin acceptor and a
-   Square path slotting into a shared `AWAIT_PAYMENT` state.
-4. **TFT screens** — idle, payment select, cash running total, QR, thank you.
-   Scope is fixed and narrow; see §4.4 for the full screen table.
-5. **Theft tally** — per-can counts, RAM-only for now. Surviving a power cycle
-   would need flash or an EEPROM on a future board revision.
-6. **Fix issues 3, 4, 5** before `Inventory` becomes load-bearing.
-7. **Dashboard upload** once the Pi has something worth sending.
-
-### Decisions already made
+## 10. Decisions, settled
 
 - **Cash payment timeout resets on each accepted coin**, so a slow customer is
   never cut off mid-payment.
+- **Exact cash payment only** — no change is given. There is no hopper, only a
+  one-way box. A customer who overpays and puts everything back reaches
+  `RefundOwed`, which is a person's job to settle.
+- **Theft is logged, not prevented.** Someone taking a drink and walking away is
+  recorded as a stolen drink and the system returns to idle.
 - **No persistence across power cycles.** All tallies are RAM-only; a reboot
   clears them. EEPROM is a future-board consideration.
-- **Exact cash payment only** — no change is given.
-- **Theft is logged, not prevented.** Someone taking a drink and walking away
-  is recorded as a stolen drink and the system returns to idle.
+- **No camera frames are stored.** Counts and confidence only — no `latest.jpg`,
+  no ring buffer, nothing written to disk but numbers. The image exists inside
+  picapture for the length of one frame.
+
+  Consequences, stated plainly: **a disputed charge cannot be audited against a
+  picture.** The confidence figure and the two stock snapshots are the whole
+  record, which is exactly why §7.2's confidence graph matters. It also removed
+  the HTTP server an on-dashboard frame would have needed, and with it the
+  question of who on the network could watch a camera pointed at a shared space
+  — a privacy decision rather than a convenience one, if it is ever revisited.

@@ -10,7 +10,7 @@ WHY THE PI POLLS SQUARE (decision D12)
 --------------------------------------
 `square.py` already had the polling path, and its tenders check was learned the
 hard way. A webhook would need the Pi reachable from the internet, which
-reverses dashboard.md section 2's "local network only" for one feature. The Pi
+reverses documentation.md section 1's "local network only" for one feature. The Pi
 is already awake and already polling.
 
 WHY THERE IS A THREAD
@@ -108,7 +108,7 @@ class RealSquare:
     def create(self, txn_id, cents, description):
         # The idempotency key is the transaction id, not a timestamp: a retried
         # request must return the SAME link rather than creating a second
-        # checkout for the same drinks (plan.md stage 15.2).
+        # checkout for the same drinks (documentation.md section 7.5).
         link = self._square.create_payment_link(
             cents, description, f"fridge-{txn_id}")
         return link.url, link.order_id, link.payment_link_id
@@ -198,7 +198,7 @@ class PaymentService:
                 # A cancel can arrive BEFORE the link exists — the board gives
                 # up while the API call is still in flight. The cancellation is
                 # remembered and applied here, which is the only way that
-                # orphaned live link ever gets killed (plan.md stage 15.3).
+                # orphaned live link ever gets killed (documentation.md section 7.5).
                 already = self._open.pop(txn_id, None)
                 cancelled = bool(already and already.get("cancelled"))
                 self._open[txn_id] = {

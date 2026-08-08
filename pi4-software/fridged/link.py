@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 #:
 #: `ts` is wall-clock at arrival. The board's own `ms` is inside the frame and is
 #: used for ordering and reset detection only; the Pi owns wall time because the
-#: RP2040 has no RTC (dashboard.md section 6).
+#: RP2040 has no RTC (documentation.md section 6).
 LinkEvent = namedtuple("LinkEvent", "kind ts line frame reason")
 
 #: Coarse on purpose. `protocol.parse()` returns None for every kind of failure

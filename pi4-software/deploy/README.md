@@ -49,7 +49,7 @@ choices, and clobbering them on every deploy would be its own bug.
 
 **One at a time, confirming each before starting the next.** Three swaps done
 together give a failure with three possible causes; done separately, each has
-one. This is the same reasoning as plan.md stage 15.5, which insisted on a
+one. This is the same reasoning as documentation.md section 7.5, which insisted on a
 laptop run before a Pi run for exactly this reason.
 
 **The camera comes second, not third.** It is the swap that can fail on
@@ -149,7 +149,7 @@ bash backup.sh                       # take one now
 systemctl list-timers fridge-backup.timer
 ```
 
-**Not `cp`.** dashboard.md §13 says the database is one file so a backup is a
+**Not `cp`.** documentation.md §7.3 says the database is one file so a backup is a
 `cp`; that was true before WAL. The live database is three files, and copying
 the first while `fridged` is writing captures a database missing every commit
 still in the write-ahead log. `backup.sh` uses `sqlite3 .backup`, which takes a
@@ -173,7 +173,7 @@ sudo systemctl start fridged
 bash measure-load.sh 300
 ```
 
-dashboard.md §13 lists Grafana and OpenCV sharing one Pi 4 as a hazard and says
+documentation.md §7.3 lists Grafana and OpenCV sharing one Pi 4 as a hazard and says
 to measure it early rather than during the demo. Run it with the dashboard open
 in a browser, and later with the camera running — the number that matters is all
 of them together.

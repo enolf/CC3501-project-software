@@ -123,7 +123,7 @@ void test_frame_round_trip()
 
     frame::Frame f;
 
-    // Every message type from plan.md section 2, so the format is proven
+    // Every message type from documentation.md section 6, so the format is proven
     // against the real traffic rather than against invented examples.
     struct Case { frame::Prefix prefix; const char *type; const char *payload; };
     const Case cases[] = {

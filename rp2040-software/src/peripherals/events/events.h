@@ -153,7 +153,7 @@ const char *name(Kind kind);
 // There is no concurrency to protect against: push() cannot be interrupted by
 // pop(), because nothing here runs in interrupt context.
 //
-// That is a property of the current design (CLAUDE.md section 6: poll by
+// That is a property of the current design (documentation.md section 5.5: poll by
 // default), not a property of ring buffers. It STOPS BEING TRUE the moment any
 // task raises events from an interrupt handler or from the second core, and the
 // failure would be intermittent and very hard to find. If that ever happens:

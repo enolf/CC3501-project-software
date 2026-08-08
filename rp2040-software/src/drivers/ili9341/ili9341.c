@@ -27,7 +27,7 @@ static inline void dc_data()
 }
 
 // WHY THE SPI RETURN VALUES BELOW ARE NOT CHECKED, when every I2C call in
-// mfrc522.cpp is. The rule (CLAUDE.md section 7) exists because a bus
+// mfrc522.cpp is. The rule (documentation.md section 5.3) exists because a bus
 // transaction can fail and report it; I2C genuinely can, since an absent or
 // wedged device NACKs its address and i2c_write_blocking() returns
 // PICO_ERROR_GENERIC. SPI has no acknowledgement in the protocol at all: the

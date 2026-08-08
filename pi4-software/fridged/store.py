@@ -2,19 +2,19 @@
 
 This module knows SQL and nothing about the wire protocol. `ingest.py` knows the
 wire protocol and no SQL. Keeping that line sharp is what makes a protocol change
-one file and a schema change one other file (CLAUDE.md section 2).
+one file and a schema change one other file (documentation.md section 2).
 
 WHY ONE PROCESS OWNS THIS FILE
 ------------------------------
 SQLite allows one writer at a time. Having the firmware bridge, the vision
 program and the payment script all write directly is how you get
 `database is locked` during a demo, plus three copies of the schema drifting
-apart in three languages (dashboard.md section 3.1). Everything that writes goes
+apart in three languages (documentation.md section 7.3). Everything that writes goes
 through here; Grafana connects read-only.
 
 THE SCHEMA IS COMPLETE, THE WRITERS ARE NOT
 -------------------------------------------
-Every table from dashboard.md section 5 is created below, including the ones
+Every table from documentation.md section 7.3 is created below, including the ones
 nothing writes yet. Tables are cheap and a half-built schema invites a migration
 later; writer methods arrive with the stage that needs them. So an empty table
 here means "stage not reached", not "forgotten".
@@ -36,7 +36,7 @@ SCHEMA_VERSION = 2
 
 SCHEMA = """
 -- Scalars sampled over time. ONE generic table, deliberately: adding a metric
--- must never be a schema change (dashboard.md section 5.1). Drives the
+-- must never be a schema change (documentation.md section 7.3). Drives the
 -- temperature graph, the health row, the money-box tile and link health alike.
 CREATE TABLE IF NOT EXISTS measurement (
     ts      REAL NOT NULL,          -- unix seconds, stamped by the Pi on arrival
@@ -48,7 +48,7 @@ CREATE INDEX IF NOT EXISTS ix_measurement_metric_ts ON measurement(metric, ts);
 -- One row per time the board started. Exists because a transaction id is
 -- `ms_since_boot` and is therefore unique only WITHIN a boot: two reboots in a
 -- day can mint the same id, and without this the second would overwrite the
--- first (dashboard.md section 5.3 amendment 1). Gives the reset counter free.
+-- first (documentation.md section 7.3). Gives the reset counter free.
 -- `reason` also carries PROVENANCE, which is what stops a demonstration and a
 -- week of real takings becoming one indistinguishable pile:
 --
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS boot (
 
 -- ROM code -> which shelf the sensor is actually on. The mapping lives here and
 -- NOT in board.h, so replacing a failed sensor is editing one row rather than a
--- firmware rebuild and reflash (dashboard.md section 4.3). An unknown ROM code
+-- firmware rebuild and reflash (documentation.md section 7.3). An unknown ROM code
 -- is inserted automatically with a NULL zone_label, so a newly fitted sensor
 -- appears on the dashboard as an unmapped row showing a live temperature: warm
 -- the one you just fitted, see which row moves, name it.
@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS txn (
     paid_cents  INTEGER,
     outcome    TEXT CHECK (outcome IS NULL OR
                            outcome IN ('paid', 'stolen', 'cancelled')),
-    member_uid TEXT,                -- populated but NOT displayed; section 9
+    member_uid TEXT,                -- populated but NOT displayed; see below
     PRIMARY KEY (boot_id, txn_id)
 );
 CREATE INDEX IF NOT EXISTS ix_txn_ts_start ON txn(ts_start);
@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS txn_item (
 );
 
 -- txn_id is ATTRIBUTED, not received: EVT COIN carries denom= and delta_g= and
--- no id= at all, whatever plan.md's table says. A coin arriving with no
+-- no id= at all. An early draft of the protocol table claimed otherwise; the
+-- wire is the authority, and it does not carry one. A coin arriving with no
 -- transaction open is stored with NULL, which is itself worth being able to see.
 CREATE TABLE IF NOT EXISTS coin_event (
     ts           REAL NOT NULL,
@@ -174,7 +175,7 @@ CREATE INDEX IF NOT EXISTS ix_raw_line_ts ON raw_line(ts);
 -- and the name is attached here by a join. That is the difference between
 -- naming a sensor relabelling its whole history and naming a sensor putting a
 -- discontinuity in the graph at the moment you named it — and the discovery
--- procedure in dashboard.md section 4.3 is "warm the one you just fitted, watch
+-- procedure in documentation.md section 7.3 is "warm the one you just fitted, watch
 -- which row moves, name it", which is done by looking at history.
 --
 -- It also means a panel query is one SELECT with no join of its own, so the
@@ -232,7 +233,7 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         # With WAL, NORMAL fsyncs at checkpoints rather than at every commit. The
         # exposure is losing the last few seconds of telemetry on a power cut,
-        # against a large reduction in SD-card wear (dashboard.md section 13).
+        # against a large reduction in SD-card wear (documentation.md section 7.3).
         # For a fridge log that is the right side of the trade.
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
@@ -410,7 +411,7 @@ class Store:
         """Create or update one transaction. **Never a plain INSERT.**
 
         The firmware does not give us one clean "transaction begins" message
-        (dashboard.md section 6.2). A cash sale sends `TXN_START` twice with the
+        (documentation.md section 6). A cash sale sends `TXN_START` twice with the
         same id; a card sale sends it once, at the end; a card sale that is
         abandoned sends only `TXN_END`, for a transaction we have never heard
         of. Any of those can be the first frame to arrive for a given id, so
@@ -492,7 +493,7 @@ class Store:
         """One coin, or one thing that was not a coin.
 
         `txn_id` is attributed by the caller, not read from the frame — `EVT
-        COIN` carries no id (dashboard.md section 5.3 amendment 2). NULL when no
+        COIN` carries no id at all (documentation.md section 6). NULL when no
         transaction was open, which is itself worth being able to see.
         """
         self._queue(
@@ -507,7 +508,7 @@ class Store:
 
         Written when `fridged` ANSWERS a scan, not when the board reports
         anything — stock is the one metric that flows Pi -> board
-        (dashboard.md section 6.3).
+        (documentation.md section 6).
         """
         for drink, count in counts.items():
             self._queue(

@@ -1,5 +1,5 @@
-// The transaction state machine. See checkout.h for the states and plan.md
-// section 1 for the diagram.
+// The transaction state machine. See checkout.h for the states, and
+// documentation.md section 1 for the transaction flow as a whole.
 //
 // HOW TO READ THIS FILE
 // --------------------

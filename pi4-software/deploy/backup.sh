@@ -6,7 +6,7 @@
 #
 # WHY NOT `cp`
 # ------------
-# dashboard.md section 13 says the database is one file so a backup is a `cp`.
+# documentation.md section 7.3 says the database is one file so a backup is a `cp`.
 # That was true before WAL. It is not true now: the live database is THREE files
 # — fridge.db, fridge.db-wal and fridge.db-shm — and `cp` of the first while
 # fridged is writing captures a database missing every commit still sitting in

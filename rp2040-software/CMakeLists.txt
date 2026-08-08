@@ -77,10 +77,11 @@ if(CrossCompiling)
         src/peripherals/scale_task/scale_task.cpp
         src/peripherals/nfc_task/nfc_task.cpp
         src/peripherals/temperature_task/temperature_task.cpp
-        # Compiled although nothing calls it until the serial backend arrives at
-        # stage 12. Building it here means the ARM toolchain and this project's
-        # warning flags check it too, rather than only the host compiler that
-        # runs the tests. The linker discards it while it is unused.
+        # The wire codec. Used by the serial backend, and compiled even for the
+        # sim backend that does not call it: building it here means the ARM
+        # toolchain and this project's warning flags check it too, rather than
+        # only the host compiler that runs the tests. The linker discards it
+        # when the sim backend leaves it unused, so this costs no flash.
         src/peripherals/pi_link/frame.cpp
     )
 
@@ -156,7 +157,8 @@ if(CrossCompiling)
     #
     #   sim     - fabricates inventory and Square replies from the keyboard,
     #             so the whole system runs with no Pi, no camera and no network
-    #   serial  - the real transport (stage 12, not written yet)
+    #   serial  - the real framed transport over USB CDC, to a Raspberry Pi
+    #             running `fridged`
     #
     # Only one is built, so the unused one costs no flash. Swapping the real Pi
     # in later is this one word.
@@ -198,7 +200,7 @@ if(CrossCompiling)
     # PRIVATE ...), which looks like the obvious choice but is wrong here:
     # pico-scale is an INTERFACE library, so ITS sources are compiled into the
     # labs target too and would inherit the flags. That produced 67 warnings in
-    # vendored code this project does not police (CLAUDE.md section 0) and
+    # vendored code this project does not police (documentation.md section 5.1) and
     # cannot fix without editing a submodule.
     #
     # KNOWN BASELINE: 2 warnings, both third-party, both from
@@ -220,7 +222,7 @@ if(CrossCompiling)
     # warnings originating inside them, so -Wall -Wextra below reports on code
     # this project actually wrote and can fix. Without this the vendored HX711
     # headers alone produce 89 warnings that no one here should be acting on
-    # (CLAUDE.md section 0).
+    # (documentation.md section 5.1).
     target_include_directories(lvgl SYSTEM PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/lib)
 
     target_include_directories(pico-scale SYSTEM INTERFACE

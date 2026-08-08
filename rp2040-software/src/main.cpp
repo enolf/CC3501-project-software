@@ -49,7 +49,10 @@ constexpr const char *FIRMWARE_VERSION = "0.2";
 // Heartbeat and loop-time watchdog
 // ---------------------------------------------------------------------------
 // Not a task in the real sense — it observes the loop rather than any hardware.
-// It becomes the source of the protocol's HB frame at stage 12.
+// This is the CONSOLE heartbeat, for a human reading the serial monitor. The
+// protocol's `EVT HB` frame is a separate thing sent by pi_link on its own
+// timer (timings::LINK_HEARTBEAT_MS), because the board declares the link dead
+// without one and that must not depend on anything in this file.
 void run_heartbeat()
 {
     // Static locals are how a non-blocking task remembers where it was between
@@ -114,8 +117,10 @@ void run_health_report()
 // Debug keyboard
 // ---------------------------------------------------------------------------
 // Turns keystrokes on the USB serial monitor into events, so the system can be
-// exercised with no peripherals attached. Stage 4 moves this into the pi_link
-// simulator; for now it exists to prove the queue works end to end.
+// exercised with no peripherals attached. The keys standing in for the camera
+// and for Square belong to the pi_link simulator and are offered to it first;
+// what remains is handled here. Which of these exist at all is decided at
+// compile time by the SIM_* options — see sim_config.h.
 void print_help()
 {
     printf("\n--- debug keys ---\n");
@@ -271,10 +276,10 @@ void run_debug_input()
         }
 
         case 'T': {
-            // Preview the outbound frames the state machine will send once it
-            // exists. Nothing here is a real transaction; the point is to make
-            // the protocol visible and reviewable now, so stage 12 transcribes
-            // something already agreed rather than inventing it.
+            // Preview the outbound frames a sale produces, without making one.
+            // Nothing here is a real transaction; it exists so the wire format
+            // can be eyeballed against documentation.md section 6 without
+            // having to walk a whole purchase through the machine first.
             printf("\n--- outbound frame preview (not a real sale) ---\n");
             basket::Basket example;
             example.taken[static_cast<uint8_t>(catalogue::Can::Coke)] = 2;
@@ -407,13 +412,6 @@ void run_debug_input()
     }
 }
 
-// ---------------------------------------------------------------------------
-// Temporary event consumer
-// ---------------------------------------------------------------------------
-// Stands in for run_checkout() until stage 5. It drains the queue and reports
-// what it found, which is all that is needed to prove events flow from producer
-// to consumer within a single pass. Stage 5 deletes this and replaces the call
-// below with the state machine.
 } // namespace
 
 int main()

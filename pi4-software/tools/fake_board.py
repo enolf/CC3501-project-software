@@ -18,7 +18,7 @@ argument.
 
 The alternative, a "demo mode" writing plausible rows straight into SQLite, gets
 a chart on screen a day sooner and leaves the entire ingest path unrun until the
-moment it has to work. See dashboard-plan.md section 0.
+moment it has to work. See documentation.md section 7.3.
 
 WHY THE DATA IS NOT TIDY
 ------------------------
@@ -83,7 +83,7 @@ OPENS_PER_DAY = 40.0
 NORMAL_OPEN_S = (4.0, 40.0)
 
 #: Occasionally the door is left ajar. **This is the failure that actually
-#: happens**, and the one the alert exists for (dashboard.md section 10), so the
+#: happens**, and the one the alert exists for (documentation.md section 1), so the
 #: simulator has to produce it or the alert is built against a case that never
 #: occurs in testing.
 LEFT_OPEN_RATE = 0.015
@@ -134,7 +134,7 @@ CASH_SHARE = 0.6
 #: would leave them permanently empty and untested.
 ABANDON_RATE = 0.17
 
-#: Coin masses after the stage-8 recalibration (plan.md risk R1): the $1 is
+#: Coin masses after the stage-8 recalibration (documentation.md section 5.7): the $1 is
 #: 9.00 g, not the 9.80 g an uncalibrated scale reported.
 COIN_G = {100: 9.00, 200: 6.60}
 
@@ -155,7 +155,7 @@ CARD_PAY_S = (12.0, 45.0)
 COIN_ON_CLOSE_RATE = 0.5
 COIN_MASSES_G = (9.00, 6.60)
 
-#: ~$50 in $1 coins against a 500 g cell (dashboard.md section 10). Past this
+#: ~$50 in $1 coins against a 500 g cell (documentation.md section 1). Past this
 #: the box needs emptying, which is an operational necessity rather than a
 #: curiosity.
 BOX_FULL_G = 450.0
@@ -238,11 +238,11 @@ def plan_transaction(rng, txn_id, closed_at, items, owed, method=None):
 
     `items` and `owed` are passed IN rather than invented here, because from
     stage D6 the basket is not the board's to invent: it is the difference
-    between two camera scans (dashboard.md section 6.3).
+    between two camera scans (documentation.md section 6).
 
     THE POINT OF THIS FUNCTION IS THE AWKWARD SHAPE, NOT THE HAPPY PATH.
     The firmware's `notify_sale()` is called from two places, and the result is
-    genuinely lopsided (dashboard.md section 6.2):
+    genuinely lopsided (documentation.md section 6):
 
       * a CASH sale sends `TXN_START` TWICE with the same id — once when the
         CASH button is pressed and again on completion;
@@ -429,7 +429,7 @@ class Zone:
     The board has no idea which shelf this sensor is on and neither does this
     class — it carries a ROM code and a thermal behaviour, and nothing else.
     Which zone it *is* gets decided on the Pi, in the `sensor` table
-    (dashboard.md section 4.3). That separation is the thing being tested, so
+    (documentation.md section 7.3). That separation is the thing being tested, so
     breaking it here to make the simulator tidier would defeat the exercise.
     """
 
@@ -662,7 +662,7 @@ class FakeBoard:
         Draining them one generator at a time emits, say, all the heartbeats up
         to 70 s and only then the temperatures at 60.75 s, and the board's `ms`
         field goes *backwards* on the wire. The Pi reads a backwards jump as the
-        board having reset (dashboard.md section 6) and opens a spurious boot
+        board having reset (documentation.md section 6) and opens a spurious boot
         record. So: merge by due time, exactly as a real board would, where the
         events genuinely happen in the order the clock reaches them.
         """
@@ -711,7 +711,7 @@ class FakeBoard:
             # `begin_selecting()` requests a scan when the door OPENS and
             # `Recount` requests another when it shuts. The basket is the
             # DIFFERENCE between the two answers; the board never decides what
-            # was taken, it finds out (dashboard.md section 6.3).
+            # was taken, it finds out (documentation.md section 6).
             if is_open:
                 # transaction_id = now_ms() at the OPEN, not at the close.
                 self._pending_txn_id = max(0, int(self.ms_since_boot(at)))
@@ -739,7 +739,7 @@ class FakeBoard:
     def _die_celsius(self, at):
         """RP2040 die temperature: ADC channel 4.
 
-        Only accurate to several degrees absolute (dashboard.md section 7), so
+        Only accurate to several degrees absolute (documentation.md section 7.3), so
         it is a trend signal rather than a measurement — modelled as a slow
         daily swing around a warm-ish idle, not as anything precise.
         """
@@ -787,7 +787,7 @@ class FakeBoard:
                 # recognised as a coin still WEIGHS something, and that
                 # difference between the logged takings and the measured mass is
                 # exactly what the cash reconciliation check exists to find
-                # (dashboard.md section 11).
+                # (documentation.md section 5.7).
                 self._add_to_box(float(payload.split("delta_g=")[1]))
 
     def _start_card_payment(self, txn_id, closed_at, items, owed):
@@ -795,7 +795,7 @@ class FakeBoard:
 
         Note what is NOT sent here: no `TXN_START`. The firmware only calls
         `notify_sale()` on completion for a card sale, which is why an abandoned
-        one leaves no item list at all (dashboard.md section 6.2). Faithfully
+        one leaves no item list at all (documentation.md section 6). Faithfully
         reproduced, because the panels have to cope with it.
         """
         at = closed_at + self.rng.uniform(*CASH_DECIDE_S)

@@ -413,7 +413,7 @@ void Display::show_payment_select(const basket::Basket &basket, uint32_t owed_ce
                LV_ALIGN_TOP_RIGHT, -12, 30);
 
     // The two payment choices. Coordinates match the touch-region table in
-    // plan.md section 4.
+    // documentation.md section 5.6.
     make_button(scr, "CASH", COLOUR_CASH, events::Kind::TouchCash,
                 8, 150, 147, 82);
     make_button(scr, "ONLINE", COLOUR_ONLINE, events::Kind::TouchOnline,

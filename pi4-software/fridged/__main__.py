@@ -42,7 +42,7 @@ def build_transport(args):
     when it is asked for, so a deployment that never passes `--port sim` cannot
     accidentally be running against fabricated data. The firmware makes the same
     point about its own stand-ins — with them compiled in, anyone who can reach
-    the USB socket can fake a transaction (plan.md stage 10a).
+    the USB socket can fake a transaction (documentation.md section 3.2).
     """
     if args.port == "sim":
         from fake_board import FakeBoard  # tools/, on the path via __init__.py
@@ -183,7 +183,7 @@ def main(argv=None):
     camera = build_camera(args)
 
     # Independent of --port on purpose: a REAL payment against a SIMULATED
-    # board is the hybrid test in plan.md stage 15.5, and it works because
+    # board is the hybrid test in documentation.md section 7.5, and it works because
     # the board cannot tell who answers CMD SQUARE_LINK.
     payments = PaymentService(BACKENDS[args.square]())
     log.info("card payments: %s", payments.backend.name)

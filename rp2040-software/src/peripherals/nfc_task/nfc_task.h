@@ -8,7 +8,7 @@
 // An approved card is a WAKE TRIGGER and nothing more (decision D9). It starts
 // a transaction exactly as opening the door does, and the customer still pays
 // by cash or QR. It is not a payment method and it does not unlock anything —
-// there is no lock yet, and dashboard.md section 9 explains why attributing
+// there is no lock yet, and documentation.md section 7.3 explains why attributing
 // purchases to cards before there is one would be unfair.
 
 namespace nfc {

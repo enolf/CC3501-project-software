@@ -6,7 +6,7 @@
 #
 # WHY THIS EXISTS
 # ---------------
-# dashboard.md section 13 lists "Grafana + OpenCV on one Pi 4 is not free" as a
+# documentation.md section 7.3 lists "Grafana + OpenCV on one Pi 4 is not free" as a
 # hazard and says to measure it early rather than discovering it during the
 # demo. This is that measurement. It also produces a table worth putting in the
 # report, which is a better reason to run it than fear.

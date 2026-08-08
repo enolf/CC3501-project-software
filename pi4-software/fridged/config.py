@@ -2,7 +2,7 @@
 
 WHY THIS FILE EXISTS
 --------------------
-`CLAUDE.md` section 4 makes `board.h` the single place a wiring fact may appear
+`documentation.md` section 4 makes `board.h` the single place a wiring fact may appear
 on the firmware side, so that a hardware change is one edit rather than a hunt.
 This is the same rule for the Pi.
 
@@ -87,7 +87,7 @@ CAMERA_STALE_S = 1.0
 
 #: How old the newest count may be before it is not worth answering with at all.
 #: Past this the Pi sends no INV, and the board faults out of service after its
-#: own `RECOUNT_TIMEOUT_MS` (8 s). See decision D1 in IMPLEMENTATION.md: a
+#: own `RECOUNT_TIMEOUT_MS` (8 s). See decision D1, documentation.md section 7.1: a
 #: fridge that cannot see its shelf should stop selling, not guess.
 #:
 #: Comfortably inside the board's budget so the fault is OUR verdict rather than
@@ -109,7 +109,7 @@ CAMERA_STOP_TIMEOUT_S = 3.0
 # EVERY NUMBER IN THIS BLOCK IS A PLACEHOLDER UNTIL IT IS MEASURED.
 #
 # They are named constants precisely so that tuning them is an edit rather than
-# a rewrite. The measurements that should set them are in `TEST.md`:
+# a rewrite. The measurements that should set them are in `documentation.md` section 8.2:
 #
 #   T3.6  how much do counts wander on a shelf nobody is touching?
 #         -> SETTLE_FRAMES. If a still shelf already produces a run of three
@@ -190,7 +190,7 @@ SERIAL_BAUD = 115200
 #: dead after `LINK_TIMEOUT_MS` (30 s) without a valid frame and takes itself out
 #: of service — and the Pi has nothing to say while the fridge is idle, so
 #: without this a perfectly healthy link looks dead after 30 s of quiet. This was
-#: found during firmware stage 13; see plan.md section 2, the `HB` row.
+#: found during firmware stage 13; see documentation.md section 6, the `HB` row.
 HEARTBEAT_INTERVAL_S = 10.0
 
 #: How long without a frame from the board before we consider the link down.
@@ -226,7 +226,7 @@ SERIAL_REOPEN_MAX_S = 10.0
 
 # --- Write batching ---------------------------------------------------------
 #
-# dashboard.md section 13: continuous writes kill SD cards. One transaction per
+# documentation.md section 7.3: continuous writes kill SD cards. One transaction per
 # row would fsync per row; batching turns a day of telemetry into a few thousand
 # commits instead of a few hundred thousand.
 
@@ -261,7 +261,7 @@ SELF_METRIC_INTERVAL_S = 10.0
 
 #: A drop in the board's `ms` field this large means it rebooted without us
 #: seeing the `BOOT` frame — the counter restarting is the signal
-#: (dashboard.md section 6). The stream is strictly ordered, so any decrease is
+#: (documentation.md section 6). The stream is strictly ordered, so any decrease is
 #: real and the detector does not need to be sensitive; a genuine reset drops
 #: `ms` from possibly hours to near zero. The slack simply keeps a single odd
 #: frame from opening a spurious boot record.
@@ -277,7 +277,7 @@ MS_ROLLBACK_SLACK = 1000
 #:
 #: "all" is roughly 12,000 rows a day, which SQLite will not notice and which is
 #: worth every byte the first time something looks wrong the night before a demo
-#: (dashboard.md section 5.2). Turn it down if the database ever lives somewhere
+#: (documentation.md section 7.3). Turn it down if the database ever lives somewhere
 #: precious.
 RAW_LINE_KEEP = "all"
 

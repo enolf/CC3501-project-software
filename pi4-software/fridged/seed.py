@@ -6,9 +6,9 @@
 THE ONE PLACE THAT WRITES ROWS WITHOUT A WIRE
 ---------------------------------------------
 Everything else in `fridged` simulates at the wire and goes through the real
-ingest path, deliberately (dashboard-plan.md section 0). This module is the
+ingest path, deliberately (documentation.md section 7.3). This module is the
 documented exception, and the reason is that it writes the *past*: no serial link
-can carry two weeks ago. dashboard.md section 12 makes the point that history
+can carry two weeks ago. documentation.md section 7.3 makes the point that history
 accumulates in wall-clock time and cannot be back-filled once the system is real
 — but it can be *simulated* now, and that is what makes the panel design
 reviewable before there is a fridge to look at.

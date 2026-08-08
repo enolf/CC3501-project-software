@@ -602,7 +602,7 @@
         "orientation": "auto",
         "textMode": "auto"
       },
-      "description": "The failure that actually happens is the door left ajar, and a count of opens does not capture it (dashboard.md section 10)."
+      "description": "The failure that actually happens is the door left ajar, and a count of opens does not capture it (documentation.md section 1)."
     },
     {
       "id": 14,
@@ -733,7 +733,7 @@
         "orientation": "auto",
         "textMode": "auto"
       },
-      "description": "ADC channel 4. Accurate to only several degrees absolute (dashboard.md section 7), so read it as a trend, not a measurement."
+      "description": "ADC channel 4. Accurate to only several degrees absolute (documentation.md section 7.3), so read it as a trend, not a measurement."
     },
     {
       "id": 16,
@@ -1067,7 +1067,7 @@
         "orientation": "auto",
         "textMode": "auto"
       },
-      "description": "Drinks taken and not paid for. The central question for an honour-system fridge (dashboard.md section 10)."
+      "description": "Drinks taken and not paid for. The central question for an honour-system fridge (documentation.md section 1)."
     },
     {
       "id": 22,
@@ -1188,7 +1188,7 @@
         "orientation": "auto",
         "textMode": "auto"
       },
-      "description": "CASH ONLY, and that is a firmware limitation rather than a choice. A card sale's TXN_START is sent at the END of the transaction (dashboard.md section 6.2), so its start and end timestamps are the same instant and its duration would read as zero. Making notify_sale() fire on entering PaymentSelect would make this measurable for both."
+      "description": "CASH ONLY, and that is a firmware limitation rather than a choice. A card sale's TXN_START is sent at the END of the transaction (documentation.md section 6), so its start and end timestamps are the same instant and its duration would read as zero. Making notify_sale() fire on entering PaymentSelect would make this measurable for both."
     },
     {
       "id": 24,
@@ -1431,7 +1431,7 @@
       "id": 28,
       "type": "barchart",
       "title": "Revenue per drink",
-      "description": "The ranking often differs from unit volume, which is the more interesting finding (dashboard.md section 10). Identical here only because every drink currently costs $2.",
+      "description": "The ranking often differs from unit volume, which is the more interesting finding (documentation.md section 1). Identical here only because every drink currently costs $2.",
       "gridPos": {
         "h": 7,
         "w": 8,
@@ -1629,7 +1629,7 @@
       "id": 31,
       "type": "timeseries",
       "title": "Stock burn-down",
-      "description": "Counts fall as drinks are taken and jump straight back up on a restock. Nothing announces a restock - the next scan simply reports more drinks, which is why the camera is the source of truth (dashboard.md section 2).",
+      "description": "Counts fall as drinks are taken and jump straight back up on a restock. Nothing announces a restock - the next scan simply reports more drinks, which is why the camera is the source of truth (documentation.md section 1).",
       "gridPos": {
         "h": 7,
         "w": 16,
@@ -1906,7 +1906,7 @@
       "id": 33,
       "type": "stat",
       "title": "Unrecognised mass",
-      "description": "Mass that went into the box and was not a coin combination the classifier recognised - slugs, washers, or a knock on the box. CoinAcceptor already emits these (dashboard.md section 10); a rising total is either somebody trying it on or the classifier drifting.",
+      "description": "Mass that went into the box and was not a coin combination the classifier recognised - slugs, washers, or a knock on the box. CoinAcceptor already emits these (documentation.md section 1); a rising total is either somebody trying it on or the classifier drifting.",
       "gridPos": {
         "h": 4,
         "w": 12,
@@ -1975,7 +1975,7 @@
       "id": 34,
       "type": "table",
       "title": "Stock reconciliation - camera vs ledger",
-      "description": "Two independent accounts of the same shelf. The camera says what is there; the transaction ledger says what should be. Restocks are detected as upward jumps in the count and added in, so what is left is genuinely unexplained.\n\nNEGATIVE means drinks left without a sale being recorded. Neither hardware nor message exists for this - it falls out of data already collected, which is the most novel part of the project (dashboard.md section 11).",
+      "description": "Two independent accounts of the same shelf. The camera says what is there; the transaction ledger says what should be. Restocks are detected as upward jumps in the count and added in, so what is left is genuinely unexplained.\n\nNEGATIVE means drinks left without a sale being recorded. Neither hardware nor message exists for this - it falls out of data already collected, which is the most novel part of the project (documentation.md section 5.7).",
       "gridPos": {
         "h": 7,
         "w": 24,
@@ -2066,7 +2066,7 @@
       "id": 40,
       "type": "timeseries",
       "title": "Theft rate",
-      "description": "Share of completed transactions that ended unpaid, in six-hour buckets. The central question for an honour-system fridge (dashboard.md section 10) - a single number says little, the trend says whether it is getting worse.",
+      "description": "Share of completed transactions that ended unpaid, in six-hour buckets. The central question for an honour-system fridge (documentation.md section 1) - a single number says little, the trend says whether it is getting worse.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -2141,7 +2141,7 @@
       "id": 41,
       "type": "barchart",
       "title": "Unpaid units per drink",
-      "description": "Which drinks walk out without being paid for.\n\nINCOMPLETE, and the reason is a firmware gap rather than a query: an abandoned CARD sale sends no TXN_START, so it arrives with no item list and cannot appear here (dashboard.md section 6.2). What is shown is real; the total is an undercount. Fixing notify_sale() to fire on entering PaymentSelect would close it.",
+      "description": "Which drinks walk out without being paid for.\n\nINCOMPLETE, and the reason is a firmware gap rather than a query: an abandoned CARD sale sends no TXN_START, so it arrives with no item list and cannot appear here (documentation.md section 6). What is shown is real; the total is an undercount. Fixing notify_sale() to fire on entering PaymentSelect would close it.",
       "gridPos": {
         "h": 8,
         "w": 12,
@@ -2337,7 +2337,7 @@
       "id": 44,
       "type": "table",
       "title": "Temperature recovery - the ten longest door opens",
-      "description": "What each long door open actually did to the top shelf: the average temperature in the five minutes before it, the peak reached during and shortly after, and the difference.\n\nCosts no new hardware and no new message - it is a query over the door and temperature data already being collected, which is what makes it good report material (dashboard.md section 10). Top shelf because it sits behind the door and notices most; the freezer barely moves.",
+      "description": "What each long door open actually did to the top shelf: the average temperature in the five minutes before it, the peak reached during and shortly after, and the difference.\n\nCosts no new hardware and no new message - it is a query over the door and temperature data already being collected, which is what makes it good report material (documentation.md section 1). Top shelf because it sits behind the door and notices most; the freezer barely moves.",
       "gridPos": {
         "h": 8,
         "w": 24,

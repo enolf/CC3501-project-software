@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Stand in for the Raspberry Pi, from a laptop, over the USB serial port.
 
-Speaks the frame protocol in plan.md section 2 so the RP2040's real serial
+Speaks the frame protocol in documentation.md section 6 so the RP2040's real serial
 backend can be exercised before the Pi side exists — and, just as usefully,
 before the camera works.
 

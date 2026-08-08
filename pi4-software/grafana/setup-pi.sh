@@ -160,7 +160,7 @@ sudo chown -R grafana:grafana "${DASH_DIR}"
 ls -l "${DASH_DIR}"
 
 # --- 5. Anonymous viewing ---------------------------------------------------
-# dashboard.md section 2: local network only, so there is no login to manage and
+# documentation.md section 1: local network only, so there is no login to manage and
 # no account for a committee member to lose.
 #
 # Set through the environment file rather than by editing /etc/grafana/grafana.ini,

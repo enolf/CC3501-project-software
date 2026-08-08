@@ -14,7 +14,7 @@ namespace {
 
 // One HX711 and one classifier. File-scope statics rather than a class,
 // following the course convention for a peripheral there is only ever one of
-// (CLAUDE.md section 4).
+// (documentation.md section 5.1).
 MassSensor  sensor;
 CoinAcceptor acceptor;
 
