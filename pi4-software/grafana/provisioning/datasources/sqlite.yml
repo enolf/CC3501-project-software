@@ -1,0 +1,36 @@
+# The fridge database, as a Grafana datasource.
+#
+# Provisioned from file rather than added through the UI so that the panels'
+# `datasource.uid` references resolve on a fresh install. A UID that Grafana
+# generated at random when someone clicked "Add datasource" would differ on
+# every machine, and every panel would come up saying "Datasource not found".
+#
+# INSTALLED TO: /etc/grafana/provisioning/datasources/sqlite.yml
+# by ../setup-pi.sh. Editing this file alone changes nothing until that runs.
+
+apiVersion: 1
+
+datasources:
+  - name: Fridge
+    # Fixed, and referenced by that exact string in dashboards/*.json.
+    uid: fridge-sqlite
+    type: frser-sqlite-datasource
+    access: proxy
+    isDefault: true
+
+    # False so a change made in the UI cannot drift away from this file. To
+    # change the datasource, edit here and re-run setup-pi.sh.
+    editable: false
+
+    jsonData:
+      # NOT in a home directory, deliberately.
+      #
+      # Grafana runs as the `grafana` user, and a WAL database cannot be opened
+      # read-only: a reader has to take a lock in the -shm wal-index, which
+      # means write access to that file and to the directory holding it. So
+      # `grafana` needs write access to wherever this lives, and granting that
+      # inside /home means opening up the home directory's traversal bits too.
+      #
+      # /var/lib/fridge is owned by the login user with group `grafana`, setgid
+      # so new files inherit the group. setup-pi.sh creates it.
+      path: /var/lib/fridge/fridge.db

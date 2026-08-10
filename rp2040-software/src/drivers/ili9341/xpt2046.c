@@ -28,7 +28,7 @@ bool xpt2046_is_pressed(void) {
 
 uint16_t xpt2046_spi_read(uint8_t command) {
     // 1. Throttle the SPI speed down for the touch controller
-    spi_set_baudrate(SPI_PORT, TOUCH_SPI_SPEED);
+    spi_set_baudrate(DISPLAY_SPI_INSTANCE, TOUCH_SPI_BAUDRATE);
 
     uint8_t tx_buf[3] = {command, 0x00, 0x00};
     uint8_t rx_buf[3] = {0};
@@ -37,13 +37,13 @@ uint16_t xpt2046_spi_read(uint8_t command) {
     gpio_put(TOUCH_CS_PIN, 0); 
     
     // 3. Execute transaction
-    spi_write_read_blocking(SPI_PORT, tx_buf, rx_buf, 3); 
+    spi_write_read_blocking(DISPLAY_SPI_INSTANCE, tx_buf, rx_buf, 3); 
     
     // 4. Release the bus
     gpio_put(TOUCH_CS_PIN, 1); 
 
     // 5. Restore high speed for the ILI9341 so graphics don't lag
-    spi_set_baudrate(SPI_PORT, DISPLAY_SPI_SPEED);
+    spi_set_baudrate(DISPLAY_SPI_INSTANCE, DISPLAY_SPI_BAUDRATE);
 
     // Combine response into a 12-bit value
     return (rx_buf[1] << 4) | (rx_buf[2] >> 4);

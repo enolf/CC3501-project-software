@@ -17,27 +17,37 @@ typedef struct {
 } ApprovedUser;
 
 // ---------------------------------------------------------------------------
-// THE APPROVED LIST  ("the database")
+// THE APPROVED LIST
 //
-// To add someone: place their card on the reader and read the serial line
-//     Card detected, UID: AA BB CC DD EE FF 00
-// then copy those bytes into a new row below, set uid_len to the number of
-// bytes, and give them a name. To revoke access, delete their row. Nothing
-// else needs to change — access_lookup() sizes itself from this table.
+// Lives in access_list.h, which is GITIGNORED, because a card UID paired with a
+// name identifies a real person. Unlike a password a UID cannot be rotated — it
+// is burned into the card at manufacture — so the only remedy for a leaked one
+// is issuing a new card. Same arrangement as `tokens.py` on the Pi side: the
+// secret is created by hand on each machine and only a template is committed.
 //
-// The UIDs below are PLACEHOLDERS — replace them with your real cards.
+// `approved_users[]` is defined there, still as a plain array of ApprovedUser,
+// so everything below continues to size itself from it.
+//
+// Included HERE rather than at the top of the file because the definition needs
+// the ApprovedUser type declared above it. Keeping the two adjacent is what
+// makes that ordering obvious to whoever edits it next.
 // ---------------------------------------------------------------------------
-static const ApprovedUser approved_users[] = {
-    { "Damien Turner", 7, { 0x04, 0x40, 0x4C, 0x22, 0xC0, 0x67, 0x80 } },
+#if __has_include("peripherals/access_control/access_list.h")
+#include "peripherals/access_control/access_list.h"
+#else
+// A missing file would otherwise surface as "approved_users was not declared",
+// which says nothing about what to do. This says it.
+#error "access_list.h is missing. It holds the approved card UIDs and is gitignored on purpose, so it does not arrive with a clone and must be written by hand. documentation.md section 3.5 has the file to copy."
+#endif
 
-    // Add more people the same way — one row each, then re-build. For example:
-    // { "Jane Smith", 7, { 0x04, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66 } },
-    // { "Spare Fob",  4, { 0xDE, 0xAD, 0xBE, 0xEF } },
-};
+/// How many rows the table above has. Everything else sizes itself from this,
+/// so adding or removing a person needs no other change.
+constexpr size_t APPROVED_COUNT =
+    sizeof(approved_users) / sizeof(approved_users[0]);
 
 const char *access_lookup(const uint8_t *uid, uint8_t uid_len)
 {
-    const size_t count = sizeof(approved_users) / sizeof(approved_users[0]);
+    const size_t count = APPROVED_COUNT;
     for (size_t i = 0; i < count; i++) {
         // A match needs the same length AND the same bytes. Checking the length
         // first means a 4-byte card can never accidentally match the first four
@@ -48,4 +58,17 @@ const char *access_lookup(const uint8_t *uid, uint8_t uid_len)
         }
     }
     return nullptr;   // not on the list -> access denied
+}
+
+bool access_first(uint8_t *uid_out, uint8_t *uid_len_out)
+{
+    // An empty approved list is a legitimate state — a fridge nobody has been
+    // enrolled on yet — so this reports "nothing to give" rather than asserting.
+    if (APPROVED_COUNT == 0) {
+        return false;
+    }
+
+    memcpy(uid_out, approved_users[0].uid, approved_users[0].uid_len);
+    *uid_len_out = approved_users[0].uid_len;
+    return true;
 }

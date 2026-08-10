@@ -1,0 +1,43 @@
+# Runtime configuration for fridged. Installed to /etc/default/fridged.
+#
+# THIS IS THE FILE YOU EDIT to swap a simulated part for a real one. The systemd
+# unit never changes; after editing here:
+#
+#     sudo systemctl restart fridged
+#     journalctl -u fridged -f
+#
+# Not in git once installed: it is machine-local, and the copy in deploy/ is a
+# template.
+
+# Where the database lives. Must match the path in the Grafana datasource
+# (grafana/provisioning/datasources/sqlite.yml), and must be a directory the
+# `grafana` group can write — see the note about WAL in fridged.service.
+FRIDGE_DB=/var/lib/fridge/fridge.db
+
+# Arguments to `python3 -m fridged`.
+#
+# Swap ONE THING AT A TIME and confirm it before the next, so a failure has one
+# possible cause instead of three. The intended order is in deploy/README.md:
+#
+#   1. the board      --port sim          ->  --port /dev/serial/by-id/...
+#   2. the camera     (simulated shelf)   ->  --camera picapture
+#   3. card payments  --square fake       ->  --square real
+#
+# USE THE by-id PATH, NOT /dev/ttyACM0. The number is assigned in the order
+# devices are enumerated, so it moves when the board is replugged or reset while
+# the Pi is up — which is most of the time during testing. The by-id path is
+# derived from the RP2040's serial number and never changes. Find yours with:
+#
+#     ls -l /dev/serial/by-id/
+#
+# Camera moved AHEAD of payments compared with the original order, because it is
+# the one that can fail on permissions: the service runs with Group=grafana and
+# only the supplementary groups fridged.service names. Confirm the camera works
+# under systemd before adding real money to the picture.
+#
+# Simulated board, busy enough to watch:
+FRIDGED_ARGS=--port sim --sim-activity 30 --square fake
+
+# The real fridge. Substitute your own by-id path — the serial number is the
+# board's, not transferable:
+# FRIDGED_ARGS=--port /dev/serial/by-id/usb-Raspberry_Pi_Pico_E46570978F401029-if00 --camera picapture --square real

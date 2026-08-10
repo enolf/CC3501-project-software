@@ -1,7 +1,22 @@
+# Third-party libraries, pulled in as submodules rather than copied into the
+# tree. A plain `git clone` leaves these directories EMPTY and the firmware
+# fails to compile on missing lvgl.h / hx711.h — see README.md, "Getting the
+# code", for the clone command that populates them.
+#
+# pico-scale carries a nested submodule of its own (hx711-pico-c), which is why
+# every command in the README uses --recursive rather than just --init.
+
 [submodule "rp2040-software/lib/lvgl"]
 	path = rp2040-software/lib/lvgl
 	url = https://github.com/lvgl/lvgl.git
 	branch = release/v9.2
+
+# NOTE: this section's NAME does not match its `path`, and that is deliberate
+# rather than an oversight. A submodule name is only an internal label — git
+# uses it to locate .git/modules/<name> — and renaming it would invalidate the
+# gitdir in every clone that already exists, forcing each collaborator to
+# de-init and re-init the submodule. The path is what matters and it is
+# correct, so the name is left as first recorded.
 [submodule "rp2040-software/lib/extern/pico-scale"]
 	path = rp2040-software/lib/pico-scale
 	url = https://github.com/endail/pico-scale

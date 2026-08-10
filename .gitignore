@@ -1,3 +1,89 @@
+# =============================================================================
+# SECRETS — never commit anything matching these
+# =============================================================================
+# See documentation.md, "Secrets and what must never be committed".
+#
+# tokens.py holds the Square API credentials. It is ignored in
+# pi4-software/.gitignore as well; the duplication is deliberate, because a
+# credential file is the one thing where a belt-and-braces rule costs nothing.
+tokens.py
+secrets.py
+credentials.json
+*.pem
+*.key
+.env
+.env.*
+
+# Python bytecode.
+#
+# THIS IS A SECRETS RULE, NOT A TIDINESS RULE. A .pyc embeds the string
+# constants of the module it was compiled from, so importing an ignored
+# tokens.py produces __pycache__/tokens.cpython-*.pyc containing the access
+# token in plain text — and that file is NOT covered by the tokens.py rule
+# above. Exactly that happened here and reached a public GitHub repo; see
+# documentation.md for the incident and the rotation that followed.
+__pycache__/
+*.py[cod]
+*$py.class
+
+# =============================================================================
+# Working documents — deliberately NOT part of the repository
+# =============================================================================
+# Planning and agent-instruction files. These are working documents between the
+# author and Claude Code, not deliverables, and they were never committed.
+#
+# CONSEQUENCE, so it is not a surprise later: a `git pull` on the Pi or a fresh
+# clone by a collaborator will NOT contain these. Anything another machine needs
+# to act on belongs in documentation.md or a README, both of which are tracked.
+CLAUDE.md
+claude_code_integration_prompt.md
+dashboard.md
+dashboard-plan.md
+plan.md
+
+# =============================================================================
+# Build output
+# =============================================================================
+# The names README.md's install steps use, plus anything else matching, since a
+# second build tree (a different Pi link backend, say) is a normal thing to want
+# and a build directory is never worth committing.
 build/
+build-*/
+build-baseline.txt
+
+# =============================================================================
+# Generated data — the fridge database, camera frames, Grafana's own state
+# =============================================================================
+# The database is machine-local operational data, not source. The -wal and -shm
+# files are SQLite's write-ahead log and shared-memory index: they are part of
+# the database, so committing one without the others would produce a file that
+# opens but is missing the most recent writes.
+*.db
+*.db-wal
+*.db-shm
+
+# Camera frames written by picapture for the dashboard to display.
+pi4-software/frames/
+
+# Grafana's own database and logs when it is run from inside the repo during
+# development. The dashboards themselves ARE committed, as exported JSON in
+# pi4-software/grafana/dashboards/ — see dashboard-plan.md stage D2 for why:
+# a dashboard that exists only inside Grafana is lost with Grafana.
+grafana-data/
+
+# =============================================================================
+# Machine-local editor and toolchain settings
+# =============================================================================
+# These carry absolute paths from whoever generated them, so they are personal
+# to one machine rather than to the project.
+#
+# NOT ignored, deliberately: rp2040-software/.vscode/cmake-kits.json. It refers
+# to the toolchain through ${env:USERPROFILE} rather than a hardcoded path, so
+# it is portable, and it is how the team gets the right ARM kit selected.
 .vscode/settings.json
+compile_commands.json
+
+# =============================================================================
+# Third-party documents we do not have redistribution rights to
+# =============================================================================
 datasheets/

@@ -3,3 +3,14 @@ build/
 datasheets/
 cmake-kits.json
 .vscode/launch.json.DS_Store
+
+# --- Personal data ---
+# access_list.h pairs card UIDs with the names of real people. Written by hand
+# on each machine; documentation.md section 3.5 has the file to copy.
+#
+# A UID cannot be rotated the way a leaked password can — it is burned into the
+# card at manufacture — so the only remedy for publishing one is issuing a new
+# card. Both the path and the bare name are matched, so a copy left in a scratch
+# directory is caught too.
+src/peripherals/access_control/access_list.h
+access_list.h

@@ -1,0 +1,15 @@
+# Nightly at 03:30, or as soon after as the Pi is awake.
+
+[Unit]
+Description=Nightly fridge database backup
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+# The Pi may be off overnight, or the clock may not have synced yet. Persistent
+# runs the job on the next boot if its slot was missed, which is the difference
+# between a backup schedule and a backup schedule that works.
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

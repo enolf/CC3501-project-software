@@ -5,32 +5,46 @@
 static inline void cs_select()
 {
     asm volatile("nop \n nop \n nop");
-    gpio_put(ILI9341_PIN_CS, 0);
+    gpio_put(DISPLAY_CS_PIN, 0);
     asm volatile("nop \n nop \n nop");
 }
 
 static inline void cs_deselect()
 {
     asm volatile("nop \n nop \n nop");
-    gpio_put(ILI9341_PIN_CS, 1);
+    gpio_put(DISPLAY_CS_PIN, 1);
     asm volatile("nop \n nop \n nop");
 }
 
 static inline void dc_command()
 {
-    gpio_put(ILI9341_PIN_DC, 0);
+    gpio_put(DISPLAY_DC_PIN, 0);
 }
 
 static inline void dc_data()
 {
-    gpio_put(ILI9341_PIN_DC, 1);
+    gpio_put(DISPLAY_DC_PIN, 1);
 }
 
+// WHY THE SPI RETURN VALUES BELOW ARE NOT CHECKED, when every I2C call in
+// mfrc522.cpp is. The rule (documentation.md section 5.3) exists because a bus
+// transaction can fail and report it; I2C genuinely can, since an absent or
+// wedged device NACKs its address and i2c_write_blocking() returns
+// PICO_ERROR_GENERIC. SPI has no acknowledgement in the protocol at all: the
+// controller clocks bits out regardless of whether anything is listening, and
+// spi_write_blocking() only returns once it has transferred every byte it was
+// given. Its return value is therefore always equal to the length passed in,
+// and a check against it could never be false.
+//
+// So the failure a check would be reaching for is not detectable here. It is
+// caught instead by reading the display back where the chip supports it, and
+// by the fact that a dead panel is immediately visible. Writing `if (n != 1)`
+// around each of these would look like diligence while testing nothing.
 static void ili9341_write_cmd(uint8_t cmd)
 {
     dc_command();
     cs_select();
-    spi_write_blocking(ILI9341_SPI_PORT, &cmd, 1);
+    spi_write_blocking(DISPLAY_SPI_INSTANCE, &cmd, 1);
     cs_deselect();
 }
 
@@ -38,53 +52,47 @@ static void ili9341_write_data(uint8_t data)
 {
     dc_data();
     cs_select();
-    spi_write_blocking(ILI9341_SPI_PORT, &data, 1);
+    spi_write_blocking(DISPLAY_SPI_INSTANCE, &data, 1);
     cs_deselect();
 }
 
 void ili9341_init(void)
 {
-    // 1. Initialize SPI at 30 MHz (fast enough for smooth UI)
-    spi_init(ILI9341_SPI_PORT, 30 * 1000 * 1000);
-    gpio_set_function(ILI9341_PIN_SCK, GPIO_FUNC_SPI);
-    gpio_set_function(ILI9341_PIN_MOSI, GPIO_FUNC_SPI);
-    gpio_set_function(ILI9341_PIN_MISO, GPIO_FUNC_SPI);
+    // 1. Initialise SPI at the display's rate (fast enough for smooth UI).
+    // The touch driver drops the bus to TOUCH_SPI_BAUDRATE around each of its
+    // transactions and puts it back afterwards.
+    spi_init(DISPLAY_SPI_INSTANCE, DISPLAY_SPI_BAUDRATE);
+    gpio_set_function(DISPLAY_SCK_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(DISPLAY_MOSI_PIN, GPIO_FUNC_SPI);
+    gpio_set_function(DISPLAY_MISO_PIN, GPIO_FUNC_SPI);
 
     // 2. Initialize Control Pins
-    gpio_init(ILI9341_PIN_CS);
-    gpio_set_dir(ILI9341_PIN_CS, GPIO_OUT);
-    gpio_put(ILI9341_PIN_CS, 1);
+    gpio_init(DISPLAY_CS_PIN);
+    gpio_set_dir(DISPLAY_CS_PIN, GPIO_OUT);
+    gpio_put(DISPLAY_CS_PIN, 1);
 
-    gpio_init(ILI9341_PIN_DC);
-    gpio_set_dir(ILI9341_PIN_DC, GPIO_OUT);
-    gpio_put(ILI9341_PIN_DC, 1);
+    gpio_init(DISPLAY_DC_PIN);
+    gpio_set_dir(DISPLAY_DC_PIN, GPIO_OUT);
+    gpio_put(DISPLAY_DC_PIN, 1);
 
-    gpio_init(ILI9341_PIN_RST);
-    gpio_set_dir(ILI9341_PIN_RST, GPIO_OUT);
-    gpio_put(ILI9341_PIN_RST, 1);
+    gpio_init(DISPLAY_RST_PIN);
+    gpio_set_dir(DISPLAY_RST_PIN, GPIO_OUT);
+    gpio_put(DISPLAY_RST_PIN, 1);
 
     // 3. Backlight Control Setup
-    gpio_init(ILI9341_PIN_BL);
-    gpio_set_dir(ILI9341_PIN_BL, GPIO_OUT);  
+    gpio_init(DISPLAY_BL_PIN);
+    gpio_set_dir(DISPLAY_BL_PIN, GPIO_OUT);  
 
-    // ---------------------------------------------------------
-    // --- PROTOTYPE MODE (PICO BREADBOARD) ---
-    // If you hardwired the LED pin to 3V3 on the breadboard, this 
-    // does nothing. If you used a standard active-high NPN transistor
-    // to test switching, HIGH (1) turns the screen ON.
-    // gpio_put(ILI9341_PIN_BL, 1); 
-
-    // --- CUSTOM PCB MODE (P-CHANNEL MOSFET) ---
-    // UNCOMMENT the line below and comment out the prototype line 
-    // above when flashing to your custom PCB! 
-    // A P-Channel MOSFET requires a LOW (0) signal to turn ON.
-    gpio_put(ILI9341_PIN_BL, 0); 
-    // ---------------------------------------------------------
+    // Backlight on. Which logic level means "on" is a board wiring fact, so it
+    // comes from DISPLAY_BL_ACTIVE_LOW in board.h rather than from editing this
+    // driver when moving between the breadboard prototype (active-high NPN) and
+    // the custom PCB (active-low P-channel MOSFET).
+    gpio_put(DISPLAY_BL_PIN, DISPLAY_BL_ACTIVE_LOW ? 0 : 1);
 
     // 4. Hardware Reset
-    gpio_put(ILI9341_PIN_RST, 0);
+    gpio_put(DISPLAY_RST_PIN, 0);
     sleep_ms(50);
-    gpio_put(ILI9341_PIN_RST, 1);
+    gpio_put(DISPLAY_RST_PIN, 1);
     sleep_ms(150);
 
     // 5. Send ILI9341 Initialization Sequence
@@ -138,6 +146,6 @@ void ili9341_write_pixels(const uint16_t *data, size_t len)
     dc_data();
     cs_select();
     // Use blocking SPI for now. This can be upgraded to DMA later for max performance!
-    spi_write_blocking(ILI9341_SPI_PORT, (const uint8_t *)data, len * 2);
+    spi_write_blocking(DISPLAY_SPI_INSTANCE, (const uint8_t *)data, len * 2);
     cs_deselect();
 }

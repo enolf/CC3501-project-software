@@ -1,457 +1,523 @@
+// Smart Fridge Drink Monitor — firmware entry point.
+//
+// This file holds top-level control flow and nothing else: bring the hardware
+// up, then call each task once per pass, forever. How any individual device
+// works belongs in its driver; what the system does with it belongs in a task.
+//
+// THE ONE RULE FOR EVERYTHING CALLED FROM HERE
+// --------------------------------------------
+// Every run_*() function must return promptly. No sleep_ms(), no waiting for a
+// sensor, no blocking bus transaction. A task that needs to wait remembers
+// where it got to in a `static` local and returns, and picks up on the next
+// pass. The whole system shares one thread of execution, so anything that
+// blocks freezes the display, stops coins being counted, and stalls the link
+// to the Pi at the same time.
+//
+// The previous contents of this file — one standalone main() per peripheral —
+// are preserved in docs/bringup/bringup_examples.cpp.txt.
+
 #include <stdio.h>
-// #include <cstdio>
+#include <inttypes.h>
 #include "pico/stdlib.h"
-#include "hardware/gpio.h"
-#include "hardware/pio.h"
-#include "hardware/i2c.h"
-#include <string.h>
 
-// #include "WS2812.pio.h" // NOT NEEDED UNLESS LEDS ARE ADDED but keep for now
-#include "drivers/logging/logging.h"
-
-#include "peripherals/tft_display/tft_display.h"
-
-// Files for DS18B20 temperature sensor
-#include "drivers/DS18B20/DS18B20.h"
-#include "peripherals/sensor_health/sensor_health.h"
-
-// Files for piicodev RFID board
-#include "drivers/mfrc522/mfrc522.h"
-#include "peripherals/access_control/access_control.h"
-
-// Files for the money box coin scale (HX711 + TAL221 load cell)
-#include "drivers/mass_sensor/mass_sensor.h"
-#include "peripherals/coin_acceptor/coin_acceptor.h"
-
-// Board-specific configuration
+#include "timings.h"
 #include "board.h"
+#include "sim_config.h"
+#include "drivers/logging/logging.h"
+#include "peripherals/access_control/access_control.h"
+#include "peripherals/events/events.h"
+#include "peripherals/checkout/checkout.h"
+#include "peripherals/switches/switches.h"
+#include "peripherals/tft_display/tft_display.h"
+#include "drivers/sd_card/sd_card.h"
+#include "peripherals/sd_log/sd_log.h"
+#include "peripherals/pi_link/pi_link.h"
+#include "peripherals/sim_input/sim_input.h"
+#include "peripherals/scale_task/scale_task.h"
+#include "peripherals/nfc_task/nfc_task.h"
+#include "peripherals/temperature_task/temperature_task.h"
 
+namespace {
 
-// Code example for testing the TFT display.
-// --------------------------------------------------------------
-
-// int main()
-// {
-//     stdio_init_all();
-
-//     Display::init();
-//     Display::write_text("CAN YOU SEE ME?");
-
-//     for (;;) {
-//         Display::run();
-//         sleep_ms(5);
-//     }
-
-//     return 0;
-// }
-
-// --------------------------------------------------------------
-
-
-
-// Code example for testing the DS18B20 temperature sensor. 
-// --------------------------------------------------------------
-
-// // How often to take a temperature reading in the test loop.
-// constexpr uint32_t MEASUREMENT_INTERVAL_MS = 5000;
-
-// // How many measurement cycles between bus re-scans, so a sensor plugged in
-// // after startup is picked up without a reset. 
-// constexpr uint32_t RESCAN_INTERVAL_CYCLES = 10;
-
-// // How many measurement cycles between repeated reminder logs for a fault
-// // (missing sensor / persistent read failures) that is still active. 
-// constexpr uint32_t FAULT_REMINDER_INTERVAL_CYCLES = 10;
-
-// // Log the index and 64-bit ROM code of every discovered sensor, so each
-// // physical sensor can be identified (warm one and watch which reading moves).
-// static void printDiscoveredSensors(const DS18B20 &sensors)
-// {
-//     char msg[64];
-//     for (uint8_t i = 0; i < sensors.sensorCount(); i++) {
-//         uint64_t address = sensors.sensorAddress(i);
-//         snprintf(msg, sizeof(msg), "DS18B20 sensor %u: ROM %08lX%08lX",
-//                  i,
-//                  (unsigned long)(address >> 32),
-//                  (unsigned long)(address & 0xFFFFFFFFu));
-//         log(LogLevel::INFORMATION, msg);
-//     }
-// }
-
-// int main()
-// {
-//     stdio_init_all();
-
-//     // Discover all DS18B20 sensors on the 1-Wire bus
-//     DS18B20 sensors(DS18B20_BUS_PIN, DS18B20_PULLUP_FET_PIN, DS18B20_PULLUP_FET_ACTIVE_LOW);
-//     sensors.setParasitePower(DS18B20_PARASITE_POWER);
-
-//     // Tracks the sensor set over time so faults (a sensor going missing, or
-//     // a still-present sensor whose reads keep failing) can be reported by
-//     // ROM code rather than just noticing the sensor count changed. See
-//     // src/tasks/sensor_health.h for the full design rationale, including why
-//     // swapping a sensor needs a reset/power-cycle afterwards.
-//     SensorHealthMonitor health(FAULT_REMINDER_INTERVAL_CYCLES);
-
-//     if (sensors.init()) {
-//         printDiscoveredSensors(sensors);
-//     } else {
-//         log(LogLevel::ERROR, "DS18B20: no sensors found at startup");
-//     }
-
-//     // Seed the health monitor's baseline with whatever was found at startup.
-//     uint64_t romCodes[DS18B20::MAX_SENSORS];
-//     for (uint8_t i = 0; i < sensors.sensorCount(); i++) {
-//         romCodes[i] = sensors.sensorAddress(i);
-//     }
-//     health.noteDiscovery(romCodes, sensors.sensorCount(), 0);
-
-//     char msg[96];
-//     uint32_t cycleCount = 0;
-//     for (;;) {
-//         cycleCount++;
-
-//         // Re-scan the bus if nothing has been found yet (every cycle, so a
-//         // sensor plugged in soon after boot appears quickly), or every
-//         // RESCAN_INTERVAL_CYCLES even with sensors already present, so a
-//         // newly plugged-in sensor is picked up without a reset.
-//         bool dueForRescan = (cycleCount % RESCAN_INTERVAL_CYCLES) == 0;
-//         if (sensors.sensorCount() == 0 || dueForRescan) {
-//             sensors.init();
-//             for (uint8_t i = 0; i < sensors.sensorCount(); i++) {
-//                 romCodes[i] = sensors.sensorAddress(i);
-//             }
-//             health.noteDiscovery(romCodes, sensors.sensorCount(), cycleCount);
-//         }
-
-//         if (sensors.sensorCount() == 0) {
-//             log(LogLevel::WARNING, "DS18B20: no sensors on the bus");
-//             sleep_ms(MEASUREMENT_INTERVAL_MS);
-//             continue;
-//         }
-
-//         bool converted = sensors.convertAndWait();
-//         if (!converted) {
-//             sleep_ms(MEASUREMENT_INTERVAL_MS);
-//             continue;
-//         }
-
-//         // Print the temperature from each sensor in turn
-//         for (uint8_t i = 0; i < sensors.sensorCount(); i++) {
-//             float degreesC;
-//             uint64_t rom = sensors.sensorAddress(i);
-//             bool success = sensors.readTemperature(i, degreesC);
-//             health.noteReadResult(rom, success, cycleCount);
-
-//             if (!success) {
-//                 snprintf(msg, sizeof(msg), "DS18B20 sensor %u: read failed", i);
-//                 log(LogLevel::ERROR, msg);
-//             } else if (isPowerOnResetTemperature(degreesC)) {
-//                 snprintf(msg, sizeof(msg),
-//                          "DS18B20 sensor %u: %.4f C (suspicious: matches power-on-reset default)",
-//                          i, degreesC);
-//                 log(LogLevel::WARNING, msg);
-//             } else {
-//                 snprintf(msg, sizeof(msg), "DS18B20 sensor %u: %.4f C", i, degreesC);
-//                 log(LogLevel::INFORMATION, msg);
-//             }
-//         }
-
-//         sleep_ms(MEASUREMENT_INTERVAL_MS);
-//     }
-
-//     return 0;
-// }
-
-// --------------------------------------------------------------
+/// Reported in the BOOT line so a log can be matched to a build.
+constexpr const char *FIRMWARE_VERSION = "0.2";
 
 
 
 
-// Code example for testing piicodev RFID board
-// --------------------------------------------------------------
-
-// int main()
-// {
-//     // Open the debug log channel (USB CDC by default; flip to UART in
-//     // CMakeLists). We do NOT wait for a monitor to attach — the device runs the
-//     // instant it has power, and the serial log is purely an optional debugging
-//     // window. Anything printed before a monitor connects is simply missed,
-//     // which is fine for a debug aid.
-//     stdio_init_all();
-
-//     // Bring up the RFID reader. We keep retrying rather than giving up: a slow
-//     // power-up or a momentary loose connector at boot then recovers on its own,
-//     // and re-logging each attempt means a debugger attached at any time still
-//     // sees why it is stuck (check wiring, the ASW address switch, and the pin
-//     // defines in board.h).
-//     while (!mfrc522_init()) {
-//         log(LogLevel::ERROR, "MFRC522 not found - check wiring and address");
-//         sleep_ms(2000);
-//     }
-//     log(LogLevel::INFORMATION, "MFRC522 initialised");
-
-//     // remember_uid: cards keep answering REQA while they sit on the pad,
-//     // so without this we'd print the same UID dozens of times per second.
-//     // Static-local style state, same as the run_* tasks use.
-//     static uint8_t last_uid[MFRC522_UID_MAX_LEN] = {0};
-//     static uint8_t last_uid_len = 0;
-//     static bool card_was_present = false;
-
-//     for (;;) {
-//         uint8_t uid[MFRC522_UID_MAX_LEN];
-//         uint8_t uid_len;
-
-//         if (mfrc522_card_present() && mfrc522_read_card_uid(uid, &uid_len)) {
-//             // Only report when it's a new presentation (card removed and
-//             // re-presented, or a different card).
-//             bool same_card = card_was_present && uid_len == last_uid_len &&
-//                              memcmp(uid, last_uid, uid_len) == 0;
-//             if (!same_card) {
-//                 // Raw UID line — handy while building the approved list in
-//                 // access_control.cpp (copy these bytes into a new row).
-//                 printf("Card detected, UID:");
-//                 for (uint8_t i = 0; i < uid_len; i++) {
-//                     printf(" %02X", uid[i]);
-//                 }
-//                 printf("\n");
-
-//                 // Access decision. An approved card comes back with the
-//                 // holder's name; an unknown card comes back as nullptr.
-//                 const char *name = access_lookup(uid, uid_len);
-//                 if (name != nullptr) {
-//                     printf("Access granted: %s\n", name);
-//                     log(LogLevel::INFORMATION, "Access granted");
-//                     // TFT (handled elsewhere): show the holder's name `name`.
-//                 } else {
-//                     printf("Access denied\n");
-//                     log(LogLevel::WARNING, "Access denied");
-//                     // TFT (handled elsewhere): show "Access Denied".
-//                 }
-
-//                 memcpy(last_uid, uid, uid_len);
-//                 last_uid_len = uid_len;
-//             }
-//             card_was_present = true;
-//         } else {
-//             card_was_present = false;
-//         }
-
-//         // Polling pace. The reader's own timeout is ~25 ms, so ~100 ms per
-//         // scan is responsive without hammering the I2C bus.
-//         sleep_ms(100);
-//     }
-
-//     return 0;
-// }
-
-
-// --------------------------------------------------------------
-
-
-
-
-/** Code example for testing the HX711 load cell amplifier
---------------------------------------------------------------
-
-int main()
+// ---------------------------------------------------------------------------
+// Heartbeat and loop-time watchdog
+// ---------------------------------------------------------------------------
+// Not a task in the real sense — it observes the loop rather than any hardware.
+// This is the CONSOLE heartbeat, for a human reading the serial monitor. The
+// protocol's `EVT HB` frame is a separate thing sent by pi_link on its own
+// timer (timings::LINK_HEARTBEAT_MS), because the board declares the link dead
+// without one and that must not depend on anything in this file.
+void run_heartbeat()
 {
-    Load_cell coin_scale;
-    coin_scale.init();
+    // Static locals are how a non-blocking task remembers where it was between
+    // calls. `next_beat` survives from one pass to the next; the whole function
+    // does nothing at all on the vast majority of passes.
+    static absolute_time_t next_beat = make_timeout_time_ms(timings::CONSOLE_HEARTBEAT_MS);
+    static uint32_t worst_loop_ms = 0;
+    static absolute_time_t last_pass = get_absolute_time();
 
-    for(;;)
-    {
-        coin_scale.measure();
+    // Measure how long the previous pass through the whole superloop took.
+    absolute_time_t now = get_absolute_time();
+    uint32_t pass_ms = (uint32_t)(absolute_time_diff_us(last_pass, now) / 1000);
+    last_pass = now;
+    if (pass_ms > worst_loop_ms) {
+        worst_loop_ms = pass_ms;
     }
-    return 0;
+    if (pass_ms > timings::LOOP_TIME_WARN_MS) {
+        logf(LogLevel::WARNING, "loop: pass took %" PRIu32 " ms - something is blocking",
+             pass_ms);
+    }
+
+    if (!time_reached(next_beat)) {
+        return;
+    }
+    next_beat = make_timeout_time_ms(timings::CONSOLE_HEARTBEAT_MS);
+
+    logf(LogLevel::INFORMATION,
+         "HB  worst_loop=%" PRIu32 " ms  queued=%u  dropped=%" PRIu32,
+         worst_loop_ms, events::count(), events::dropped());
+
+    // Report the worst case per interval rather than since boot, so a stall is
+    // visible in the interval it happened in instead of being remembered
+    // forever by a single early outlier.
+    worst_loop_ms = 0;
 }
 
-
--------------------------------------------------------------- **/
-
-
-
-
-// Code example for testing money box coin detection ($1 vs $2)
-// --------------------------------------------------------------
-//
-// Watches the load cell under the money box and reports each coin dropped in,
-// identifying it as a $1 or a $2 by mass. Output goes to the USB serial
-// monitor; no Pi4 or display is involved.
-//
-// Interactive commands, typed into the serial monitor while it runs:
-//     t   re-tare (zero the scale where it currently sits)
-//     r   reset the coin tally back to empty
-//     d   toggle raw sample dump, for checking the noise floor
-//
-// Suggested first run: press 'd' and watch the numbers with nothing touching
-// the box. The spread you see is the noise floor. It needs to be well under
-// CoinAcceptor::SETTLE_BAND_GRAMS (0.50 g) or the reading will never be
-// declared settled; if it is not, the usual causes are the beam load cell
-// being clamped at both ends instead of free to flex, or the box resting
-// against something.
-
-// Set to 1 to have the raw dump running from startup rather than needing 'd'.
-constexpr bool COIN_TEST_START_IN_RAW_MODE = false;
-
-// How often to print a "still here, nothing happening" line while idle. Purely
-// so a silent monitor can be told apart from a crashed one.
-constexpr uint32_t COIN_TEST_HEARTBEAT_MS = 5000;
-
-// Format a cents amount as dollars into `buf` (e.g. 250 -> "$2.50").
-static void format_cents(int cents, char *buf, size_t len)
+/// Send the periodic HEALTH frame.
+///
+/// Assembled here rather than inside any one task because it deliberately spans
+/// three of them — the die temperature, the coin box, and the fault count — and
+/// main is where top-level composition belongs. None of those modules should
+/// have to know about the others.
+void run_health_report()
 {
-    snprintf(buf, len, "$%d.%02d", cents / 100, cents % 100);
+    static absolute_time_t next = make_timeout_time_ms(timings::HEALTH_INTERVAL_MS);
+
+    if (!time_reached(next)) {
+        return;
+    }
+    next = make_timeout_time_ms(timings::HEALTH_INTERVAL_MS);
+
+    // box_grams(), NOT level_grams(). The dashboard's money-box gauge and the
+    // cash reconciliation both want what is IN the box; level_grams() is
+    // measured from the coin acceptor's per-payment baseline, so it read ~0
+    // with seven coins sitting in there and the gauge was quietly meaningless.
+    pi_link::notify_health(temperature::die_celsius(),
+                           scale::box_grams(),
+                           checkout::fault_count());
 }
 
-// Print the running contents of the money box.
-static void print_tally(const CoinAcceptor &acceptor)
+// ---------------------------------------------------------------------------
+// Debug keyboard
+// ---------------------------------------------------------------------------
+// Turns keystrokes on the USB serial monitor into events, so the system can be
+// exercised with no peripherals attached. The keys standing in for the camera
+// and for Square belong to the pi_link simulator and are offered to it first;
+// what remains is handled here. Which of these exist at all is decided at
+// compile time by the SIM_* options — see sim_config.h.
+void print_help()
 {
-    char total[16];
-    format_cents(acceptor.cents_total(), total, sizeof(total));
-    printf("        box now holds: %u x $1, %u x $2  =  %s\n",
-           acceptor.one_dollar_count(),
-           acceptor.two_dollar_count(),
-           total);
+    printf("\n--- debug keys ---\n");
+    printf(" Pi simulator (stands in for the camera and Square):\n");
+    printf("  1 2 3 4  take a Coke / Fanta / Mountain Dew / Solo off the shelf\n");
+    printf("  Q W E R  put one back (the shifted key above the one that took it)\n");
+    printf("  r        restock the shelf\n");
+    printf("  i        show the shelf, and what was last reported\n");
+    printf("  q        hurry along a pending Square link\n");
+    printf("  p        Square reports the payment received\n");
+    printf("  e        Square reports a failure\n");
+    printf(" Hardware and stand-ins:\n");
+#if SIM_DOOR
+    printf("  o / c    FAKE door opened / closed (the real switch works too)\n");
+#endif
+    printf("  b        user button pressed\n");
+#if SIM_NFC
+    printf("  n        FAKE approved card tapped -> greeting, by name\n");
+    printf("  m        FAKE unknown card tapped  -> access denied\n");
+#endif
+#if SIM_TOUCH
+    printf(" Touch stand-ins (the real touchscreen works too):\n");
+    printf("  ,        tap CASH\n");
+    printf("  .        tap ONLINE\n");
+    printf("  /        tap PAY CASH INSTEAD (back)\n");
+#endif
+#if SIM_COINS
+    printf("  5 / 6    FAKE $1 / $2 coin (the real scale works too)\n");
+    printf("  7        FAKE rejected coin\n");
+#endif
+    printf("  f        fault\n");
+    printf(" Coin scale:\n");
+    printf("  g        toggle raw gram dump (for the noise floor and weighing)\n");
+    printf("  t        re-tare the scale (BLOCKS ~1 s; keep the box still)\n");
+    printf(" Diagnostics:\n");
+    printf("  S        request a shelf scan, as the door closing will\n");
+    printf("  L        request a Square payment link ($2.00)\n");
+    printf("  T        preview the outbound frames (sale, end, temperature)\n");
+    printf("  !        flood the queue, to prove overflow is handled\n");
+    printf("  s        show queue statistics\n");
+    printf("  d        probe the SD card (BLOCKS for up to ~1 s)\n");
+    printf("  w        append a test line to LOG.TXT on the card (BLOCKS)\n");
+    printf("  ?        this help\n\n");
 }
+
+// ---------------------------------------------------------------------------
+// SD card probe — feasibility spike, run on demand only
+// ---------------------------------------------------------------------------
+// Deliberately NOT part of the superloop. The card's initialisation handshake
+// is polled and the specification allows it to take up to a second, which would
+// freeze the display and trip the loop-time warning. Running it from a keypress
+// makes the cost visible and voluntary.
+void probe_sd_card()
+{
+    printf("\n--- SD card probe ---\n");
+
+    SdCardInfo info;
+    if (!sd_card_probe(info)) {
+        printf("  no card detected (empty socket, or wiring/bus problem)\n\n");
+        return;
+    }
+
+    printf("  type      : %s\n", sd_card_type_name(info.type));
+    printf("  product   : %s\n", info.product_name);
+    printf("  made      : %04u-%02u\n", info.manufacture_year, info.manufacture_month);
+    // Printed as a 32-bit megabyte count rather than a 64-bit byte count: the
+    // SDK's default printf is newlib-nano, whose long-long support is not
+    // compiled in, so a %llu here can silently print nothing. Megabytes fit in
+    // 32 bits for any card up to 4 TB.
+    printf("  capacity  : %" PRIu32 " MB\n",
+           (uint32_t)(info.capacity_bytes / (1024ULL * 1024ULL)));
+
+    // Reading block 0 proves data transfer works, not just the handshake. On a
+    // formatted card block 0 is the master boot record, which ends in the
+    // signature 0x55 0xAA — a cheap, specific check that the bytes arriving are
+    // real rather than a floating bus reading as all-ones.
+    uint8_t block[512];
+    if (!sd_card_read_block(0, block)) {
+        printf("  block 0   : READ FAILED\n\n");
+        return;
+    }
+
+    printf("  block 0   : read ok, first bytes %02X %02X %02X %02X\n",
+           block[0], block[1], block[2], block[3]);
+
+    if (block[510] == 0x55 && block[511] == 0xAA) {
+        printf("  signature : 0x55AA present - card is formatted\n");
+    } else {
+        printf("  signature : absent (%02X %02X) - card may be unformatted\n",
+               block[510], block[511]);
+    }
+    printf("\n");
+}
+
+void run_debug_input()
+{
+    int key;
+    if (!sim_input::poll(key)) {
+        return;
+    }
+
+    // The Pi simulator gets first refusal, because the keys standing in for the
+    // camera and for Square belong to it. Anything it does not recognise falls
+    // through to the local keys below. With the real serial backend compiled,
+    // handle_debug_key() always returns false and every key lands here.
+    if (pi_link::handle_debug_key(key)) {
+        return;
+    }
+
+    switch (key) {
+        // The panel button's two gestures, so both can be exercised without
+        // standing at the fridge holding a button for three seconds.
+        case 'b': events::push(events::Kind::UserButtonPressed); break;
+        case 'B': events::push(events::Kind::UserButtonHeld);    break;
+
+#if SIM_DOOR
+        case 'o': events::push(events::Kind::DoorOpened); break;
+        case 'c': events::push(events::Kind::DoorClosed); break;
+#endif
+
+#if SIM_TOUCH
+        // Stand-ins for the touchscreen, so the whole flow can be walked
+        // without touching the glass.
+        case ',': events::push(events::Kind::TouchCash);   break;
+        case '.': events::push(events::Kind::TouchOnline); break;
+        case '/': events::push(events::Kind::TouchBack);   break;
+#endif
+
+        case 'I':
+            // Diagnostic for a reader that will not initialise. Separates
+            // "nothing on the bus" from "something at a different address".
+            nfc::scan_bus();
+            break;
+
+        case 'S':
+            // What the state machine will do when the door closes. Useful on
+            // its own for watching the request/reply round trip.
+            pi_link::request_scan();
+            break;
+
+        case 'L': {
+            // Ask for a Square payment link, as choosing "Online" will.
+            //
+            // Sent with a real basket rather than an empty one so the receipt
+            // this produces is the same shape as a genuine sale's — an empty
+            // basket exercises only the "Drinks" fallback, which is the one
+            // case that is NOT what a customer would see.
+            basket::Basket example;
+            example.taken[static_cast<uint8_t>(catalogue::Can::Coke)] = 1;
+            pi_link::request_square_link(basket::total_cents(example), 1,
+                                         example);
+            break;
+        }
+
+        case 'T': {
+            // Preview the outbound frames a sale produces, without making one.
+            // Nothing here is a real transaction; it exists so the wire format
+            // can be eyeballed against documentation.md section 6 without
+            // having to walk a whole purchase through the machine first.
+            printf("\n--- outbound frame preview (not a real sale) ---\n");
+            basket::Basket example;
+            example.taken[static_cast<uint8_t>(catalogue::Can::Coke)] = 2;
+            example.taken[static_cast<uint8_t>(catalogue::Can::Fanta)] = 1;
+            const uint32_t owed = basket::total_cents(example);
+
+            pi_link::notify_sale(example, owed, checkout::PaymentMethod::Cash, 1);
+            pi_link::notify_transaction_end(checkout::Outcome::Paid, owed, owed, 1);
+            pi_link::notify_temperature(0x28FF1234567890ABull, 4.25f);
+            printf("\n");
+            break;
+        }
+
+#if SIM_NFC
+        case 'n': {
+            // Tap in as the FIRST person on the approved list, rather than with
+            // an invented UID. The state machine looks the name up again from
+            // that UID to draw the greeting screen, so a made-up one would be
+            // announced as approved here and then found to be nameless there —
+            // exercising the fallback path instead of the normal one, which is
+            // the opposite of what this key is for.
+            events::Event e(events::Kind::CardApproved);
+            if (!access_first(e.card.uid, &e.card.len)) {
+                printf("no approved cards in the list - add one in "
+                       "access_control.cpp\n");
+                break;
+            }
+            events::push(e);
+            break;
+        }
+
+        case 'm': {
+            // A UID chosen to be absent from any real approved list, so the
+            // lookup refuses it and the denied screen is what appears.
+            events::Event e(events::Kind::CardDenied);
+            e.card.uid[0] = 0xDE; e.card.uid[1] = 0xAD;
+            e.card.uid[2] = 0xBE; e.card.uid[3] = 0xEF;
+            e.card.len = 4;
+            events::push(e);
+            break;
+        }
+#endif // SIM_NFC
+
+        case 'g':
+            scale::set_raw_dump(!scale::raw_dump_enabled());
+            printf("raw gram dump %s\n",
+                   scale::raw_dump_enabled() ? "ON" : "OFF");
+            break;
+
+        case 't':
+            // Blocks for about a second, so only allowed when nothing is in
+            // progress. Mid-transaction it would freeze the screen and move the
+            // zero the customer's coins are being measured against.
+            if (checkout::current() != checkout::State::Idle) {
+                printf("re-tare refused: only while idle\n");
+                break;
+            }
+            printf("re-taring, keep the money box still...\n");
+            printf(scale::retare() ? "tared\n" : "TARE FAILED\n");
+            break;
+
+#if SIM_COINS
+        case '5':
+        case '6': {
+            events::Event e(events::Kind::CoinAccepted);
+            const bool is_two = (key == '6');
+            e.coin.one_dollar  = is_two ? 0 : 1;
+            e.coin.two_dollar  = is_two ? 1 : 0;
+            e.coin.cents       = is_two ? 200 : 100;
+            e.coin.delta_grams = is_two ? 6.60f : 9.80f;
+            events::push(e);
+            break;
+        }
+
+        case '7': {
+            events::Event e(events::Kind::CoinRejected);
+            e.coin.delta_grams = 4.0f;   // a washer, say
+            events::push(e);
+            break;
+        }
+#endif // SIM_COINS
+
+        case 'f': {
+            events::Event e(events::Kind::Fault);
+            e.fault.code = 1;
+            events::push(e);
+            break;
+        }
+
+        case '!':
+            // Deliberately push more than the queue can hold. The queue should
+            // log one error, drop the excess, and carry on — not corrupt itself.
+            printf("flooding with %u events (capacity %u)...\n",
+                   events::QUEUE_CAPACITY * 2, events::QUEUE_CAPACITY);
+            for (uint8_t i = 0; i < events::QUEUE_CAPACITY * 2; i++) {
+                events::push(events::Kind::DoorOpened);
+            }
+            break;
+
+        case 's':
+            printf("queue: %u waiting, %" PRIu32 " dropped since boot\n",
+                   events::count(), events::dropped());
+            break;
+
+        case 'd':
+            probe_sd_card();
+            break;
+
+        case 'w': {
+            if (!sd_log::is_available()) {
+                printf("SD log is not mounted - no card, or not FAT formatted.\n");
+                break;
+            }
+            static uint32_t test_lines = 0;
+            test_lines++;
+            const bool ok = sd_log::write_linef(
+                "test line %" PRIu32 " - door is %s", test_lines,
+                switches::is_door_closed() ? "closed" : "open");
+            printf("SD log: %s (%lu bytes written this session)\n",
+                   ok ? "line appended" : "WRITE FAILED", sd_log::bytes_written());
+            break;
+        }
+
+        case '?':
+            print_help();
+            break;
+
+        default:
+            break;
+    }
+}
+
+} // namespace
 
 int main()
 {
+    // Open the debug log channel over USB CDC. Deliberately NOT waiting for a
+    // monitor to attach: the fridge must run the instant it has power, and the
+    // serial log is an optional debugging window. Anything printed before a
+    // terminal connects is simply missed.
     stdio_init_all();
 
-    // Unlike the other examples, this one is driven interactively over USB, so
-    // it is worth pausing to let a monitor reattach after the reset that
-    // follows flashing. Without this the banner and the tare prompt are
-    // usually gone before the terminal is listening.
-    sleep_ms(2000);
+    logf(LogLevel::INFORMATION, "BOOT fw=%s pi_link=%s", FIRMWARE_VERSION,
+         pi_link::backend_name());
 
-    printf("\n=== Money box coin detector ===\n");
-    printf("Commands: 't' re-tare | 'r' reset tally | 'd' toggle raw dump\n\n");
+    // Say plainly which kind of build this is. With the stand-ins compiled in,
+    // anyone who can reach the USB socket can fake a paid transaction by typing
+    // a character, so a build that has them must never be mistaken for one that
+    // does not.
+#if SIM_ANY
+    logf(LogLevel::WARNING,
+         "BENCH BUILD - keyboard stand-ins active (door=%d nfc=%d coins=%d touch=%d)",
+         SIM_DOOR, SIM_NFC, SIM_COINS, SIM_TOUCH);
+    logf(LogLevel::WARNING,
+         "  do not leave this build in the fridge: the debug keys can fake payment");
+#else
+    log(LogLevel::INFORMATION, "DEPLOYMENT BUILD - no keyboard stand-ins");
+#endif
+    logf(LogLevel::INFORMATION, "state machine starts in %s",
+         checkout::state_name(checkout::State::Idle));
 
-    // Bring up the scale, retrying rather than giving up, matching how the
-    // RFID example handles a reader that is slow to appear. init() fails when
-    // the HX711 produces no conversion at all (wiring/power) or comes back
-    // saturated (load cell bridge open), and logs which.
-    MassSensor scale;
-    while (!scale.init()) {
-        printf("Scale not responding. Check GP%d/GP%d, 3V3 on DVDD, 5V on VSUP.\n",
-               HX711_DATA_PIN, HX711_CLK_PIN);
-        sleep_ms(2000);
-    }
-    log(LogLevel::INFORMATION, "HX711 initialised");
+    switches::init();
 
-    printf("Taring - keep the money box still...\n");
-    if (!scale.tare()) {
-        log(LogLevel::ERROR, "Tare failed; readings will be relative to an unknown zero");
-    }
-    printf("Ready. Drop a coin in.\n\n");
+    // Park the SD card's chip select high before anything drives the SPI bus.
+    // The card shares SCK/MOSI/MISO with the display and touch controller, so
+    // an un-driven select could leave it contending for MISO from the first
+    // display transaction onward.
+    sd_card_init_pins();
 
-    CoinAcceptor acceptor;
-    acceptor.begin();
+    // Bring up the link to the Pi. Which implementation this is was decided at
+    // compile time by PI_LINK_BACKEND; nothing below here can tell.
+    pi_link::init();
 
-    bool raw_mode = COIN_TEST_START_IN_RAW_MODE;
-    absolute_time_t next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
+    // Bring up the coin scale. Blocks for about a second while it tares, which
+    // is why it happens here and not on the first coin. A failure is logged and
+    // survived: everything except cash payment still works.
+    scale::init();
+
+    // Bring up the RFID reader. A failure here is logged and survived: the task
+    // keeps retrying in the background, and the door remains a perfectly good
+    // way to start a transaction meanwhile.
+    nfc::init();
+
+    // Bring up the temperature sensors and the RP2040's own die sensor.
+    temperature::init();
+
+    // Bring the display up. This blocks for roughly 750 ms in the ILI9341's
+    // reset and wake sequence, which the datasheet requires and which is fine
+    // here: startup is the one place blocking is allowed. Nothing inside the
+    // loop below may do the same.
+    //
+    // Safe to call with no panel attached — SPI is write-only here, so the
+    // transactions simply go nowhere and the rest of the system runs normally.
+    Display::init();
+
+    // Mount the SD log and record that the board started. Deliberately after
+    // the display, so a slow or faulty card cannot delay the screen coming up,
+    // and deliberately non-fatal: if there is no card the fridge trades exactly
+    // as before, with logging going to the serial monitor only.
+    //
+    // The BOOT line is written whether or not the mount succeeded, and that is
+    // the whole point of the RAM buffer: with no card in the slot it still goes
+    // into memory, so a card pushed in later and dumped with the panel button
+    // gets a log that starts at power-on rather than at whatever happened to
+    // occur after somebody found a card. Writing it inside the `if` — which is
+    // what this was — produced a dump whose first line was a transaction.
+    (void)sd_log::init();
+    sd_log::write_linef("BOOT fw=%s door=%s", FIRMWARE_VERSION,
+                        switches::is_door_closed() ? "closed" : "open");
+
+    // Start the state machine last, so it draws the idle screen over whatever
+    // startup produced and everything it depends on is already up.
+    checkout::init();
+
+    print_help();
 
     for (;;) {
-        // --- Serial commands ---
-        // Non-blocking: a timeout of 0 means "return immediately if the user
-        // has not typed anything", so the sampling loop is never held up.
-        int key = getchar_timeout_us(0);
-        if (key != PICO_ERROR_TIMEOUT) {
-            switch (key) {
-                case 't':
-                    printf("\nRe-taring - keep the money box still...\n");
-                    if (scale.tare()) {
-                        // The zero moved, so the acceptor's idea of the
-                        // resting level is meaningless now. Start it over.
-                        acceptor.begin();
-                        printf("Tared. Tally reset.\n\n");
-                    } else {
-                        printf("Tare FAILED.\n\n");
-                    }
-                    break;
+        // Producers first, then the consumer, so an event raised this pass is
+        // handled on the same pass rather than waiting for the next one.
+        run_debug_input();
+        switches::run_switches();
+        scale::run_scale();     // raises coin events from the load cell
+        nfc::run_nfc();             // raises card events (self-throttling)
+        temperature::run_temperature();   // samples every 30 s, never blocks
+        pi_link::run();         // delivers scan results and Square replies
 
-                case 'r':
-                    acceptor.begin();
-                    printf("\nTally reset.\n\n");
-                    break;
+        // The state machine: the only consumer of the event queue, and the only
+        // code that decides what any of it means.
+        checkout::run_checkout();
 
-                case 'd':
-                    raw_mode = !raw_mode;
-                    printf("\nRaw dump %s\n\n", raw_mode ? "ON" : "OFF");
-                    break;
+        // Service LVGL: redraws, animations and touch sampling. Wants calling
+        // every few milliseconds, which is the real reason nothing above may
+        // block.
+        Display::run();
 
-                default:
-                    break;
-            }
-        }
-
-        // --- Sampling ---
-        // poll() returns false until the HX711 has a genuinely new conversion,
-        // which at 10 samples/second is most of the time. Nothing below runs
-        // on those empty passes.
-        double grams = 0.0;
-        if (!scale.poll(grams)) {
-            tight_loop_contents();
-            continue;
-        }
-
-        if (raw_mode) {
-            printf("raw: %8.3f g\n", grams);
-        }
-
-        CoinEvent event = acceptor.update(grams);
-
-        switch (event.kind) {
-            case CoinEventKind::CoinsAdded: {
-                char value[16];
-                format_cents(event.cents, value, sizeof(value));
-
-                printf("[COIN] ");
-                if (event.one_dollar > 0) {
-                    printf("%u x $1 ", event.one_dollar);
-                }
-                if (event.two_dollar > 0) {
-                    printf("%u x $2 ", event.two_dollar);
-                }
-                printf(" (+%.2f g, worth %s)\n", event.delta_grams, value);
-                print_tally(acceptor);
-
-                next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
-                break;
-            }
-
-            case CoinEventKind::Unrecognised:
-                // The mass settled at a new value that no plausible handful of
-                // coins explains. Most likely something other than a coin went
-                // in, or the box was knocked. Deliberately not counted.
-                printf("[????] mass changed by %+.2f g - not a recognised coin combination\n",
-                       event.delta_grams);
-                log(LogLevel::WARNING, "Coin acceptor: unrecognised mass change");
-                next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
-                break;
-
-            case CoinEventKind::MassRemoved:
-                printf("[ -- ] mass removed (%+.2f g) - box emptied or lifted\n",
-                       event.delta_grams);
-                next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
-                break;
-
-            case CoinEventKind::None:
-            default:
-                break;
-        }
-
-        // --- Idle heartbeat ---
-        if (!raw_mode && time_reached(next_heartbeat)) {
-            printf("[ .. ] waiting   level %+.2f g   %s\n",
-                   acceptor.level_grams(),
-                   acceptor.is_settled() ? "(settled)" : "(moving)");
-            next_heartbeat = make_timeout_time_ms(COIN_TEST_HEARTBEAT_MS);
-        }
+        run_health_report();
+        run_heartbeat();
     }
 
     return 0;
 }
-
-// --------------------------------------------------------------

@@ -1,0 +1,43 @@
+# Load every dashboard in the provisioned directory from disk, and keep loading it.
+#
+# `allowUiUpdates: true` while the dashboard is being designed.
+#
+# With it false — the safer long-term setting — Grafana marks the dashboard
+# "provisioned" and DISABLES the Save button: you can change a panel for the
+# session, but keeping it means copying JSON out by hand and pasting it into this
+# repo for every colour tweak. That is the right trade once the layout has
+# settled and wrong while it is being chosen.
+#
+# THE COST, and it is a real one: a dashboard styled in the browser now lives
+# only inside Grafana's database, which is the exact failure this directory
+# exists to prevent. So when the styling is done:
+#
+#     Dashboard -> Export -> Save to file
+#     ...replace dashboards/fridge-overview.json in the repo, and commit
+#
+# Re-running setup-pi.sh overwrites the served copy from the repo, so export
+# BEFORE re-running it or the work is lost.
+#
+# INSTALLED TO: /etc/grafana/provisioning/dashboards/fridge.yml
+# by ../setup-pi.sh, which also COPIES ../dashboards/*.json into the path below.
+#
+# Copied rather than symlinked into the repo, because the `grafana` user would
+# then need execute permission on every directory between / and the checkout —
+# including a home directory whose mode varies between Raspberry Pi OS releases.
+# Re-running setup-pi.sh re-copies; `updateIntervalSeconds` below means Grafana
+# picks the change up on its own, with no restart.
+
+apiVersion: 1
+
+providers:
+  - name: fridge
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    allowUiUpdates: true
+    # Re-read every 30 s, so re-copying a dashboard shows up without a restart.
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

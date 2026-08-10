@@ -1,0 +1,259 @@
+# Grafana on the Pi 4 — setup
+
+Everything Grafana needs is in this directory and is committed. This file is the
+procedure for wiring it up.
+
+**Grafana runs on the Pi and nowhere else.** The development machine builds
+`fridged` and the panel JSON; the Pi is the only place Grafana is installed.
+
+**Installed from the `apt.grafana.com` package**, running under systemd as the
+`grafana` user. (An earlier draft of this plan used Docker; the native package
+is what is actually deployed, and the compose file was removed rather than left
+to contradict this one.)
+
+---
+
+## The whole thing
+
+```bash
+cd ~/CC3501-project-software/pi4-software/grafana
+bash setup-pi.sh
+```
+
+(`bash setup-pi.sh` rather than `./setup-pi.sh`, because the repo is edited on
+Windows and the executable bit does not reliably survive the round trip. `chmod
++x setup-pi.sh` once if you prefer the shorter form.)
+
+Run it as your normal user, **not** with `sudo` — it needs to know who you are so
+the database ends up owned by you, and it calls `sudo` itself where root is
+genuinely needed. Read it first if you like; it is short and every step is
+reversible.
+
+**Re-running it is how you deploy a dashboard change.** Edit the JSON here, run
+it again, and Grafana picks the change up within 30 seconds without a restart.
+
+Then give it data:
+
+```bash
+cd ~/CC3501-project-software/pi4-software
+export FRIDGE_DB=/var/lib/fridge/fridge.db
+python3 -m fridged.seed --days 14
+python3 -m fridged --port sim
+```
+
+**Two packages come from apt, not pip.** Raspberry Pi OS is an externally
+managed Python environment (PEP 668), so `pip install` into the system
+interpreter is refused:
+
+```bash
+sudo apt install python3-serial sqlite3
+```
+
+`python3-serial` is only needed for a real board — `--port sim` never imports it.
+`sqlite3` is the **command line**, which is a different package from Python's
+built-in `sqlite3` module: the module is always present, the command is not
+installed by default. `setup-pi.sh` installs it, because naming the sensors and
+every troubleshooting step below need it.
+
+Resist `--break-system-packages`: both are packaged, and a venv would then have
+to be activated by the systemd unit at D8 for no benefit.
+
+Open `http://<pi-address>:3000` and pick *Fridge — Overview*.
+
+---
+
+## Card payments
+
+`fridged` answers `CMD SQUARE_LINK` from the board and reports the payment back.
+Two backends, chosen with `--square`:
+
+```bash
+python3 -m fridged --port sim                 # --square fake, the default
+python3 -m fridged --port sim --square real   # the real Square account
+```
+
+**`fake` needs no credentials and no network** — a canned URL after a second,
+marked paid a few seconds later. That is what the tests use and what the default
+gives you.
+
+**`real` needs `online-payment/tokens.py`** with `SQUARE_ACCESS_TOKEN` and
+`LOCATION_ID`, and `pip`-free installs of `requests`:
+
+```bash
+sudo apt install python3-requests
+```
+
+`square.py` is imported **lazily**, only when `--square real` is passed — it
+reads the access token while being imported, so an eager import would stop
+`fridged` starting on any machine without credentials, including every machine
+that only ever wanted the simulator.
+
+`--square` is independent of `--port`, so a **real payment against a simulated
+board** works: the board cannot tell who answers `CMD SQUARE_LINK`. That is the
+hybrid test in documentation.md section 7.5.
+
+> Square is still on the **sandbox** (`SANDBOX = True` in `square.py`). Moving to
+> production needs three changes, not one: that flag, plus a production token and
+> location id. And the sandbox keys have been pasted into a chat log — rotate
+> them before anything touches a real account.
+
+---
+
+## Styling the dashboard
+
+`allowUiUpdates` is **true** while the layout is being designed, so the Save
+button works and changes made in the browser stick. Restyle freely.
+
+### What survives what
+
+| Action | Effect on your UI changes |
+|---|---|
+| Saving in the browser | Stored in Grafana's own database |
+| `systemctl restart grafana-server`, reboot | **Kept** |
+| `git pull` on the Pi | **Kept** — Grafana serves `/var/lib/grafana/dashboards`, not the checkout |
+| `bash setup-pi.sh` | **DESTROYED** — it re-copies from the repo and the provisioner overwrites |
+
+So the one dangerous sequence is: style it, pull a change to
+`fridge-overview.json`, re-run `setup-pi.sh`.
+
+### Export before you pull
+
+```bash
+bash export-dashboard.sh
+```
+
+Fetches the live dashboard from Grafana's API and writes it back over
+`dashboards/fridge-overview.json`. Commit that, and the repo and the browser
+agree again. It strips Grafana's internal `id` and `version` fields, which are
+meaningless in a file and would otherwise make every export show a diff.
+
+Then, on whichever machine holds the repo:
+
+```bash
+python3 tests/test_fridged.py       # from pi4-software/
+```
+
+That re-runs every panel query against the schema and checks the export kept
+`"uid": "fridge-overview"` and each panel's `datasource.uid` of `fridge-sqlite`
+— the two fields whose loss would silently break the dashboard on a fresh
+install.
+
+### Who owns the file, and when
+
+**Until the panels are all built: the repo owns it.** Stages D3–D7 add their
+panels to `dashboards/fridge-overview.json` directly, so each arrives laid out
+and query-tested. Pull and re-run `setup-pi.sh` freely — there is nothing in
+Grafana's database to lose, because nothing has been styled yet.
+
+**Once you start styling: you own it.** From that point `export-dashboard.sh`
+before every pull, and whoever is adding panels adds them as a separate
+dashboard file instead of editing yours. A three-way merge of a generated
+10,000-line JSON file is not something anybody should have to do.
+
+The handover is deliberate rather than a date: it happens the first time you
+press Save in the browser. Say so, and panel work moves out of this file.
+
+When the design has settled for good, set `allowUiUpdates: false` in
+`provisioning/dashboards/fridge.yml` and re-run the script. The files become the
+source of truth again and a stray browser edit can no longer diverge from git.
+
+---
+
+## The two things that are not obvious
+
+### The database cannot live in your home directory
+
+`/var/lib/fridge/fridge.db`, created by the setup script, owned by you with group
+`grafana` and the setgid bit set.
+
+The reason is not tidiness. **SQLite cannot open a WAL database read-only.** A
+reader has to take a lock in the `-shm` wal-index file, and that is a write — so
+`grafana` needs write access both to the database's directory and to the `-wal`
+and `-shm` files beside it. Granting that inside `/home` would mean opening up
+the home directory's traversal permissions, whose default mode has changed
+between Raspberry Pi OS releases.
+
+Grafana is still read-only in the sense that matters: the datasource only ever
+runs `SELECT`s, and `fridged` remains the single writer (documentation.md §7.3).
+
+`fridged` sets `umask 002` itself so the files it creates are group-writable —
+otherwise the `-shm` comes out mode 644 and every Grafana query fails with
+*attempt to write a readonly database*, which reads like a Grafana bug and is a
+file-mode one.
+
+### The temperature tiles start empty, and that is correct
+
+The board reports ROM codes and knows nothing about which shelf a sensor is on
+(documentation.md §7.3), so until the sensors are named there is no `freezer` for the
+tile to find.
+
+The table at the bottom of the dashboard shows every sensor with a live reading
+and `(not named yet)` in the Zone column. Warm one with your hand, watch which
+row moves, then:
+
+```bash
+sqlite3 /var/lib/fridge/fridge.db \
+  "UPDATE sensor SET zone_label='freezer' WHERE rom_code='28FF...';"
+```
+
+Labels must be exactly **`freezer`**, **`fridge_top`**, **`fridge_bottom`**.
+
+Naming a sensor relabels its **entire history**, not just readings from that
+moment on — readings are stored under the ROM code and the name is joined on at
+read time by the `temperature` view. That is what makes the "warm one and see
+which row moves" procedure above work at all.
+
+There is no browser page for this: naming a sensor is a rare, deliberate act,
+and the alternative would be an HTTP endpoint with write access to the database
+for the sake of three `UPDATE`s in the fridge's lifetime.
+
+---
+
+## If something does not work
+
+| Symptom | Cause |
+|---|---|
+| *Could not find config defaults, make sure homepath command line parameter is set* | `grafana cli` cannot locate the server config on its own. It needs `--homepath /usr/share/grafana --config /etc/grafana/grafana.ini --pluginsDir /var/lib/grafana/plugins`; `setup-pi.sh` passes all three. Check with `ls /var/lib/grafana/plugins`, not with `plugins ls` — that subcommand hits the same problem |
+| *Datasource not found* on every panel | The plugin is missing or unreadable. `ls -l /var/lib/grafana/plugins/frser-sqlite-datasource` — if it exists but is owned by `root`, `sudo chown -R grafana:grafana /var/lib/grafana/plugins` and restart. A root-owned plugin directory looks exactly like no plugin at all |
+| *attempt to write a readonly database* | Permissions on `/var/lib/fridge`. `ls -l` must show group `grafana` and `rw` for the group **on the `-shm` and `-wal` files too**, not only on `fridge.db`. Re-running `setup-pi.sh` fixes an existing directory |
+| `fridged` gets that error but Grafana is fine (or vice versa) | The `-shm` was created by whichever process opened the database first and is owned by that user. Both need to be in the `grafana` group — `id -nG` must list it. `setup-pi.sh` adds you, but **group membership only applies to a new login session**, so log out and back in |
+| *unable to open database file* | The path in the datasource does not exist. `FRIDGE_DB` was probably not exported, so `fridged` wrote to `pi4-software/fridge.db` instead |
+| Panels load, no error, no data | Time range. Seeded history ends when you ran the seeder — try *Last 7 days*. If the graph has data but the tiles are empty, the sensors are not named |
+| Dashboard missing entirely | `ls /var/lib/grafana/dashboards`, and `sudo journalctl -u grafana-server | grep -i provision` |
+| Changes to the JSON do nothing | You edited the repo copy; the served copy is `/var/lib/grafana/dashboards`. Re-run `setup-pi.sh` |
+
+To test a query by hand use **Explore** against the *Fridge* datasource — it
+shows SQLite's own error text, which is far more useful than a blank panel.
+
+### Checking the plumbing without Grafana
+
+```bash
+sqlite3 /var/lib/fridge/fridge.db \
+  "SELECT zone, COUNT(*), ROUND(MIN(celsius),2), ROUND(MAX(celsius),2)
+   FROM temperature GROUP BY zone;"
+```
+
+If that returns rows and the dashboard does not, the problem is Grafana-side. If
+it returns nothing, `fridged` is not writing and Grafana is innocent.
+
+---
+
+## What is deliberately not here yet
+
+- ~~**No systemd unit for `fridged`**~~ — **done.** `bash deploy/install.sh`
+  makes it a service that starts at boot and restarts on crash. See
+  [../deploy/](../deploy/), which also covers swapping the simulated parts for
+  real ones.
+- ~~**No backup.**~~ **Done**, nightly at 03:30 into `/var/lib/fridge/backups`.
+  It uses `sqlite3 .backup`, **not** `cp`: a WAL database is three files, and
+  copying one of them while it is being written captures a database missing
+  every commit still in the write-ahead log.
+- **mDNS** — `http://<hostname>.local:3000` usually works already on Raspberry
+  Pi OS, which ships avahi. Try it before installing anything; details in
+  ../deploy/README.md.
+- **No alerting**, deliberately. Dropped at the user's request: without a
+  notification channel a Grafana alert rule is only a coloured state, and the
+  longest-open tile already turns red.
+- **No admin password set.** Anonymous viewing is on and the admin account is
+  still `admin`/`admin`. Fine on a bench, not fine on the society network —
+  change it in the UI before this goes up anywhere.

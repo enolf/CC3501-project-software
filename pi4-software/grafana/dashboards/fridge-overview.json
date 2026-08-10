@@ -1,0 +1,2699 @@
+{
+  "uid": "fridge-overview",
+  "title": "Fridge — Overview",
+  "description": "Temperature for the three zones. Readings are stored under each sensor's ROM code and the zone name is joined on by the `temperature` view, so naming a sensor relabels its whole history. If the three tiles are empty, the sensors have not been named yet — see the table at the bottom.",
+  "tags": [
+    "fridge"
+  ],
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timezone": "browser",
+  "graphTooltip": 1,
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Freezer",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'freezer'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'freezer'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": -22
+              },
+              {
+                "color": "#EAB839",
+                "value": -15
+              },
+              {
+                "color": "red",
+                "value": -10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Fridge — top shelf",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 0
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_top'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_top'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              },
+              {
+                "color": "#EAB839",
+                "value": 8
+              },
+              {
+                "color": "red",
+                "value": 12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Fridge — bottom shelf",
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 0
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_bottom'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, celsius\nFROM temperature\nWHERE zone = 'fridge_bottom'\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              },
+              {
+                "color": "#EAB839",
+                "value": 8
+              },
+              {
+                "color": "red",
+                "value": 12
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Temperature — all three zones",
+      "description": "Bucketed to 60 s with $__unixEpochGroupSeconds, the only grouping macro this plugin provides. Readings arrive every 30 s, so a bucket averages a pair. Nulls are NOT spanned: the 30 s gap after the board reboots is real and should look like a gap.",
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 5
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 60) AS ts,\n       AVG(CASE WHEN zone = 'freezer'       THEN celsius END) AS \"Freezer\",\n       AVG(CASE WHEN zone = 'fridge_top'    THEN celsius END) AS \"Top shelf\",\n       AVG(CASE WHEN zone = 'fridge_bottom' THEN celsius END) AS \"Bottom shelf\"\nFROM temperature\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 60) AS ts,\n       AVG(CASE WHEN zone = 'freezer'       THEN celsius END) AS \"Freezer\",\n       AVG(CASE WHEN zone = 'fridge_top'    THEN celsius END) AS \"Top shelf\",\n       AVG(CASE WHEN zone = 'fridge_bottom' THEN celsius END) AS \"Bottom shelf\"\nFROM temperature\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "fillOpacity": 6,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "pointSize": 5,
+            "spanNulls": false,
+            "axisPlacement": "auto",
+            "axisLabel": "",
+            "scaleDistribution": {
+              "type": "linear"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "lastNotNull",
+            "min",
+            "max"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "type": "state-timeline",
+      "title": "Door",
+      "description": "Open in red, shut in green, on the same time axis as the graph above — hover either and the crosshair follows in both. The warming bumps up there line up with the red bands down here; that is the door driving the fridge, not a coincidence.",
+      "gridPos": {
+        "h": 4,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, state\nFROM door_event\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, state\nFROM door_event\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 0,
+            "fillOpacity": 85
+          },
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "open": {
+                  "text": "OPEN",
+                  "color": "red",
+                  "index": 0
+                },
+                "closed": {
+                  "text": "Closed",
+                  "color": "green",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "showValue": "never",
+        "rowHeight": 0.9,
+        "mergeValues": true,
+        "alignValue": "center",
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 11,
+      "type": "stat",
+      "title": "Door opens",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 20
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COUNT(*) AS \"Opens\"\nFROM door_event\nWHERE state = 'open' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COUNT(*) AS \"Opens\"\nFROM door_event\nWHERE state = 'open' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "Over the dashboard's selected time range, not 'today'."
+    },
+    {
+      "id": 12,
+      "type": "stat",
+      "title": "Door right now",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 20
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT CASE WHEN state = 'open' THEN 1 ELSE 0 END AS \"Door\"\nFROM door_event\nORDER BY ts DESC LIMIT 1",
+          "rawQueryText": "SELECT CASE WHEN state = 'open' THEN 1 ELSE 0 END AS \"Door\"\nFROM door_event\nORDER BY ts DESC LIMIT 1",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "Closed",
+                  "color": "green",
+                  "index": 0
+                },
+                "1": {
+                  "text": "OPEN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ]
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "Deliberately ignores the time range - this is the current state."
+    },
+    {
+      "id": 13,
+      "type": "stat",
+      "title": "Longest single open",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 20
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT MAX(duration_s) AS \"Longest\"\nFROM door_event\nWHERE state = 'open' AND duration_s IS NOT NULL AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT MAX(duration_s) AS \"Longest\"\nFROM door_event\nWHERE state = 'open' AND duration_s IS NOT NULL AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 120
+              },
+              {
+                "color": "red",
+                "value": 600
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "The failure that actually happens is the door left ajar, and a count of opens does not capture it (documentation.md section 1)."
+    },
+    {
+      "id": 14,
+      "type": "stat",
+      "title": "Total time open",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 20
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT SUM(duration_s) AS \"Total open\"\nFROM door_event\nWHERE state = 'open' AND duration_s IS NOT NULL AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT SUM(duration_s) AS \"Total open\"\nFROM door_event\nWHERE state = 'open' AND duration_s IS NOT NULL AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 15,
+      "type": "stat",
+      "title": "RP2040 die",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 24
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'temp.rp2040_die' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'temp.rp2040_die' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 45
+              },
+              {
+                "color": "red",
+                "value": 60
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "ADC channel 4. Accurate to only several degrees absolute (documentation.md section 7.3), so read it as a trend, not a measurement."
+    },
+    {
+      "id": 16,
+      "type": "stat",
+      "title": "Pi SoC",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 24
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'temp.pi_soc' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'temp.pi_soc' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "celsius",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 70
+              },
+              {
+                "color": "red",
+                "value": 80
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "area",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "From /sys/class/thermal on the Pi. Throttling starts around 80 C."
+    },
+    {
+      "id": 17,
+      "type": "stat",
+      "title": "Since last frame",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 24
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'link.age_s' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'link.age_s' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "How long since the board last said anything. The board applies the same 30 s limit to us and takes itself out of service, which is why both ends send a heartbeat every 10 s."
+    },
+    {
+      "id": 18,
+      "type": "gauge",
+      "title": "Money box",
+      "description": "Free from the load cell. About $50 in $1 coins is 450 g against a 500 g cell, so 'needs emptying' is an operational necessity rather than a curiosity. The drops are the treasurer emptying it.",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 24
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'coinbox.mass_g' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "rawQueryText": "SELECT ts, value\nFROM measurement\nWHERE metric = 'coinbox.mass_g' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "massg",
+          "decimals": 0,
+          "min": 0,
+          "max": 500,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 350
+              },
+              {
+                "color": "red",
+                "value": 450
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showThresholdLabels": false,
+        "showThresholdMarkers": true
+      }
+    },
+    {
+      "id": 20,
+      "type": "stat",
+      "title": "Revenue",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 28
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT SUM(paid_cents) / 100.0 AS \"Revenue\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT SUM(paid_cents) / 100.0 AS \"Revenue\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "AUD; the dollar sign comes from Grafana's USD unit."
+    },
+    {
+      "id": 21,
+      "type": "stat",
+      "title": "Unpaid",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 28
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT SUM(owed_cents - paid_cents) / 100.0 AS \"Unpaid\"\nFROM txn\nWHERE outcome = 'stolen' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT SUM(owed_cents - paid_cents) / 100.0 AS \"Unpaid\"\nFROM txn\nWHERE outcome = 'stolen' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "Drinks taken and not paid for. The central question for an honour-system fridge (documentation.md section 1)."
+    },
+    {
+      "id": 22,
+      "type": "stat",
+      "title": "Sales",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 28
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COUNT(*) AS \"Sales\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COUNT(*) AS \"Sales\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 23,
+      "type": "stat",
+      "title": "Average sale time",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 28
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT AVG(ts_end - ts_start) AS \"Average\"\nFROM txn\nWHERE outcome = 'paid' AND method = 'cash'\n  AND ts_start IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT AVG(ts_end - ts_start) AS \"Average\"\nFROM txn\nWHERE outcome = 'paid' AND method = 'cash'\n  AND ts_start IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 1,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      },
+      "description": "CASH ONLY, and that is a firmware limitation rather than a choice. A card sale's TXN_START is sent at the END of the transaction (documentation.md section 6), so its start and end timestamps are the same instant and its duration would read as zero. Making notify_sale() fire on entering PaymentSelect would make this measurable for both."
+    },
+    {
+      "id": 24,
+      "type": "timeseries",
+      "title": "Revenue, cumulative",
+      "description": "Running total across the selected range, paid transactions only.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 32
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT ts_end AS ts,\n       SUM(paid_cents) OVER (ORDER BY ts_end) / 100.0 AS \"Revenue\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts_end",
+          "rawQueryText": "SELECT ts_end AS ts,\n       SUM(paid_cents) OVER (ORDER BY ts_end) / 100.0 AS \"Revenue\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nORDER BY ts_end",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "showPoints": "never",
+            "spanNulls": true,
+            "gradientMode": "opacity"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 25,
+      "type": "piechart",
+      "title": "Payment split",
+      "description": "Cash versus card. `card` is what PaymentMethod::Online reports itself as - see payment_method_name() in checkout.h.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 12,
+        "y": 32
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT method AS \"Method\", COUNT(*) AS \"Sales\"\nFROM txn\nWHERE outcome = 'paid' AND method IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY method",
+          "rawQueryText": "SELECT method AS \"Method\", COUNT(*) AS \"Sales\"\nFROM txn\nWHERE outcome = 'paid' AND method IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY method",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "name",
+          "value"
+        ],
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 26,
+      "type": "piechart",
+      "title": "Outcomes",
+      "description": "paid / stolen / cancelled - the three the firmware actually sends.",
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
+        "y": 32
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT outcome AS \"Outcome\", COUNT(*) AS \"Transactions\"\nFROM txn\nWHERE outcome IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY outcome",
+          "rawQueryText": "SELECT outcome AS \"Outcome\", COUNT(*) AS \"Transactions\"\nFROM txn\nWHERE outcome IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY outcome",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": true
+        },
+        "pieType": "donut",
+        "displayLabels": [
+          "name",
+          "value"
+        ],
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 27,
+      "type": "barchart",
+      "title": "Units sold per drink",
+      "description": "What people actually take.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT i.drink AS \"Drink\", SUM(i.qty) AS \"Units\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT i.drink AS \"Drink\", SUM(i.qty) AS \"Units\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 28,
+      "type": "barchart",
+      "title": "Revenue per drink",
+      "description": "The ranking often differs from unit volume, which is the more interesting finding (documentation.md section 1). Identical here only because every drink currently costs $2.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT i.drink AS \"Drink\",\n       SUM(i.qty * i.unit_price_cents) / 100.0 AS \"Revenue\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT i.drink AS \"Drink\",\n       SUM(i.qty * i.unit_price_cents) / 100.0 AS \"Revenue\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 29,
+      "type": "barchart",
+      "title": "Sales by hour",
+      "description": "Local time, so the lunch and after-work peaks land where they belong.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT CAST(strftime('%H', ts_end, 'unixepoch', 'localtime')\n            AS INTEGER) AS \"Hour\",\n       COUNT(*) AS \"Sales\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT CAST(strftime('%H', ts_end, 'unixepoch', 'localtime')\n            AS INTEGER) AS \"Hour\",\n       COUNT(*) AS \"Sales\"\nFROM txn\nWHERE outcome = 'paid' AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "vertical",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 30,
+      "type": "table",
+      "title": "Stock now",
+      "description": "The camera's most recent count. Amber at 2, red at 1 - a drink about to run out is the thing worth acting on.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 47
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT drink AS \"Drink\", count AS \"In stock\"\nFROM stock_snapshot\nWHERE ts = (SELECT MAX(ts) FROM stock_snapshot)\nORDER BY drink",
+          "rawQueryText": "SELECT drink AS \"Drink\", count AS \"In stock\"\nFROM stock_snapshot\nWHERE ts = (SELECT MAX(ts) FROM stock_snapshot)\nORDER BY drink",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "In stock"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "#EAB839",
+                      "value": 2
+                    },
+                    {
+                      "color": "green",
+                      "value": 3
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 31,
+      "type": "timeseries",
+      "title": "Stock burn-down",
+      "description": "Counts fall as drinks are taken and jump straight back up on a restock. Nothing announces a restock - the next scan simply reports more drinks, which is why the camera is the source of truth (documentation.md section 1).",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 47
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MAX(CASE WHEN drink = 'coke'   THEN count END) AS \"Coke\",\n       MAX(CASE WHEN drink = 'fanta'  THEN count END) AS \"Fanta\",\n       MAX(CASE WHEN drink = 'mtndew' THEN count END) AS \"Mountain Dew\",\n       MAX(CASE WHEN drink = 'solo'   THEN count END) AS \"Solo\"\nFROM stock_snapshot\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MAX(CASE WHEN drink = 'coke'   THEN count END) AS \"Coke\",\n       MAX(CASE WHEN drink = 'fanta'  THEN count END) AS \"Fanta\",\n       MAX(CASE WHEN drink = 'mtndew' THEN count END) AS \"Mountain Dew\",\n       MAX(CASE WHEN drink = 'solo'   THEN count END) AS \"Solo\"\nFROM stock_snapshot\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "min": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 0,
+            "showPoints": "never",
+            "spanNulls": true
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 36,
+      "type": "stat",
+      "title": "Scans nobody should trust",
+      "description": "Counts answered below 50 confidence over the selected range. Fifty is not a round number somebody liked: UNSETTLED_CONFIDENCE_SCALE halves an answer forced out before the picture settled, so a healthy 90 becomes 45 and the threshold catches exactly that population. It MUST match LOW_CONFIDENCE_THRESHOLD in fridged/config.py - Grafana cannot read Python, so the two are kept in step by hand. Anything above zero here means a sale rested on a measurement the system itself doubted.",
+      "gridPos": {
+        "h": 7,
+        "w": 8,
+        "x": 0,
+        "y": 54
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COUNT(*) AS \"Scans\"\nFROM measurement\nWHERE metric = 'camera.confidence'\n  AND value < 50\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COUNT(*) AS \"Scans\"\nFROM measurement\nWHERE metric = 'camera.confidence'\n  AND value < 50\n  AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 35,
+      "type": "timeseries",
+      "title": "Camera confidence",
+      "description": "How much each count was worth believing. Baseline and recount are plotted apart because they are not the same measurement: the baseline is latched from before anybody reached in, the recount waits for the picture to hold still. With no camera frames kept (decision D3), this graph and the two stock snapshots are the ENTIRE record behind a disputed charge - the counts themselves look identical whether the shelf was steady or the answer was forced out on a deadline. The lowest value in each bucket is shown, not the average: one bad scan is the thing worth seeing.",
+      "gridPos": {
+        "h": 7,
+        "w": 16,
+        "x": 8,
+        "y": 54
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MIN(CASE WHEN trigger = 'door_open'  THEN value END) AS \"Baseline\",\n       MIN(CASE WHEN trigger = 'door_close' THEN value END) AS \"Recount\"\nFROM (SELECT m.ts AS ts, m.value AS value, s.trigger AS trigger\n      FROM measurement m\n      JOIN (SELECT DISTINCT ts, trigger FROM stock_snapshot) s\n        ON s.ts = m.ts\n      WHERE m.metric = 'camera.confidence')\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts\", 300) AS ts,\n       MIN(CASE WHEN trigger = 'door_open'  THEN value END) AS \"Baseline\",\n       MIN(CASE WHEN trigger = 'door_close' THEN value END) AS \"Recount\"\nFROM (SELECT m.ts AS ts, m.value AS value, s.trigger AS trigger\n      FROM measurement m\n      JOIN (SELECT DISTINCT ts, trigger FROM stock_snapshot) s\n        ON s.ts = m.ts\n      WHERE m.metric = 'camera.confidence')\nWHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 0,
+          "min": 0,
+          "max": 100,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "stepAfter",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "showPoints": "always",
+            "pointSize": 6,
+            "spanNulls": true
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 50
+              },
+              {
+                "color": "green",
+                "value": 75
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 32,
+      "type": "stat",
+      "title": "Coin box drift",
+      "description": "Measured mass on the load cell, minus the mass the logged coins should weigh, since the box was last emptied. Should be close to the unrecognised mass beside it: a washer that is not credited as a coin still weighs something.\n\nEXACT agreement is not expected. The mass is sampled every 30 s while coins land instantly, so a coin arriving just after an emptying can sit outside the window - worth about one coin, hence the 15 g tolerance.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 61
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "WITH m AS (\n  SELECT ts, value, LAG(value) OVER (ORDER BY ts) AS prev\n  FROM measurement WHERE metric = 'coinbox.mass_g'),\nemptied AS (\n  SELECT COALESCE(MAX(ts), 0) AS t0 FROM m WHERE prev - value > 50),\nmeasured AS (\n  SELECT value AS g FROM measurement\n  WHERE metric = 'coinbox.mass_g' ORDER BY ts DESC LIMIT 1),\nlogged AS (\n  SELECT COALESCE(SUM(mass_delta_g), 0) AS g FROM coin_event, emptied\n  WHERE classified = 1 AND coin_event.ts > emptied.t0)\nSELECT (SELECT g FROM measured) - (SELECT g FROM logged) AS \"Drift\"",
+          "rawQueryText": "WITH m AS (\n  SELECT ts, value, LAG(value) OVER (ORDER BY ts) AS prev\n  FROM measurement WHERE metric = 'coinbox.mass_g'),\nemptied AS (\n  SELECT COALESCE(MAX(ts), 0) AS t0 FROM m WHERE prev - value > 50),\nmeasured AS (\n  SELECT value AS g FROM measurement\n  WHERE metric = 'coinbox.mass_g' ORDER BY ts DESC LIMIT 1),\nlogged AS (\n  SELECT COALESCE(SUM(mass_delta_g), 0) AS g FROM coin_event, emptied\n  WHERE classified = 1 AND coin_event.ts > emptied.t0)\nSELECT (SELECT g FROM measured) - (SELECT g FROM logged) AS \"Drift\"",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "massg",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 40
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 33,
+      "type": "stat",
+      "title": "Unrecognised mass",
+      "description": "Mass that went into the box and was not a coin combination the classifier recognised - slugs, washers, or a knock on the box. CoinAcceptor already emits these (documentation.md section 1); a rising total is either somebody trying it on or the classifier drifting.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 61
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(SUM(mass_delta_g), 0) AS \"Unrecognised\"\nFROM coin_event\nWHERE classified = 0 AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COALESCE(SUM(mass_delta_g), 0) AS \"Unrecognised\"\nFROM coin_event\nWHERE classified = 0 AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "massg",
+          "decimals": 2,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 20
+              },
+              {
+                "color": "red",
+                "value": 100
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 34,
+      "type": "table",
+      "title": "Stock reconciliation - camera vs ledger",
+      "description": "Two independent accounts of the same shelf. The camera says what is there; the transaction ledger says what should be. Restocks are detected as upward jumps in the count and added in, so what is left is genuinely unexplained.\n\nNEGATIVE means drinks left without a sale being recorded. Neither hardware nor message exists for this - it falls out of data already collected, which is the most novel part of the project (documentation.md section 5.7).",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 65
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "WITH s AS (\n  SELECT drink, ts, count,\n         LAG(count) OVER (PARTITION BY drink ORDER BY ts) AS prev\n  FROM stock_snapshot WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}),\nbase AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MIN(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nrestock AS (\n  SELECT drink, SUM(MAX(count - prev, 0)) AS r\n  FROM s WHERE prev IS NOT NULL GROUP BY drink),\nlatest AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MAX(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nsold AS (\n  SELECT LOWER(i.drink) AS d, SUM(i.qty) AS q\n  FROM txn_item i\n  JOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\n  WHERE t.outcome IN ('paid', 'stolen')\n    AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1)\nSELECT b.drink                                   AS \"Drink\",\n       b.count                                   AS \"At start\",\n       COALESCE(r.r, 0)                          AS \"Restocked\",\n       COALESCE(so.q, 0)                         AS \"Sold\",\n       l.count                                   AS \"Now\",\n       l.count - (b.count + COALESCE(r.r, 0)\n                  - COALESCE(so.q, 0))           AS \"Unaccounted\"\nFROM base b\nJOIN latest l ON l.drink = b.drink\nLEFT JOIN restock r ON r.drink = b.drink\nLEFT JOIN sold so ON so.d = b.drink\nORDER BY 1",
+          "rawQueryText": "WITH s AS (\n  SELECT drink, ts, count,\n         LAG(count) OVER (PARTITION BY drink ORDER BY ts) AS prev\n  FROM stock_snapshot WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}),\nbase AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MIN(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nrestock AS (\n  SELECT drink, SUM(MAX(count - prev, 0)) AS r\n  FROM s WHERE prev IS NOT NULL GROUP BY drink),\nlatest AS (\n  SELECT drink, count FROM stock_snapshot\n  WHERE ts = (SELECT MAX(ts) FROM stock_snapshot\n              WHERE ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds})),\nsold AS (\n  SELECT LOWER(i.drink) AS d, SUM(i.qty) AS q\n  FROM txn_item i\n  JOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\n  WHERE t.outcome IN ('paid', 'stolen')\n    AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  GROUP BY 1)\nSELECT b.drink                                   AS \"Drink\",\n       b.count                                   AS \"At start\",\n       COALESCE(r.r, 0)                          AS \"Restocked\",\n       COALESCE(so.q, 0)                         AS \"Sold\",\n       l.count                                   AS \"Now\",\n       l.count - (b.count + COALESCE(r.r, 0)\n                  - COALESCE(so.q, 0))           AS \"Unaccounted\"\nFROM base b\nJOIN latest l ON l.drink = b.drink\nLEFT JOIN restock r ON r.drink = b.drink\nLEFT JOIN sold so ON so.d = b.drink\nORDER BY 1",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Unaccounted"
+            },
+            "properties": [
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "#EAB839",
+                      "value": -2
+                    },
+                    {
+                      "color": "green",
+                      "value": 0
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": true,
+          "reducer": [
+            "sum"
+          ],
+          "fields": [
+            "Sold",
+            "Unaccounted"
+          ]
+        }
+      }
+    },
+    {
+      "id": 40,
+      "type": "timeseries",
+      "title": "Theft rate",
+      "description": "Share of completed transactions that ended unpaid, in six-hour buckets. The central question for an honour-system fridge (documentation.md section 1) - a single number says little, the trend says whether it is getting worse.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 72
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT $__unixEpochGroupSeconds(\"ts_end\", 21600) AS ts,\n       100.0 * SUM(CASE WHEN outcome = 'stolen' THEN 1 ELSE 0 END)\n             / COUNT(*) AS \"Theft rate\"\nFROM txn\nWHERE outcome IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "rawQueryText": "SELECT $__unixEpochGroupSeconds(\"ts_end\", 21600) AS ts,\n       100.0 * SUM(CASE WHEN outcome = 'stolen' THEN 1 ELSE 0 END)\n             / COUNT(*) AS \"Theft rate\"\nFROM txn\nWHERE outcome IS NOT NULL AND ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 1",
+          "timeColumns": [
+            "ts"
+          ]
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "min": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 15
+              },
+              {
+                "color": "red",
+                "value": 30
+              }
+            ]
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 70,
+            "gradientMode": "none",
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 41,
+      "type": "barchart",
+      "title": "Unpaid units per drink",
+      "description": "Which drinks walk out without being paid for.\n\nINCOMPLETE, and the reason is a firmware gap rather than a query: an abandoned CARD sale sends no TXN_START, so it arrives with no item list and cannot appear here (documentation.md section 6). What is shown is real; the total is an undercount. Fixing notify_sale() to fire on entering PaymentSelect would close it.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 72
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT i.drink AS \"Drink\", SUM(i.qty) AS \"Unpaid units\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'stolen' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT i.drink AS \"Drink\", SUM(i.qty) AS \"Unpaid units\"\nFROM txn_item i\nJOIN txn t ON t.boot_id = i.boot_id AND t.txn_id = i.txn_id\nWHERE t.outcome = 'stolen' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "red"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 42,
+      "type": "stat",
+      "title": "Board resets",
+      "description": "How many times the RP2040 restarted in this range. A cheap reliability metric: every reset is a transaction that may have been interrupted. Seeded history is excluded - it has one synthetic boot row that would otherwise read as a reset that never happened.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 0,
+        "y": 80
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COUNT(*) AS \"Resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT COUNT(*) AS \"Resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 3
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 43,
+      "type": "stat",
+      "title": "Mean time between resets",
+      "description": "Blank until there have been at least two resets, which is correct rather than broken: one reset gives no interval to average.",
+      "gridPos": {
+        "h": 4,
+        "w": 12,
+        "x": 12,
+        "y": 80
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT CASE WHEN COUNT(*) > 1\n            THEN (MAX(ts) - MIN(ts)) / (COUNT(*) - 1)\n       END AS \"Mean time between resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "rawQueryText": "SELECT CASE WHEN COUNT(*) > 1\n            THEN (MAX(ts) - MIN(ts)) / (COUNT(*) - 1)\n       END AS \"Mean time between resets\"\nFROM boot\nWHERE reason <> 'seed' AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 0,
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "#EAB839",
+                "value": 3600
+              },
+              {
+                "color": "green",
+                "value": 86400
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 44,
+      "type": "table",
+      "title": "Temperature recovery - the ten longest door opens",
+      "description": "What each long door open actually did to the top shelf: the average temperature in the five minutes before it, the peak reached during and shortly after, and the difference.\n\nCosts no new hardware and no new message - it is a query over the door and temperature data already being collected, which is what makes it good report material (documentation.md section 1). Top shelf because it sits behind the door and notices most; the freezer barely moves.",
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 84
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "WITH longest AS (\n  SELECT ts, duration_s FROM door_event\n  WHERE state = 'open' AND duration_s IS NOT NULL\n    AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  ORDER BY duration_s DESC LIMIT 10)\nSELECT DATETIME(l.ts, 'unixepoch', 'localtime') AS \"When\",\n       ROUND(l.duration_s)                        AS \"Open (s)\",\n       ROUND((SELECT AVG(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Before\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts\n                            AND l.ts + l.duration_s + 300), 2) AS \"Peak\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts AND l.ts + l.duration_s + 300)\n             - (SELECT AVG(celsius) FROM temperature\n                WHERE zone = 'fridge_top'\n                  AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Rise\"\nFROM longest l\nORDER BY l.duration_s DESC",
+          "rawQueryText": "WITH longest AS (\n  SELECT ts, duration_s FROM door_event\n  WHERE state = 'open' AND duration_s IS NOT NULL\n    AND ts BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\n  ORDER BY duration_s DESC LIMIT 10)\nSELECT DATETIME(l.ts, 'unixepoch', 'localtime') AS \"When\",\n       ROUND(l.duration_s)                        AS \"Open (s)\",\n       ROUND((SELECT AVG(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Before\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts\n                            AND l.ts + l.duration_s + 300), 2) AS \"Peak\",\n       ROUND((SELECT MAX(celsius) FROM temperature\n              WHERE zone = 'fridge_top'\n                AND ts BETWEEN l.ts AND l.ts + l.duration_s + 300)\n             - (SELECT AVG(celsius) FROM temperature\n                WHERE zone = 'fridge_top'\n                  AND ts BETWEEN l.ts - 300 AND l.ts), 2) AS \"Rise\"\nFROM longest l\nORDER BY l.duration_s DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rise"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              },
+              {
+                "id": "custom.cellOptions",
+                "value": {
+                  "type": "color-background"
+                }
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "#EAB839",
+                      "value": 2
+                    },
+                    {
+                      "color": "red",
+                      "value": 4
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "thresholds"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Open (s)"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "s"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Before"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Peak"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Sensors — name a new one here",
+      "description": "Every DS18B20 the board has ever reported. A sensor appears automatically the first time it is seen, with no zone name, and shows a live temperature straight away. That is how you identify one: warm the sensor you just fitted, watch which row moves, then give it a name with\n\n  UPDATE sensor SET zone_label='freezer' WHERE rom_code='...';\n\nNaming it relabels its entire history, not just readings from that moment on. The HTTP endpoint that does this from a browser arrives at stage D4.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 92
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(s.zone_label, '(not named yet)') AS \"Zone\",\n       s.rom_code AS \"ROM code\",\n       ROUND((SELECT value FROM measurement\n              WHERE metric = 'temp.rom.' || s.rom_code\n              ORDER BY ts DESC LIMIT 1), 2) AS \"Latest C\",\n       DATETIME((SELECT MAX(ts) FROM measurement\n                 WHERE metric = 'temp.rom.' || s.rom_code),\n                'unixepoch', 'localtime') AS \"Last reading\"\nFROM sensor s\nORDER BY (s.zone_label IS NULL) DESC, s.zone_label",
+          "rawQueryText": "SELECT COALESCE(s.zone_label, '(not named yet)') AS \"Zone\",\n       s.rom_code AS \"ROM code\",\n       ROUND((SELECT value FROM measurement\n              WHERE metric = 'temp.rom.' || s.rom_code\n              ORDER BY ts DESC LIMIT 1), 2) AS \"Latest C\",\n       DATETIME((SELECT MAX(ts) FROM measurement\n                 WHERE metric = 'temp.rom.' || s.rom_code),\n                'unixepoch', 'localtime') AS \"Last reading\"\nFROM sensor s\nORDER BY (s.zone_label IS NULL) DESC, s.zone_label",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Latest C"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "celsius"
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm",
+        "footer": {
+          "show": false
+        }
+      }
+    },
+    {
+      "id": 45,
+      "type": "barchart",
+      "title": "Purchases by person",
+      "description": "Who is actually using the fridge. A sale nobody tapped a card for is counted as 'other' — the card is what identifies a purchase, and the fridge does not require one.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 99
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(m.label, 'other') AS \"Person\",\n       COUNT(*)                   AS \"Purchases\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT COALESCE(m.label, 'other') AS \"Person\",\n       COUNT(*)                   AS \"Purchases\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 46,
+      "type": "barchart",
+      "title": "Spend by person",
+      "description": "The same split, in dollars rather than sales. Paid transactions only, so an abandoned basket does not appear as somebody's spending.",
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 99
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(m.label, 'other')   AS \"Person\",\n       SUM(t.paid_cents) / 100.0 AS \"Spent\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "rawQueryText": "SELECT COALESCE(m.label, 'other')   AS \"Person\",\n       SUM(t.paid_cents) / 100.0 AS \"Spent\"\nFROM txn t\nLEFT JOIN member m ON m.uid = t.member_uid\nWHERE t.outcome = 'paid' AND t.ts_end BETWEEN ${__from:date:seconds} AND ${__to:date:seconds}\nGROUP BY 1\nORDER BY 2 DESC",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "decimals": 2,
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "none",
+            "axisPlacement": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "showValue": "auto",
+        "stacking": "none",
+        "xTickLabelRotation": 0,
+        "legend": {
+          "showLegend": false
+        },
+        "tooltip": {
+          "mode": "single",
+          "sort": "none"
+        }
+      }
+    },
+    {
+      "id": 47,
+      "type": "table",
+      "title": "Members — name a new one here",
+      "description": "Every card the reader has ever seen. A card appears here automatically the first time it is tapped, with no name, and its taps and purchases are counted straight away. Give it a name with\n\n  UPDATE member SET label='Damien Turner' WHERE uid='04404C22C06780';\n\nNaming a card names its ENTIRE history, not just purchases from that moment on, because the name is joined on at read time. The name lives here rather than in the firmware's approved list so that adding one is a row, not a rebuild and a reflash.\n\nDeliberately not filtered by the dashboard's time range: a card you are trying to name is usually one whose only tap was outside it.",
+      "gridPos": {
+        "h": 7,
+        "w": 24,
+        "x": 0,
+        "y": 107
+      },
+      "datasource": {
+        "type": "frser-sqlite-datasource",
+        "uid": "fridge-sqlite"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "frser-sqlite-datasource",
+            "uid": "fridge-sqlite"
+          },
+          "queryText": "SELECT COALESCE(m.label, '(not named yet)') AS \"Name\",\n       m.uid                                    AS \"Card UID\",\n       (SELECT COUNT(*) FROM rfid_event r\n         WHERE r.uid = m.uid AND r.granted = 1)  AS \"Taps\",\n       (SELECT COUNT(*) FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Purchases\",\n       (SELECT COALESCE(SUM(t.paid_cents), 0) / 100.0 FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Spent\",\n       DATETIME((SELECT MAX(r.ts) FROM rfid_event r WHERE r.uid = m.uid),\n                'unixepoch', 'localtime')       AS \"Last tap\"\nFROM member m\nORDER BY (m.label IS NULL) DESC, m.label",
+          "rawQueryText": "SELECT COALESCE(m.label, '(not named yet)') AS \"Name\",\n       m.uid                                    AS \"Card UID\",\n       (SELECT COUNT(*) FROM rfid_event r\n         WHERE r.uid = m.uid AND r.granted = 1)  AS \"Taps\",\n       (SELECT COUNT(*) FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Purchases\",\n       (SELECT COALESCE(SUM(t.paid_cents), 0) / 100.0 FROM txn t\n         WHERE t.member_uid = m.uid AND t.outcome = 'paid') AS \"Spent\",\n       DATETIME((SELECT MAX(r.ts) FROM rfid_event r WHERE r.uid = m.uid),\n                'unixepoch', 'localtime')       AS \"Last tap\"\nFROM member m\nORDER BY (m.label IS NULL) DESC, m.label",
+          "timeColumns": []
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "custom": {
+            "align": "auto"
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Spent"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Last tap",
+            "desc": true
+          }
+        ]
+      }
+    }
+  ]
+}

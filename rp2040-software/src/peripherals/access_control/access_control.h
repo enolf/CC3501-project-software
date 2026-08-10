@@ -19,3 +19,14 @@
 // The returned string is a compile-time constant — safe to hold and print
 // (e.g. to the TFT); never free it.
 const char *access_lookup(const uint8_t *uid, uint8_t uid_len);
+
+// Copy out the first card on the approved list.
+//   uid_out     : receives up to MFRC522_UID_MAX_LEN bytes
+//   uid_len_out : receives how many of them are valid
+// Returns false if the approved list is empty, in which case nothing is written.
+//
+// Exists for the SIM_NFC keyboard stand-in, which needs to fabricate a tap that
+// access_lookup() will actually recognise. A made-up UID would be reported as
+// approved by the key but denied by the lookup, so the greeting screen would
+// have no name to show and the stand-in would exercise the wrong path.
+bool access_first(uint8_t *uid_out, uint8_t *uid_len_out);

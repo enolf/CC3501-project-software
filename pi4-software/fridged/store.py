@@ -1,0 +1,571 @@
+"""The database: the schema, and every write that goes into it.
+
+This module knows SQL and nothing about the wire protocol. `ingest.py` knows the
+wire protocol and no SQL. Keeping that line sharp is what makes a protocol change
+one file and a schema change one other file (documentation.md section 2).
+
+WHY ONE PROCESS OWNS THIS FILE
+------------------------------
+SQLite allows one writer at a time. Having the firmware bridge, the vision
+program and the payment script all write directly is how you get
+`database is locked` during a demo, plus three copies of the schema drifting
+apart in three languages (documentation.md section 7.3). Everything that writes goes
+through here; Grafana connects read-only.
+
+THE SCHEMA IS COMPLETE, THE WRITERS ARE NOT
+-------------------------------------------
+Every table from documentation.md section 7.3 is created below, including the ones
+nothing writes yet. Tables are cheap and a half-built schema invites a migration
+later; writer methods arrive with the stage that needs them. So an empty table
+here means "stage not reached", not "forgotten".
+"""
+
+import os
+import sqlite3
+import stat
+import time
+from pathlib import Path
+
+from . import config
+
+#: Bumped whenever the schema below changes incompatibly. Stored in SQLite's own
+#: `PRAGMA user_version`, so it costs no table and cannot be forgotten in a
+#: `SELECT`. A mismatch refuses to run rather than writing rows into a shape that
+#: no longer means what they say.
+SCHEMA_VERSION = 2
+
+SCHEMA = """
+-- Scalars sampled over time. ONE generic table, deliberately: adding a metric
+-- must never be a schema change (documentation.md section 7.3). Drives the
+-- temperature graph, the health row, the money-box tile and link health alike.
+CREATE TABLE IF NOT EXISTS measurement (
+    ts      REAL NOT NULL,          -- unix seconds, stamped by the Pi on arrival
+    metric  TEXT NOT NULL,          -- 'temp.freezer', 'coinbox.mass_g', ...
+    value   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_measurement_metric_ts ON measurement(metric, ts);
+
+-- One row per time the board started. Exists because a transaction id is
+-- `ms_since_boot` and is therefore unique only WITHIN a boot: two reboots in a
+-- day can mint the same id, and without this the second would overwrite the
+-- first (documentation.md section 7.3). Gives the reset counter free.
+-- `reason` also carries PROVENANCE, which is what stops a demonstration and a
+-- week of real takings becoming one indistinguishable pile:
+--
+--   'boot_frame' | 'resumed' | 'ms_rollback'   a real RP2040
+--   'sim:<any of the above>'                   a `--port sim` run (fake_board)
+--   'seed'                                     invented history (seed.py)
+--
+-- Everything else in the database is keyed to a boot, so this one column
+-- answers "was this real?" for every transaction and coin event as well.
+CREATE TABLE IF NOT EXISTS boot (
+    id     INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts     REAL NOT NULL,
+    fw     TEXT,
+    reason TEXT
+);
+
+-- ROM code -> which shelf the sensor is actually on. The mapping lives here and
+-- NOT in board.h, so replacing a failed sensor is editing one row rather than a
+-- firmware rebuild and reflash (documentation.md section 7.3). An unknown ROM code
+-- is inserted automatically with a NULL zone_label, so a newly fitted sensor
+-- appears on the dashboard as an unmapped row showing a live temperature: warm
+-- the one you just fitted, see which row moves, name it.
+CREATE TABLE IF NOT EXISTS sensor (
+    rom_code   TEXT PRIMARY KEY,
+    zone_label TEXT,
+    kind       TEXT NOT NULL DEFAULT 'ds18b20',
+    first_seen REAL NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS door_event (
+    ts         REAL NOT NULL,
+    state      TEXT NOT NULL CHECK (state IN ('open', 'closed')),
+    duration_s REAL                 -- filled in on close; NULL while open
+);
+CREATE INDEX IF NOT EXISTS ix_door_event_ts ON door_event(ts);
+
+-- Named `txn` rather than `transaction`, which is a reserved word in SQL: every
+-- Grafana panel query would have to quote it forever, and a forgotten quote is a
+-- syntax error at display time rather than at write time.
+CREATE TABLE IF NOT EXISTS txn (
+    boot_id    INTEGER NOT NULL REFERENCES boot(id),
+    txn_id     INTEGER NOT NULL,    -- ms_since_boot at TXN_START
+    ts_start   REAL,
+    ts_end     REAL,
+    method     TEXT,                -- 'cash' | 'online'
+    owed_cents  INTEGER,
+    paid_cents  INTEGER,
+    outcome    TEXT CHECK (outcome IS NULL OR
+                           outcome IN ('paid', 'stolen', 'cancelled')),
+    member_uid TEXT,                -- populated but NOT displayed; see below
+    PRIMARY KEY (boot_id, txn_id)
+);
+CREATE INDEX IF NOT EXISTS ix_txn_ts_start ON txn(ts_start);
+
+CREATE TABLE IF NOT EXISTS txn_item (
+    boot_id          INTEGER NOT NULL,
+    txn_id           INTEGER NOT NULL,
+    drink            TEXT NOT NULL,
+    qty              INTEGER NOT NULL,
+    unit_price_cents INTEGER,
+    PRIMARY KEY (boot_id, txn_id, drink)
+);
+
+-- txn_id is ATTRIBUTED, not received: EVT COIN carries denom= and delta_g= and
+-- no id= at all. An early draft of the protocol table claimed otherwise; the
+-- wire is the authority, and it does not carry one. A coin arriving with no
+-- transaction open is stored with NULL, which is itself worth being able to see.
+CREATE TABLE IF NOT EXISTS coin_event (
+    ts           REAL NOT NULL,
+    boot_id      INTEGER,
+    txn_id       INTEGER,
+    denom_cents  INTEGER,           -- NULL when classified = 0
+    mass_delta_g REAL,
+    classified   INTEGER NOT NULL   -- 0 means it was a COIN_REJECT
+);
+CREATE INDEX IF NOT EXISTS ix_coin_event_ts ON coin_event(ts);
+
+CREATE TABLE IF NOT EXISTS rfid_event (
+    ts      REAL NOT NULL,
+    uid     TEXT NOT NULL,
+    granted INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS member (
+    uid    TEXT PRIMARY KEY,
+    label  TEXT,
+    active INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS stock_snapshot (
+    ts      REAL NOT NULL,
+    drink   TEXT NOT NULL,
+    count   INTEGER NOT NULL,
+    -- Which of the two scans this was. They are NOT equivalent measurements:
+    -- the baseline is latched from before anybody reached in, the recount waits
+    -- for the picture to hold still. 'untriggered' is a scan with no door event
+    -- behind it.
+    trigger TEXT NOT NULL           -- 'door_open' | 'door_close' | 'untriggered'
+);
+CREATE INDEX IF NOT EXISTS ix_stock_snapshot_ts ON stock_snapshot(ts);
+
+CREATE TABLE IF NOT EXISTS cash_count (
+    ts             REAL NOT NULL,
+    counted_cents  INTEGER NOT NULL,
+    expected_cents INTEGER,
+    note           TEXT,
+    entered_by     TEXT
+);
+
+-- Everything that came down the wire, including lines that were not frames and
+-- frames that failed validation. A rising bad-frame count NEXT TO the offending
+-- bytes is a five-minute debug; the counter on its own is a two-hour one.
+CREATE TABLE IF NOT EXISTS raw_line (
+    ts            REAL NOT NULL,
+    source        TEXT NOT NULL,    -- 'board' | 'seed'
+    line          TEXT NOT NULL,
+    reject_reason TEXT              -- NULL for anything that parsed
+);
+CREATE INDEX IF NOT EXISTS ix_raw_line_ts ON raw_line(ts);
+
+-- Temperature with its zone name resolved at READ time.
+--
+-- Readings are stored under the sensor's ROM code, never under its zone name,
+-- and the name is attached here by a join. That is the difference between
+-- naming a sensor relabelling its whole history and naming a sensor putting a
+-- discontinuity in the graph at the moment you named it — and the discovery
+-- procedure in documentation.md section 7.3 is "warm the one you just fitted, watch
+-- which row moves, name it", which is done by looking at history.
+--
+-- It also means a panel query is one SELECT with no join of its own, so the
+-- join exists once, here, instead of in every panel that touches temperature.
+CREATE VIEW IF NOT EXISTS temperature AS
+SELECT m.ts                                              AS ts,
+       s.rom_code                                        AS rom_code,
+       COALESCE(s.zone_label, 'unmapped ' || SUBSTR(s.rom_code, 9)) AS zone,
+       (s.zone_label IS NULL)                            AS unmapped,
+       m.value                                           AS celsius
+FROM measurement m
+JOIN sensor s ON m.metric = 'temp.rom.' || s.rom_code;
+"""
+
+
+class SchemaMismatch(RuntimeError):
+    """The database on disk was written by a different version of this schema."""
+
+
+class Store:
+    """Owns the connection and every write.
+
+    High-volume append-only rows (`measurement`, `raw_line`) are queued and
+    written in batches; anything that has to be readable immediately, or that
+    hands back an id, is written straight through.
+    """
+
+    def __init__(self, path=None):
+        self.path = Path(path) if path else config.DEFAULT_DB_PATH
+        self._conn = None
+        # {sql: [params, ...]} — a dict rather than a flat list so each table
+        # gets one executemany. Insertion-ordered, so a batch replays in the
+        # order the statements were first queued.
+        self._pending = {}
+        self._pending_rows = 0
+        self._last_flush = 0.0
+        self.rows_written = 0
+
+    # --- Lifecycle ----------------------------------------------------------
+
+    def open(self):
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+
+        # isolation_level=None turns off the driver's implicit transaction
+        # handling, so every statement autocommits and flush() can open exactly
+        # one explicit transaction around the whole batch. Left at its default,
+        # the driver would open a transaction behind our back on the first INSERT
+        # and hold it until something committed, which is precisely the
+        # long-lived writer that makes a reader see stale data.
+        self._conn = sqlite3.connect(str(self.path), isolation_level=None)
+
+        # WAL: readers never block the writer and the writer never blocks
+        # readers, which is what lets Grafana query the file while this process
+        # is writing it. Persistent — set once, stored in the file header.
+        self._conn.execute("PRAGMA journal_mode=WAL")
+        # With WAL, NORMAL fsyncs at checkpoints rather than at every commit. The
+        # exposure is losing the last few seconds of telemetry on a power cut,
+        # against a large reduction in SD-card wear (documentation.md section 7.3).
+        # For a fridge log that is the right side of the trade.
+        self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
+        self._conn.execute(f"PRAGMA busy_timeout={config.SQLITE_BUSY_TIMEOUT_MS}")
+
+        self._migrate()
+        self._ensure_group_writable()
+        self._last_flush = time.monotonic()
+        return self
+
+    def _ensure_group_writable(self):
+        """Force the database to a group-writable mode.
+
+        SQLite creates the file 0644 and **umask can only remove permission
+        bits, never add them**, so setting a umask alone does not produce a
+        group-writable database — an earlier version of this code assumed it did
+        and quietly did not work.
+
+        It has to be group-writable because Grafana runs as a different user and
+        SQLite cannot open a WAL database read-only: a reader takes a lock in
+        the -shm wal-index, which is a write. The group comes from the setgid
+        bit on the containing directory (`/var/lib/fridge`, group `grafana`),
+        which is why only the mode is set here and never the owner.
+
+        SQLite then creates -wal and -shm with *this* file's mode, so fixing the
+        database fixes the sidecars too — provided the umask lets it, which is
+        what `config.DB_FILE_UMASK` is for.
+
+        Best effort: a database on a filesystem without Unix modes, or owned by
+        somebody else, is not a reason to refuse to run.
+        """
+        if os.name != "posix":
+            return
+        try:
+            current = stat.S_IMODE(self.path.stat().st_mode)
+            # Add the group bits and leave owner and other exactly as they are —
+            # this must not quietly widen or narrow anything an admin chose.
+            wanted = current | (config.DB_FILE_MODE & 0o070)
+            if wanted != current:
+                self.path.chmod(wanted)
+        except OSError:
+            pass
+
+    def _migrate(self):
+        found = self._conn.execute("PRAGMA user_version").fetchone()[0]
+        if found == 0:
+            # Either brand new, or an existing file from before versioning. The
+            # CREATE IF NOT EXISTS statements make both cases the same.
+            self._conn.executescript(SCHEMA)
+            self._conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+        elif found != SCHEMA_VERSION:
+            raise SchemaMismatch(
+                f"{self.path} was written by schema version {found}, this is "
+                f"version {SCHEMA_VERSION}. Move the old file aside or write a "
+                f"migration — do not just bump the number.")
+
+    def close(self):
+        if self._conn is None:
+            return
+        self.flush(force=True)
+        self._conn.close()
+        self._conn = None
+
+    def __enter__(self):
+        return self.open()
+
+    def __exit__(self, *exc):
+        self.close()
+
+    # --- Batching -----------------------------------------------------------
+
+    def _queue(self, sql, params):
+        self._pending.setdefault(sql, []).append(params)
+        self._pending_rows += 1
+
+    def flush(self, force=False):
+        """Write queued rows if enough have accumulated or enough time has passed.
+
+        Both bounds matter. The row bound keeps a busy period from queueing
+        without limit; the time bound keeps an idle fridge's trickle of
+        heartbeats from sitting unwritten, invisible to the dashboard, for as
+        long as it takes to reach 200 rows.
+        """
+        if not self._pending:
+            self._last_flush = time.monotonic()
+            return 0
+        if not force:
+            due = (self._pending_rows >= config.FLUSH_ROWS or
+                   time.monotonic() - self._last_flush >= config.FLUSH_INTERVAL_S)
+            if not due:
+                return 0
+
+        batch, self._pending = self._pending, {}
+        written, self._pending_rows = self._pending_rows, 0
+
+        self._conn.execute("BEGIN")
+        try:
+            for sql, rows in batch.items():
+                self._conn.executemany(sql, rows)
+        except Exception:
+            self._conn.execute("ROLLBACK")
+            raise
+        self._conn.execute("COMMIT")
+
+        self._last_flush = time.monotonic()
+        self.rows_written += written
+        return written
+
+    # --- Writers: batched ---------------------------------------------------
+
+    def measurement(self, ts, metric, value):
+        self._queue("INSERT INTO measurement (ts, metric, value) VALUES (?,?,?)",
+                    (ts, metric, float(value)))
+
+    def raw_line(self, ts, line, source="board", reject_reason=None):
+        self._queue(
+            "INSERT INTO raw_line (ts, source, line, reject_reason) "
+            "VALUES (?,?,?,?)", (ts, source, line, reject_reason))
+
+    # --- Writers: immediate -------------------------------------------------
+
+    def open_boot(self, ts, fw=None, reason="boot_frame"):
+        """Record that the board started, and return the id everything else uses.
+
+        Immediate rather than batched: the id is needed by the very next row, so
+        there is nothing to gain by deferring it and a foreign key to break by
+        doing so.
+        """
+        cur = self._conn.execute(
+            "INSERT INTO boot (ts, fw, reason) VALUES (?,?,?)", (ts, fw, reason))
+        self.rows_written += 1
+        return cur.lastrowid
+
+    def door_opened(self, ts):
+        """Record the door opening. `duration_s` is filled in when it shuts."""
+        self._conn.execute(
+            "INSERT INTO door_event (ts, state, duration_s) "
+            "VALUES (?, 'open', NULL)", (ts,))
+        self.rows_written += 1
+
+    def door_closed(self, ts):
+        """Record the door shutting, and close off the open it belongs to.
+
+        Returns the duration in seconds, or None if no open was outstanding —
+        which happens legitimately when the service starts while the door is
+        already open, and is worth knowing rather than silently treating as zero.
+
+        Immediate rather than batched: the UPDATE has to see the INSERT that the
+        matching open produced, and a batch could still be holding it.
+        """
+        self._conn.execute(
+            "INSERT INTO door_event (ts, state, duration_s) "
+            "VALUES (?, 'closed', NULL)", (ts,))
+
+        # The most recent open that has not been closed off yet. Scoped by
+        # `duration_s IS NULL` rather than by "the last row", so a missed close
+        # leaves one unterminated open behind instead of corrupting the next one.
+        row = self._conn.execute(
+            "SELECT rowid, ts FROM door_event "
+            "WHERE state = 'open' AND duration_s IS NULL "
+            "ORDER BY ts DESC LIMIT 1").fetchone()
+        self.rows_written += 1
+        if row is None:
+            return None
+
+        rowid, opened_ts = row
+        duration = ts - opened_ts
+        self._conn.execute("UPDATE door_event SET duration_s = ? WHERE rowid = ?",
+                           (duration, rowid))
+        return duration
+
+    def upsert_txn(self, boot_id, txn_id, ts_start=None, ts_end=None,
+                   method=None, owed_cents=None, paid_cents=None, outcome=None,
+                   member_uid=None):
+        """Create or update one transaction. **Never a plain INSERT.**
+
+        The firmware does not give us one clean "transaction begins" message
+        (documentation.md section 6). A cash sale sends `TXN_START` twice with the
+        same id; a card sale sends it once, at the end; a card sale that is
+        abandoned sends only `TXN_END`, for a transaction we have never heard
+        of. Any of those can be the first frame to arrive for a given id, so
+        every writer has to be able to create the row or fill in part of it.
+
+        `ts_start` keeps the EARLIEST value seen — the duplicate `TXN_START`
+        arrives at completion and must not drag the start time forward. Every
+        other column prefers the newest non-null value.
+        """
+        self._conn.execute(
+            "INSERT INTO txn (boot_id, txn_id, ts_start, ts_end, method, "
+            "                 owed_cents, paid_cents, outcome, member_uid) "
+            "VALUES (?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(boot_id, txn_id) DO UPDATE SET "
+            "  ts_start   = MIN(COALESCE(txn.ts_start, excluded.ts_start), "
+            "                   COALESCE(excluded.ts_start, txn.ts_start)), "
+            "  ts_end     = COALESCE(excluded.ts_end, txn.ts_end), "
+            "  method     = COALESCE(excluded.method, txn.method), "
+            "  owed_cents = COALESCE(excluded.owed_cents, txn.owed_cents), "
+            "  paid_cents = COALESCE(excluded.paid_cents, txn.paid_cents), "
+            "  outcome    = COALESCE(excluded.outcome, txn.outcome), "
+            # Same COALESCE rule as every other column, and it matters more here
+            # than it looks: a card sale sends TXN_START twice, and the second
+            # one arrives from a path that does not know who tapped. Preferring
+            # the newest NON-NULL value keeps the attribution the first one
+            # established instead of blanking it back to "other".
+            "  member_uid = COALESCE(excluded.member_uid, txn.member_uid)",
+            (boot_id, txn_id, ts_start, ts_end, method,
+             owed_cents, paid_cents, outcome, member_uid))
+        self.rows_written += 1
+
+    def set_txn_items(self, boot_id, txn_id, items, unit_price_cents=None):
+        """Replace the item list for a transaction. REPLACE, not merge.
+
+        Upsert rather than INSERT because the duplicate `TXN_START` carries the
+        same basket again; adding it would double every quantity and silently
+        double the units-sold panel.
+
+        WHY THE DELETE IS NOT OPTIONAL
+        ------------------------------
+        Upserting alone only corrects drinks that appear in the NEW basket. A
+        drink that has left it entirely keeps its old row, because nothing
+        touches it.
+
+        That is not hypothetical any more. The board now lets a customer reopen
+        the door mid-transaction and swap one drink for another, and it re-sends
+        `TXN_START` with the corrected basket. Swap a Coke for a Fanta and the
+        two frames say `items=coke:1` then `items=fanta:1` — so without this the
+        transaction would be recorded as having sold BOTH, one of which was put
+        back and never paid for. Revenue would still be right, because that
+        comes from `txn.owed_cents`, which is exactly what makes it nasty: the
+        units-sold and stock panels would drift away from the money with nothing
+        anywhere reporting an error.
+
+        Deleting first and re-inserting would be simpler to read but would churn
+        every row on every duplicate frame; this touches only what changed.
+        """
+        for drink, qty in items.items():
+            self._conn.execute(
+                "INSERT INTO txn_item (boot_id, txn_id, drink, qty, "
+                "                      unit_price_cents) VALUES (?,?,?,?,?) "
+                "ON CONFLICT(boot_id, txn_id, drink) DO UPDATE SET "
+                "  qty = excluded.qty, "
+                "  unit_price_cents = excluded.unit_price_cents",
+                (boot_id, txn_id, drink, qty, unit_price_cents))
+
+        # Anything previously recorded for this transaction that the latest
+        # basket no longer mentions. An empty `items` clears the lot, which is
+        # the right answer for a customer who put everything back.
+        placeholders = ",".join("?" * len(items))
+        self._conn.execute(
+            "DELETE FROM txn_item WHERE boot_id = ? AND txn_id = ?"
+            + (f" AND drink NOT IN ({placeholders})" if items else ""),
+            (boot_id, txn_id, *items))
+        self.rows_written += len(items)
+
+    def coin_event(self, ts, boot_id, txn_id, denom_cents, mass_delta_g,
+                   classified):
+        """One coin, or one thing that was not a coin.
+
+        `txn_id` is attributed by the caller, not read from the frame — `EVT
+        COIN` carries no id at all (documentation.md section 6). NULL when no
+        transaction was open, which is itself worth being able to see.
+        """
+        self._queue(
+            "INSERT INTO coin_event (ts, boot_id, txn_id, denom_cents, "
+            "                        mass_delta_g, classified) "
+            "VALUES (?,?,?,?,?,?)",
+            (ts, boot_id, txn_id, denom_cents, mass_delta_g,
+             1 if classified else 0))
+
+    def stock_snapshot(self, ts, counts, trigger="door_close"):
+        """What the camera saw, per drink.
+
+        Written when `fridged` ANSWERS a scan, not when the board reports
+        anything — stock is the one metric that flows Pi -> board
+        (documentation.md section 6).
+        """
+        for drink, count in counts.items():
+            self._queue(
+                "INSERT INTO stock_snapshot (ts, drink, count, trigger) "
+                "VALUES (?,?,?,?)", (ts, drink, count, trigger))
+
+    def note_sensor(self, rom_code, ts, kind="ds18b20"):
+        """Make sure a ROM code has a row, without disturbing its zone label.
+
+        `ON CONFLICT DO NOTHING` is the whole trick: a sensor seen for the
+        thousandth time must not have the name someone gave it overwritten with
+        a NULL.
+        """
+        self._conn.execute(
+            "INSERT INTO sensor (rom_code, zone_label, kind, first_seen) "
+            "VALUES (?, NULL, ?, ?) ON CONFLICT(rom_code) DO NOTHING",
+            (rom_code, kind, ts))
+
+    def rfid_event(self, ts, uid, granted):
+        """Record one card tap, and make sure the card has a `member` row.
+
+        Two writes on purpose, and they answer different questions. `rfid_event`
+        is the history — every tap, approved or not, which is what a denied-card
+        problem is diagnosed from. `member` is the identity, and it exists so a
+        card can be given a NAME without a firmware rebuild.
+
+        THE NAME DOES NOT COME OFF THE WIRE. `EVT RFID` carries a UID and a
+        granted flag and nothing else; the holder's name lives in
+        `access_control.cpp`, compiled into the board. Duplicating that list in
+        Python would be a second copy to keep in step, and it would drift — so
+        instead an unknown card lands here with a NULL label and is named once,
+        from the dashboard. This is deliberately the same arrangement as
+        `note_sensor()`: unknown thing appears, you name it, its whole history
+        is named retrospectively because the join happens at read time.
+        """
+        self._conn.execute(
+            "INSERT INTO rfid_event (ts, uid, granted) VALUES (?,?,?)",
+            (ts, uid, 1 if granted else 0))
+
+        # ON CONFLICT DO NOTHING for the same reason note_sensor() uses it: a
+        # card tapped for the hundredth time must not have the name someone
+        # gave it overwritten with a NULL.
+        self._conn.execute(
+            "INSERT INTO member (uid, label, active) VALUES (?, NULL, 1) "
+            "ON CONFLICT(uid) DO NOTHING",
+            (uid,))
+        self.rows_written += 1
+
+    def label_for_uid(self, uid):
+        """The name given to a card, or None if it has not been named yet."""
+        row = self._conn.execute(
+            "SELECT label FROM member WHERE uid = ?", (uid,)).fetchone()
+        return row[0] if row else None
+
+    def zone_for_rom(self, rom_code):
+        """The zone label for a ROM code, or None if it has not been named yet."""
+        row = self._conn.execute(
+            "SELECT zone_label FROM sensor WHERE rom_code = ?",
+            (rom_code,)).fetchone()
+        return row[0] if row else None
